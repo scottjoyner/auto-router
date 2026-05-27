@@ -1,0 +1,42 @@
+services:
+  llm-router:
+    build: .
+    container_name: auto-router
+    ports:
+      - "8088:8088"
+    environment:
+      AUTO_ROUTER_HOST: 0.0.0.0
+      AUTO_ROUTER_PORT: 8088
+      AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.yaml
+      AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
+      AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
+      AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
+      AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/data
+      - ./artifacts:/artifacts
+      - ./worktrees:/worktrees
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: auto-router-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:
