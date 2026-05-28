@@ -22,7 +22,13 @@ class QuotaCounter:
     def reset_if_needed(self, now: int) -> None:
         if self.reset_at is not None and now >= self.reset_at:
             self.used = 0
-            self.reset_at = None
+            self.reset_at = self._next_reset(now)
+
+    def _next_reset(self, now: int) -> int | None:
+        if self.reset_at is None:
+            return None
+        previous_window = max(self.reset_at - now, 1)
+        return now + previous_window
 
 
 @dataclass
@@ -49,19 +55,11 @@ class InMemoryQuotaManager:
 
     def can_reserve(self, provider: ProviderConfig, model: ModelConfig, estimate: QuotaEstimate) -> bool:
         with self.lock:
-            now = int(time.time())
-            for dimension, amount in self._dimension_amounts(model, estimate).items():
-                key = self._key(provider.name, model.alias, dimension)
-                counter = self._counter_for(model, dimension)
-                existing = self.counters.setdefault(key, counter)
-                existing.reset_if_needed(now)
-                if existing.limit is not None and existing.used + amount > existing.limit:
-                    return False
-            return True
+            return self._can_reserve_unlocked(provider, model, estimate)
 
     def reserve(self, provider: ProviderConfig, model: ModelConfig, estimate: QuotaEstimate) -> bool:
         with self.lock:
-            if not self.can_reserve(provider, model, estimate):
+            if not self._can_reserve_unlocked(provider, model, estimate):
                 return False
             for dimension, amount in self._dimension_amounts(model, estimate).items():
                 key = self._key(provider.name, model.alias, dimension)
@@ -87,6 +85,18 @@ class InMemoryQuotaManager:
                         QuotaSnapshot(provider=provider.name, model=model.alias, dimensions=dimensions)
                     )
         return results
+
+    def _can_reserve_unlocked(
+        self, provider: ProviderConfig, model: ModelConfig, estimate: QuotaEstimate
+    ) -> bool:
+        now = int(time.time())
+        for dimension, amount in self._dimension_amounts(model, estimate).items():
+            key = self._key(provider.name, model.alias, dimension)
+            existing = self.counters.setdefault(key, self._counter_for(model, dimension))
+            existing.reset_if_needed(now)
+            if existing.limit is not None and existing.used + amount > existing.limit:
+                return False
+        return True
 
     def _rough_token_count(self, body: dict) -> int:
         text = str(body.get("messages") or body.get("input") or body)
