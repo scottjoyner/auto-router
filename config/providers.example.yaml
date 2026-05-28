@@ -1,0 +1,77 @@
+providers:
+  - name: groq
+    type: openai_compatible
+    enabled: true
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    priority: 20
+    quota_class: fast_free
+    headers: {}
+    models:
+      - alias: groq/fast-small
+        provider_model: llama-3.1-8b-instant
+        capabilities: [chat, streaming, json, low_latency]
+        context_window: 8192
+        quota:
+          rpm: 30
+          tpd: 500000
+
+  - name: cerebras
+    type: openai_compatible
+    enabled: true
+    base_url: https://api.cerebras.ai/v1
+    api_key_env: CEREBRAS_API_KEY
+    priority: 30
+    quota_class: fast_free
+    headers: {}
+    models:
+      - alias: cerebras/large-fast
+        provider_model: gpt-oss-120b
+        capabilities: [chat, streaming, json, code, reasoning]
+        context_window: 32768
+        quota:
+          rpm: 5
+          tpd: 1000000
+
+  - name: openrouter
+    type: openai_compatible
+    enabled: true
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    priority: 80
+    quota_class: brokered_free
+    headers:
+      HTTP-Referer: http://localhost:8088
+      X-Title: auto-router
+    models:
+      - alias: openrouter/free-general
+        provider_model: meta-llama/llama-3.1-8b-instruct:free
+        capabilities: [chat, streaming]
+        context_window: 8192
+        quota:
+          rpm: 20
+          rpd: 50
+
+  - name: lmstudio-r2d2
+    type: lmstudio
+    enabled: true
+    base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
+    priority: 900
+    quota_class: local
+    models:
+      - alias: local/default
+        provider_model: local/default
+        capabilities: [chat, streaming, code, json, local_only]
+        context_window: 32768
+
+  - name: lmstudio-deathstar
+    type: lmstudio
+    enabled: true
+    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-XPS-8920:1234/v1}
+    priority: 910
+    quota_class: local
+    models:
+      - alias: local/batch
+        provider_model: local/batch
+        capabilities: [chat, streaming, code, json, local_only]
+        context_window: 32768
