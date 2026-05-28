@@ -1,0 +1,53 @@
+profiles:
+  interactive_balanced:
+    description: Fast free quota first, then local fallback.
+    stages:
+      - purpose: final
+        provider_classes: [fast_free, brokered_free, local]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+
+  high_priority_deliverable:
+    description: Local draft, best available free refine, optional judge.
+    stages:
+      - purpose: draft
+        provider_classes: [local, fast_free]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+      - purpose: refine
+        provider_classes: [premium_free, fast_free, brokered_free]
+        required_capabilities: [chat, reasoning]
+        allow_local_fallback: true
+      - purpose: judge
+        provider_classes: [premium_free, fast_free]
+        required_capabilities: [chat]
+        allow_local_fallback: false
+        optional: true
+
+  code_high_quality:
+    description: Local coding draft followed by cloud/free refinement.
+    stages:
+      - purpose: draft
+        provider_classes: [local]
+        required_capabilities: [chat, code]
+        allow_local_fallback: true
+      - purpose: refine
+        provider_classes: [premium_free, fast_free, brokered_free]
+        required_capabilities: [chat, code]
+        allow_local_fallback: true
+
+  local_only:
+    description: Never leave local endpoints.
+    stages:
+      - purpose: final
+        provider_classes: [local]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+
+classification:
+  default_profile: interactive_balanced
+  local_only_markers:
+    - local_only
+    - private_data
+    - internal_docs
+    - personal_docs
