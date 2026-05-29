@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import email.utils
 import os
+import time
 from typing import Any
 
 import httpx
@@ -9,10 +11,19 @@ from auto_router.models import ProviderConfig, ProviderHealth, ProviderResponse,
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, status_code: int | None = None, retryable: bool = True):
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        retryable: bool = True,
+        retry_after_seconds: int | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+        self.headers = headers or {}
 
 
 class OpenAICompatibleProvider:
@@ -93,6 +104,8 @@ class OpenAICompatibleProvider:
                 f"provider {self.name} returned HTTP {response.status_code}: {response.text[:500]}",
                 status_code=response.status_code,
                 retryable=retryable,
+                retry_after_seconds=parse_retry_after(response.headers),
+                headers={key.lower(): value for key, value in response.headers.items()},
             )
 
         data = response.json()
@@ -113,6 +126,17 @@ class OpenAICompatibleProvider:
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
         return headers
+
+
+def parse_retry_after(headers: httpx.Headers | dict[str, str]) -> int | None:
+    value = headers.get("retry-after") or headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(int(float(value)), 0)
+    except ValueError:
+        parsed = email.utils.parsedate_to_datetime(value)
+        return max(int(parsed.timestamp() - time.time()), 0)
 
 
 def build_provider(config: ProviderConfig, timeout_seconds: float = 120.0) -> OpenAICompatibleProvider:
