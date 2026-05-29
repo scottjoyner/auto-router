@@ -12,6 +12,7 @@ class QuotaCounter:
     limit: int | None
     used: int = 0
     reset_at: int | None = None
+    window_seconds: int | None = None
 
     @property
     def remaining(self) -> int | None:
@@ -22,13 +23,11 @@ class QuotaCounter:
     def reset_if_needed(self, now: int) -> None:
         if self.reset_at is not None and now >= self.reset_at:
             self.used = 0
-            self.reset_at = self._next_reset(now)
-
-    def _next_reset(self, now: int) -> int | None:
-        if self.reset_at is None:
-            return None
-        previous_window = max(self.reset_at - now, 1)
-        return now + previous_window
+            if self.window_seconds is not None:
+                skipped_windows = max((now - self.reset_at) // self.window_seconds, 0)
+                self.reset_at = self.reset_at + ((skipped_windows + 1) * self.window_seconds)
+            else:
+                self.reset_at = None
 
 
 @dataclass
@@ -69,12 +68,14 @@ class InMemoryQuotaManager:
     def snapshots(self, providers: list[ProviderConfig]) -> list[QuotaSnapshot]:
         results: list[QuotaSnapshot] = []
         with self.lock:
+            now = int(time.time())
             for provider in providers:
                 for model in provider.models:
                     dimensions: dict[str, dict[str, int | None]] = {}
                     for dimension in self._configured_dimensions(model):
                         key = self._key(provider.name, model.alias, dimension)
                         counter = self.counters.setdefault(key, self._counter_for(model, dimension))
+                        counter.reset_if_needed(now)
                         dimensions[dimension] = {
                             "limit": counter.limit,
                             "used": counter.used,
@@ -123,12 +124,12 @@ class InMemoryQuotaManager:
 
     def _counter_for(self, model: ModelConfig, dimension: str) -> QuotaCounter:
         limit = model.quota.get(dimension)
-        reset_at = None
+        now = int(time.time())
         if dimension in {"rpm", "tpm"}:
-            reset_at = int(time.time()) + 60
-        elif dimension in {"rpd", "tpd", "neurons", "neurons_d"}:
-            reset_at = int(time.time()) + 86400
-        return QuotaCounter(limit=limit, reset_at=reset_at)
+            return QuotaCounter(limit=limit, reset_at=now + 60, window_seconds=60)
+        if dimension in {"rpd", "tpd", "neurons", "neurons_d"}:
+            return QuotaCounter(limit=limit, reset_at=now + 86400, window_seconds=86400)
+        return QuotaCounter(limit=limit)
 
     def _key(self, provider: str, model: str, dimension: str) -> str:
         return f"{provider}:{model}:{dimension}"
