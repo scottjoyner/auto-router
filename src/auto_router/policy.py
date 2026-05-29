@@ -40,6 +40,8 @@ class PolicyEngine:
         if request.priority == Priority.repo_critical:
             return "code_high_quality"
         requested_model = request.model or ""
+        if requested_model.startswith("auto/flash") and "flash_start_planner" in self.policies.profiles:
+            return "flash_start_planner"
         if requested_model.startswith("auto/high"):
             return "high_priority_deliverable"
         if requested_model.startswith("auto/code"):
@@ -143,6 +145,8 @@ class PolicyEngine:
             score -= 50
         if stage.purpose in {StagePurpose.refine, StagePurpose.judge} and str(provider.quota_class) == "local":
             score += 100
+        if "flash_planning" in model.capabilities and stage.purpose == StagePurpose.draft:
+            score -= 45
         if "low_latency" in model.capabilities:
             score -= 5
         if "reasoning" in model.capabilities and stage.purpose in {StagePurpose.refine, StagePurpose.judge}:
