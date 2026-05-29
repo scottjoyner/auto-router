@@ -59,7 +59,6 @@ def test_high_priority_uses_high_priority_profile() -> None:
     assert engine.classify_profile(request) == "high_priority_deliverable"
 
 
-<<<<<<< Updated upstream
 def test_exact_model_alias_is_honored() -> None:
     providers = ProviderRegistry(
         providers=[
@@ -81,7 +80,7 @@ def test_exact_model_alias_is_honored() -> None:
     assert plan.profile_name == "exact_model"
     assert plan.stages[0].candidates[0].provider.name == "groq"
     assert plan.stages[0].candidates[0].model.provider_model == "llama"
-=======
+
 
 def test_blocked_context_provider_is_skipped() -> None:
     from auto_router.context import ContextProvider, ContextSnapshot, ExecutionLane
@@ -119,7 +118,13 @@ def test_blocked_context_provider_is_skipped() -> None:
     )
     context = ContextSnapshot(
         providers=[
-            ContextProvider(provider="cloud", lane=ExecutionLane.blocked, local=False, can_use_free_api=False, blocked=True),
+            ContextProvider(
+                provider="cloud",
+                lane=ExecutionLane.blocked,
+                local=False,
+                can_use_free_api=False,
+                blocked=True,
+            ),
             ContextProvider(provider="local", lane=ExecutionLane.local, local=True, can_use_free_api=False),
         ]
     )
@@ -129,4 +134,31 @@ def test_blocked_context_provider_is_skipped() -> None:
     plan = engine.plan(request)
 
     assert [candidate.provider.name for candidate in plan.stages[0].candidates] == ["local"]
->>>>>>> Stashed changes
+
+
+def test_auto_sophia_model_uses_sophia_realtime_profile() -> None:
+    providers = ProviderRegistry(providers=[])
+    policies = PolicyRegistry(
+        profiles={
+            "sophia_realtime": PolicyProfile(stages=[]),
+            "interactive_balanced": PolicyProfile(stages=[]),
+        }
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(request_id="1", route="chat_completions", model="auto/sophia")
+
+    assert engine.classify_profile(request) == "sophia_realtime"
+
+
+def test_auto_backlog_model_uses_backlog_burn_profile() -> None:
+    providers = ProviderRegistry(providers=[])
+    policies = PolicyRegistry(
+        profiles={
+            "backlog_burn": PolicyProfile(stages=[]),
+            "interactive_balanced": PolicyProfile(stages=[]),
+        }
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(request_id="1", route="chat_completions", model="auto/backlog-burn")
+
+    assert engine.classify_profile(request) == "backlog_burn"
