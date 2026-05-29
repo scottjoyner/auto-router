@@ -17,8 +17,6 @@ from auto_router.models import (
 
 
 class PolicyEngine:
-    """Builds execution plans from request metadata and provider capabilities."""
-
     def __init__(
         self,
         providers: ProviderRegistry,
@@ -34,47 +32,46 @@ class PolicyEngine:
     def classify_profile(self, request: RouterRequest) -> str:
         if request.local_only or request.priority == Priority.local_only:
             return "local_only"
-
         metadata_profile = request.metadata.get("profile")
         if isinstance(metadata_profile, str) and metadata_profile in self.policies.profiles:
             return metadata_profile
-
         if request.priority == Priority.critical:
             return "high_priority_deliverable"
         if request.priority == Priority.repo_critical:
             return "code_high_quality"
-
         requested_model = request.model or ""
         if requested_model.startswith("auto/high"):
             return "high_priority_deliverable"
         if requested_model.startswith("auto/code"):
             return "code_high_quality"
+        if requested_model.startswith("auto/sophia") and "sophia_realtime" in self.policies.profiles:
+            return "sophia_realtime"
+        if requested_model.startswith("auto/backlog") and "backlog_burn" in self.policies.profiles:
+            return "backlog_burn"
         if requested_model.startswith("auto/local") or requested_model.startswith("auto/private"):
             return "local_only"
-
         return self.default_profile
 
     def plan(self, request: RouterRequest) -> ExecutionPlan:
         exact = self._exact_model_plan(request)
         if exact is not None:
             return exact
-
         profile_name = self.classify_profile(request)
         profile = self.policies.profiles.get(profile_name) or self._fallback_profile()
         stages = [self._build_stage(stage, request) for stage in profile.stages]
         return ExecutionPlan(profile_name=profile_name, stages=stages)
 
-<<<<<<< Updated upstream
     def _exact_model_plan(self, request: RouterRequest) -> ExecutionPlan | None:
         requested_model = request.model or ""
         if not requested_model or requested_model.startswith("auto/"):
             return None
-
         for provider in self.providers.enabled():
+            if not self._provider_is_eligible(provider, request):
+                continue
             for model in provider.models:
                 if requested_model not in {model.alias, model.provider_model}:
                     continue
-                if request.local_only and str(provider.quota_class) != "local":
+                if not self._model_matches(model, request.required_capabilities):
                     continue
                 candidate = ProviderCandidate(
                     provider=provider,
@@ -82,19 +79,20 @@ class PolicyEngine:
                     score=float(provider.priority),
                     reason="exact model alias match",
                 )
-                stage = ExecutionStage(
-                    purpose=StagePurpose.final,
-                    candidates=[candidate],
-                    required_capabilities=request.required_capabilities,
-                    allow_local_fallback=False,
+                return ExecutionPlan(
+                    profile_name="exact_model",
+                    stages=[
+                        ExecutionStage(
+                            purpose=StagePurpose.final,
+                            candidates=[candidate],
+                            required_capabilities=request.required_capabilities,
+                            allow_local_fallback=False,
+                        )
+                    ],
                 )
-                return ExecutionPlan(profile_name="exact_model", stages=[stage])
         return None
 
-    def _build_stage(self, policy_stage: PolicyStage) -> ExecutionStage:
-=======
     def _build_stage(self, policy_stage: PolicyStage, request: RouterRequest) -> ExecutionStage:
->>>>>>> Stashed changes
         candidates: list[ProviderCandidate] = []
         for provider in self.providers.enabled():
             if not self._provider_is_eligible(provider, request):
@@ -112,7 +110,6 @@ class PolicyEngine:
                         reason=f"matched {policy_stage.purpose}",
                     )
                 )
-
         candidates.sort(key=lambda candidate: candidate.score)
         return ExecutionStage(
             purpose=policy_stage.purpose,
@@ -132,46 +129,28 @@ class PolicyEngine:
         return True
 
     def _model_matches(self, model: ModelConfig, required: set[str]) -> bool:
-        if not required:
-            return True
-        return required.issubset(model.capabilities)
+        return not required or required.issubset(model.capabilities)
 
     def _score(self, provider: ProviderConfig, model: ModelConfig, stage: PolicyStage) -> float:
         score = float(provider.priority)
         context_provider = self.context.provider_for(provider.name)
         lane = self._provider_lane(provider, context_provider)
-
         if lane == ExecutionLane.local:
             score -= 25
         elif lane == ExecutionLane.free_api:
             score -= 5
-
-        # Purpose alignment
         if stage.purpose == StagePurpose.draft and str(provider.quota_class) == "local":
             score -= 50
         if stage.purpose in {StagePurpose.refine, StagePurpose.judge} and str(provider.quota_class) == "local":
             score += 100
-
-        # Model capabilities
         if "low_latency" in model.capabilities:
             score -= 5
         if "reasoning" in model.capabilities and stage.purpose in {StagePurpose.refine, StagePurpose.judge}:
             score -= 10
-
-        # Node-specific capabilities from context
         if context_provider and context_provider.node_id:
             node = self.context.node_for(context_provider.node_id)
-            if node:
-                if "fast_draft" in node.capabilities and stage.purpose == StagePurpose.draft:
-                    score -= 40
-                if "gpu_accelerated" in node.capabilities:
-                    score -= 10
-                if "long_context" in node.capabilities:
-                    if stage.purpose in {StagePurpose.refine, StagePurpose.final}:
-                        score -= 20
-                    else:
-                        score += 30  # Slower for draft
-
+            if node and "gpu_accelerated" in node.capabilities:
+                score -= 10
         return score
 
     def _provider_lane(self, provider: ProviderConfig, context_provider: ContextProvider | None) -> ExecutionLane:
