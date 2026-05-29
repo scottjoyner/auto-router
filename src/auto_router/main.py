@@ -427,8 +427,8 @@ def _owner(candidate: ProviderCandidate) -> str:
 
 
 def _retry_after_seconds(exc: ProviderError) -> int | None:
-    # ProviderError does not yet carry parsed headers. Keep the hook for provider-specific
-    # adapters to populate in the next pass.
+    if exc.retry_after_seconds is not None:
+        return exc.retry_after_seconds
     if exc.status_code == 429:
         return 120
     return None
