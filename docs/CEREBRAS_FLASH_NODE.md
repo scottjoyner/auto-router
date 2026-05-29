@@ -104,22 +104,23 @@ Cerebras should not be used for:
 
 The router should always honor `local_only`, `allow_cloud=false`, blocked context projection entries, and critical reserve thresholds.
 
-## 7. Implementation notes
+## 7. Implementation status
 
-Already added in config:
+Implemented:
 
-- `config/providers.example.yaml` now includes `cerebras/flash-reasoner` and `cerebras/glm-4.7-preview`.
-- `config/context.example.yaml` now includes node `cerebras-wse3` and maps the `cerebras` provider to it.
-- `config/policies.example.yaml` now includes `flash_start_planner` and maps `auto/flash-start` to that profile.
+- `config/providers.example.yaml` includes `cerebras/flash-reasoner` and `cerebras/glm-4.7-preview`.
+- `config/context.example.yaml` includes node `cerebras-wse3` and maps the `cerebras` provider to it.
+- `config/policies.example.yaml` includes `flash_start_planner` and maps `auto/flash-start` to that profile.
+- `PolicyEngine.classify_profile` recognizes `auto/flash-start` and selects `flash_start_planner`.
+- Draft-stage scoring boosts models tagged with `flash_planning`.
+- `tests/test_flash_start.py` verifies alias classification and Cerebras draft-priority selection.
 
-Follow-up implementation tasks:
+Remaining follow-up tasks:
 
-1. Add `auto/flash-start` classification support in `PolicyEngine.classify_profile`.
-2. Add unit test for `auto/flash-start -> flash_start_planner`.
-3. Add `flash_planning` scoring boost for draft stages.
-4. Add dashboard card for flash-start quota burn and average latency.
-5. Add scheduler support for `flash_triage_only` mode.
-6. Add optional runtime `/v1/models` refresh to detect live Cerebras model changes.
+1. Add `auto/flash-start` to the static `/v1/models` logical alias list.
+2. Add dashboard card for flash-start quota burn and average latency.
+3. Add scheduler support for `flash_triage_only` mode.
+4. Add optional runtime `/v1/models` refresh to detect live Cerebras model changes.
 
 ## 8. Example request
 
