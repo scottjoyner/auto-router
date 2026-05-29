@@ -1,6 +1,6 @@
 profiles:
   interactive_balanced:
-    description: Fast free quota first, then local fallback.
+    description: Fast free quota first, then local fallback for normal OpenAI-compatible requests.
     stages:
       - purpose: final
         provider_classes: [fast_free, brokered_free, local]
@@ -8,7 +8,7 @@ profiles:
         allow_local_fallback: true
 
   high_priority_deliverable:
-    description: Local draft, best available free refine, optional judge.
+    description: Local draft, best available free refine, optional judge for high-value deliverables.
     stages:
       - purpose: draft
         provider_classes: [local, fast_free]
@@ -36,6 +36,32 @@ profiles:
         required_capabilities: [chat, code]
         allow_local_fallback: true
 
+  sophia_realtime:
+    description: Low-latency lane for Sophia realtime app traffic; preserve privacy and keep local fallback first-class.
+    stages:
+      - purpose: final
+        provider_classes: [local, fast_free]
+        required_capabilities: [chat, low_latency]
+        allow_local_fallback: true
+
+  backlog_burn:
+    description: Controlled surplus-quota burn profile for backlog items, documentation review, summaries, and non-urgent enrichment.
+    stages:
+      - purpose: draft
+        provider_classes: [local, fast_free, edge_free]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+      - purpose: refine
+        provider_classes: [fast_free, premium_free, brokered_free]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+        optional: true
+      - purpose: judge
+        provider_classes: [fast_free, premium_free]
+        required_capabilities: [chat]
+        allow_local_fallback: false
+        optional: true
+
   local_only:
     description: Never leave local endpoints.
     stages:
@@ -46,8 +72,23 @@ profiles:
 
 classification:
   default_profile: interactive_balanced
+  model_alias_profiles:
+    auto/fast: interactive_balanced
+    auto/high-quality: high_priority_deliverable
+    auto/code: code_high_quality
+    auto/sophia: sophia_realtime
+    auto/backlog-burn: backlog_burn
+    auto/local: local_only
+    auto/private: local_only
   local_only_markers:
     - local_only
     - private_data
     - internal_docs
     - personal_docs
+    - voice_auth
+    - enrollment_sample
+  surplus_burn_markers:
+    - backlog
+    - refine_later
+    - doc_review
+    - test_generation
