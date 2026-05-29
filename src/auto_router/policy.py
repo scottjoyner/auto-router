@@ -47,10 +47,40 @@ class PolicyEngine:
         return self.default_profile
 
     def plan(self, request: RouterRequest) -> ExecutionPlan:
+        exact = self._exact_model_plan(request)
+        if exact is not None:
+            return exact
+
         profile_name = self.classify_profile(request)
         profile = self.policies.profiles.get(profile_name) or self._fallback_profile()
         stages = [self._build_stage(stage) for stage in profile.stages]
         return ExecutionPlan(profile_name=profile_name, stages=stages)
+
+    def _exact_model_plan(self, request: RouterRequest) -> ExecutionPlan | None:
+        requested_model = request.model or ""
+        if not requested_model or requested_model.startswith("auto/"):
+            return None
+
+        for provider in self.providers.enabled():
+            for model in provider.models:
+                if requested_model not in {model.alias, model.provider_model}:
+                    continue
+                if request.local_only and str(provider.quota_class) != "local":
+                    continue
+                candidate = ProviderCandidate(
+                    provider=provider,
+                    model=model,
+                    score=float(provider.priority),
+                    reason="exact model alias match",
+                )
+                stage = ExecutionStage(
+                    purpose=StagePurpose.final,
+                    candidates=[candidate],
+                    required_capabilities=request.required_capabilities,
+                    allow_local_fallback=False,
+                )
+                return ExecutionPlan(profile_name="exact_model", stages=[stage])
+        return None
 
     def _build_stage(self, policy_stage: PolicyStage) -> ExecutionStage:
         candidates: list[ProviderCandidate] = []
