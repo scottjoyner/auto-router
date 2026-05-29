@@ -21,16 +21,29 @@ providers:
     enabled: true
     base_url: https://api.cerebras.ai/v1
     api_key_env: CEREBRAS_API_KEY
-    priority: 30
+    priority: 10
     quota_class: fast_free
     headers: {}
+    metadata:
+      role: flash_start_planning_node
+      docs: https://inference-docs.cerebras.ai
+      notes: Public docs currently list gpt-oss-120b and preview zai-glm-4.7 on shared endpoints. Confirm live availability with GET /v1/models.
     models:
-      - alias: cerebras/large-fast
+      - alias: cerebras/flash-reasoner
         provider_model: gpt-oss-120b
-        capabilities: [chat, streaming, json, code, reasoning]
-        context_window: 32768
+        capabilities: [chat, streaming, json, code, reasoning, low_latency, flash_planning]
         quota:
           rpm: 5
+          tpm: 30000
+          tph: 1000000
+          tpd: 1000000
+      - alias: cerebras/glm-4.7-preview
+        provider_model: zai-glm-4.7
+        capabilities: [chat, streaming, json, code, reasoning, tool_use, low_latency, flash_planning, preview]
+        quota:
+          rpm: 5
+          tpm: 30000
+          tph: 1000000
           tpd: 1000000
 
   - name: openrouter
