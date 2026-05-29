@@ -139,13 +139,20 @@ async def metrics() -> str:
     lines.append("# HELP auto_router_circuit_open Circuit breaker open state.")
     lines.append("# TYPE auto_router_circuit_open gauge")
     for circuit in circuits:
-        lines.append('auto_router_circuit_open{owner="%s"} %s' % (circuit["owner"], 1 if circuit["open"] else 0))
+        lines.append(
+            'auto_router_circuit_open{owner="%s"} %s'
+            % (circuit["owner"], 1 if circuit["open"] else 0)
+        )
     return "\n".join(lines) + "\n"
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request) -> Any:
-    return templates.TemplateResponse(request=request, name="dashboard.html", context={"title": "auto-router dashboard"})
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={"title": "auto-router dashboard"},
+    )
 
 
 @app.get("/api/dashboard/summary", response_class=HTMLResponse)
@@ -229,6 +236,7 @@ async def list_models() -> dict[str, Any]:
     data.extend(
         [
             {"id": "auto/fast", "object": "model", "created": 0, "owned_by": "auto-router"},
+            {"id": "auto/flash-start", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/high-quality", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/code", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/local", "object": "model", "created": 0, "owned_by": "auto-router"},
@@ -265,7 +273,12 @@ async def completions(request: Request) -> JSONResponse | StreamingResponse:
 async def create_agent_job(request: Request) -> dict[str, Any]:
     job_request = build_agent_job_request(await request.json())
     record = state.agent_jobs.submit(job_request)
-    return {"job_id": record.request.job_id, "status": record.status, "worker_name": record.worker_name, "request": job_request.model_dump()}
+    return {
+        "job_id": record.request.job_id,
+        "status": record.status,
+        "worker_name": record.worker_name,
+        "request": job_request.model_dump(),
+    }
 
 
 @app.get("/jobs/agent/{job_id}")
@@ -308,7 +321,15 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                     stream_response = await _dispatch_stream(provider, candidate, router_request)
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     state.circuits.record_success(owner)
-                    _record_usage(router_request, stream_response.provider, stream_response.model, stage.purpose.value, estimate, stream_response.status_code, latency_ms)
+                    _record_usage(
+                        router_request,
+                        stream_response.provider,
+                        stream_response.model,
+                        stage.purpose.value,
+                        estimate,
+                        stream_response.status_code,
+                        latency_ms,
+                    )
                     return StreamingResponse(
                         stream_response.body,
                         status_code=stream_response.status_code,
@@ -323,7 +344,16 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 response = await _dispatch(provider, candidate, router_request)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 state.circuits.record_success(owner)
-                _record_usage(router_request, response.provider, response.model, stage.purpose.value, estimate, response.status_code, latency_ms, response.usage)
+                _record_usage(
+                    router_request,
+                    response.provider,
+                    response.model,
+                    stage.purpose.value,
+                    estimate,
+                    response.status_code,
+                    latency_ms,
+                    response.usage,
+                )
                 payload = _normalize_response_payload(response, stage.purpose.value, plan.profile_name)
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
@@ -331,13 +361,31 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 state.quota.release(candidate.provider, candidate.model, estimate)
                 state.circuits.record_failure(owner, str(exc), retry_after=_retry_after_seconds(exc))
-                _record_usage(router_request, candidate.provider.name, candidate.model.provider_model, stage.purpose.value, estimate, exc.status_code, latency_ms, error=exc)
+                _record_usage(
+                    router_request,
+                    candidate.provider.name,
+                    candidate.model.provider_model,
+                    stage.purpose.value,
+                    estimate,
+                    exc.status_code,
+                    latency_ms,
+                    error=exc,
+                )
                 errors.append(str(exc))
             except Exception as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 state.quota.release(candidate.provider, candidate.model, estimate)
                 state.circuits.record_failure(owner, str(exc))
-                _record_usage(router_request, candidate.provider.name, candidate.model.provider_model, stage.purpose.value, estimate, None, latency_ms, error=exc)
+                _record_usage(
+                    router_request,
+                    candidate.provider.name,
+                    candidate.model.provider_model,
+                    stage.purpose.value,
+                    estimate,
+                    None,
+                    latency_ms,
+                    error=exc,
+                )
                 errors.append(f"unexpected provider error: {exc}")
     raise HTTPException(status_code=503, detail={"error": "all providers failed", "details": errors})
 
@@ -478,7 +526,12 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
 def _normalize_response_payload(response: ProviderResponse, stage: str, profile_name: str) -> dict[str, Any]:
     payload = dict(response.data)
     payload["model"] = response.model
-    payload["auto_router"] = {"provider": response.provider, "model": response.model, "stage": str(stage), "profile": profile_name}
+    payload["auto_router"] = {
+        "provider": response.provider,
+        "model": response.model,
+        "stage": str(stage),
+        "profile": profile_name,
+    }
     if "usage" not in payload and response.usage is not None:
         payload["usage"] = response.usage
     return payload
