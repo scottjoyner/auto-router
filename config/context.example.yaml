@@ -2,6 +2,7 @@ revision: assistx-bootstrap
 source: assistx:projection
 metadata:
   note: Example projection consumed by auto-router before Neo4j sync is wired in.
+  flash_start_node: cerebras-wse3
 nodes:
   - node_id: x1-370
     display_name: Network Orchestrator (X1-370)
@@ -34,6 +35,14 @@ nodes:
     can_use_free_api: false
     running: true
     detail: AssistX release path
+  - node_id: cerebras-wse3
+    display_name: Cerebras WSE-3 Flash Planning Node
+    lane: free_api
+    local: false
+    can_use_free_api: true
+    running: true
+    capabilities: [flash_planning, low_latency, reasoning, code, json, tool_use]
+    detail: OpenAI-compatible Cerebras inference lane for instant draft/planning starts
 providers:
   - provider: lmstudio-r2d2
     node_id: x1-370
@@ -58,6 +67,16 @@ providers:
     free_api_credits: null
     blocked: false
     detail: free cloud lane
+  - provider: cerebras
+    node_id: cerebras-wse3
+    lane: free_api
+    local: false
+    can_use_free_api: true
+    free_api_credits: 1000000
+    blocked: false
+    aliases: [cerebras/flash-reasoner, cerebras/glm-4.7-preview, auto/flash-start]
+    capabilities: [chat, streaming, json, code, reasoning, low_latency, flash_planning, tool_use]
+    detail: WSE-3 backed free API lane for flash-start planning, first-pass decomposition, and instant backlog triage
   - provider: openrouter
     lane: blocked
     local: false
