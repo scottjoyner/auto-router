@@ -1,0 +1,244 @@
+<div class="space-y-8">
+    <!-- Stat Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Providers</span>
+            <div class="text-2xl font-bold text-gray-900">{{ snapshots|length }} enabled</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Agent Workers</span>
+            <div class="text-2xl font-bold text-gray-900">{{ agents|length }} configured</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Context Revision</span>
+            <div class="text-2xl font-bold text-gray-900">{{ context.revision|truncate(12) }}</div>
+        </div>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Local Backstop</span>
+            <div class="text-2xl font-bold text-gray-900">{{ context.local_provider_names()|length }} nodes</div>
+        </div>
+    </div>
+
+    <!-- Context Alignment - Providers -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Context Alignment (Providers)</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Lane</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Free API</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Credits</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Detail</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for p in context.providers %}
+                    <tr class="{% if p.lane == 'local' %}bg-blue-50{% elif p.lane == 'free_api' %}bg-yellow-50{% elif p.blocked %}bg-red-50{% endif %}">
+                        <td class="px-6 py-4 font-medium text-gray-900">{{ p.provider }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ p.lane }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-red-100 text-red-700' if p.blocked else 'bg-green-100 text-green-700' }}">
+                                {{ 'blocked' if p.blocked else 'ready' }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-gray-600">{{ p.can_use_free_api }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ p.free_api_credits if p.free_api_credits is not none else '-' }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ p.detail }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Context Alignment - Nodes -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Context Alignment (Nodes)</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Node</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Lane</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Running</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Local</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Capabilities</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Detail</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for node in context.nodes %}
+                    <tr>
+                        <td class="px-6 py-4 font-medium text-gray-900">{{ node.node_id }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ node.lane }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-700' if node.running else 'bg-red-100 text-red-700' }}">
+                                {{ 'Yes' if node.running else 'No' }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-gray-600">{{ 'Yes' if node.local else 'No' }}</td>
+                        <td class="px-6 py-4 text-gray-600">
+                            {% if node.capabilities %}{{ node.capabilities|join(', ') }}{% else %}-{% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-gray-600">{{ node.detail }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+
+    <!-- Provider Health & Models -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Provider Health & Models</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Detail / Loaded Models</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for item in provider_health %}
+                    <tr>
+                        <td class="px-6 py-4 font-medium text-gray-900">{{ item.provider }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-700' if item.ok else 'bg-red-100 text-red-700' }}">
+                                {{ 'Ok' if item.ok else 'Unhealthy' }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-gray-600">
+                            {{ item.detail | safe }}
+                            {% if item.metadata and item.metadata.type == 'lmstudio' and item.metadata.loaded_models %}
+                            <div class="mt-2 text-xs text-gray-500">
+                                {% for m in item.metadata.loaded_models %}
+                                <div><b>{{ m.id }}</b> ({{ (m.context_length // 1024) if m.context_length else 0 }}k{% if m.gpu %} + GPU{% endif %})</div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Quota Burn-down -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Quota Burn-down</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Model</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Dimension</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Limit</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Used</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Remaining</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Progress</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for snapshot in snapshots %}
+                        {% for dimension, values in snapshot.dimensions.items() %}
+                        <tr>
+                            <td class="px-6 py-4 font-medium text-gray-900">{{ snapshot.provider }}</td>
+                            <td class="px-6 py-4 text-gray-900">{{ snapshot.model }}</td>
+                            <td class="px-6 py-4 text-gray-600">{{ dimension }}</td>
+                            <td class="px-6 py-4 text-gray-600">{{ values.limit if values.limit is not none else 'Unlimited' }}</td>
+                            <td class="px-6 py-4 text-gray-600">{{ values.used if values.used is not none else '0' }}</td>
+                            <td class="px-6 py-4 text-gray-600">{{ values.remaining if values.remaining is not none else 'Unlimited' }}</td>
+                            <td class="px-6 py-4">
+                                {% if values.limit is not none and values.limit > 0 %}
+                                    {% set progress = (values.used / values.limit) * 100 %}
+                                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                        <div class="bg-blue-600 h-2.5 rounded-full" style="width: {{ progress }}%;"></div>
+                                    </div>
+                                {% else %}
+                                    N/A
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Agent Workers -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Agent Workers</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Name</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Type</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for worker in agents %}
+                    <tr>
+                        <td class="px-6 py-4 font-medium text-gray-900">{{ worker.name }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ worker.type }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-700' if worker.enabled else 'bg-red-100 text-red-700' }}">
+                                {{ 'Enabled' if worker.enabled else 'Disabled' }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Recent Agent Jobs -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Recent Agent Jobs</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">ID</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Task</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Priority</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Worker</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for job in jobs %}
+                    <tr>
+                        <td class="px-6 py-4 text-gray-500 font-mono text-xs">{{ job.request.job_id[:8] }}</td>
+                        <td class="px-6 py-4 text-gray-900">{{ job.request.task[:50] }}{% if job.request.task|length > 50 %}...{% endif %}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-1 rounded-full text-xs font-bold 
+                                {% if job.status == 'succeeded' %}bg-green-100 text-green-700
+                                {% elif job.status == 'failed' %}bg-red-100 text-red-700
+                                {% elif job.status == 'running' %}bg-blue-100 text-blue-700
+                                {% else %}bg-gray-100 text-gray-700{% endif %}">
+                                {{ job.status }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-gray-600">{{ job.request.priority }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ job.worker_name if job.worker_name else '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Recent Usage - already there -->
+</div>

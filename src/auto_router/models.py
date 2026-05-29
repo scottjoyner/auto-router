@@ -42,6 +42,7 @@ class ModelConfig(BaseModel):
 class ProviderConfig(BaseModel):
     name: str
     type: str
+    node_id: str | None = None
     enabled: bool = True
     base_url: str
     api_key_env: str | None = None
@@ -115,6 +116,7 @@ class ProviderHealth(BaseModel):
     provider: str
     ok: bool
     detail: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class QuotaEstimate(BaseModel):

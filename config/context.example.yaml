@@ -1,0 +1,67 @@
+revision: assistx-bootstrap
+source: assistx:projection
+metadata:
+  note: Example projection consumed by auto-router before Neo4j sync is wired in.
+nodes:
+  - node_id: x1-370
+    display_name: Network Orchestrator (X1-370)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [large_models, long_context, agent_host]
+    detail: 96GB RAM, weak GPU
+  - node_id: macbook-air
+    display_name: Mobile Speed Demon (MacBook Air)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [fast_draft, low_latency]
+    detail: Gemma-3 powerhouse
+  - node_id: deathstar
+    display_name: GPU Specialist (Deathstar)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [gpu_accelerated, fast_inference]
+    detail: RX 480 8GB
+  - node_id: paperclip-control
+    display_name: Paperclip control plane
+    lane: paperclip
+    local: false
+    can_use_free_api: false
+    running: true
+    detail: AssistX release path
+providers:
+  - provider: lmstudio-r2d2
+    node_id: x1-370
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    detail: local model endpoint
+  - provider: lmstudio-deathstar
+    node_id: deathstar
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    detail: local GPU endpoint
+  - provider: groq
+    lane: free_api
+    local: false
+    can_use_free_api: true
+    free_api_credits: null
+    blocked: false
+    detail: free cloud lane
+  - provider: openrouter
+    lane: blocked
+    local: false
+    can_use_free_api: false
+    free_api_credits: 0
+    blocked: true
+    detail: disabled pending context sync

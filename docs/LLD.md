@@ -43,9 +43,33 @@ auto/local             -> LM Studio only
 auto/private           -> LM Studio only with stricter logging redaction
 ```
 
+### 1.4 AssistX alignment
+
+auto-router should treat AssistX as the context authority when operating in the aligned deployment. The request path may still begin from OpenAI-compatible payloads, but the final routing decision should be informed by a graph-backed registry of:
+
+- local nodes and their current status;
+- free API lanes and remaining credit;
+- provider capabilities and known limitations;
+- privacy flags that force local-only execution;
+- agent-worker availability and preferred lanes.
+
+This means the router should be able to answer, in metadata, not just what ran but why it ran there.
+
 ## 2. Internal request model
 
 Every synchronous request becomes a `RouterRequest`.
+
+### 2.1 Context inputs
+
+In the aligned deployment, the router should consume context snapshots that identify:
+
+- the request locality policy (`local_only`, `safe_cloud`, or unrestricted);
+- the current lane preference (`local`, `free_api`, `paperclip`, `blocked`);
+- the provider/model capabilities available for that lane;
+- whether the request may spend legitimate free API credits;
+- whether an agent worker is available locally or only via a cloud-backed lane.
+
+YAML files remain the bootstrap mechanism, but they should be treated as a projection of graph state, not the system of record.
 
 ```python
 class RouterRequest(BaseModel):

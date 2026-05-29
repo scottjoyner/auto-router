@@ -47,9 +47,9 @@ class AgentWorkerAdapter:
     async def run(self, job: AgentJobRequest, workdir: Path) -> AgentJobResult:
         """Run a CLI agent in a controlled workdir.
 
-        This is intentionally conservative: it only executes disabled-by-default workers,
-        captures output, and does not permit commits/pushes. Tool-specific prompt formatting
-        will be added in the next implementation pass.
+        The worker is fed the task text on stdin so simple CLI agents can be exercised without
+        assuming a particular prompt format. It remains conservative: no commit/push support and
+        no repository mutation orchestration beyond running in the provided workdir.
         """
         if not self.available():
             return AgentJobResult(
@@ -63,14 +63,16 @@ class AgentWorkerAdapter:
             self.config.command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE,
             cwd=str(workdir),
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(), timeout=job.max_runtime_seconds
+                process.communicate(job.task.encode("utf-8")), timeout=job.max_runtime_seconds
             )
         except TimeoutError:
             process.kill()
+            await process.communicate()
             return AgentJobResult(
                 job_id=job.job_id,
                 worker_name=self.config.name,
@@ -78,11 +80,20 @@ class AgentWorkerAdapter:
                 summary="Worker exceeded max runtime.",
             )
 
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        summary = "Worker completed successfully." if process.returncode == 0 else "Worker exited with errors."
+        artifacts = [
+            {"kind": "stdout", "path": str(workdir / "stdout.txt")},
+            {"kind": "stderr", "path": str(workdir / "stderr.txt")},
+        ]
         return AgentJobResult(
             job_id=job.job_id,
             worker_name=self.config.name,
             status="succeeded" if process.returncode == 0 else "failed",
-            stdout=stdout_bytes.decode("utf-8", errors="replace"),
-            stderr=stderr_bytes.decode("utf-8", errors="replace"),
+            summary=summary,
+            stdout=stdout,
+            stderr=stderr,
+            artifacts=artifacts,
             usage={"returncode": process.returncode},
         )

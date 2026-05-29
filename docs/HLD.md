@@ -53,6 +53,17 @@ MVP uses Redis for atomic quota reservations and SQLite for durable usage/audit 
 
 A small dashboard is required from the first implementation phase. It should show quota remaining, projected burn-down, provider health, agent-worker usage, fallback events, and LM Studio status.
 
+### Decision 8: Neo4j is the context authority, not the router
+
+The router should not invent long-lived context or capability state from request payloads alone. AssistX owns the graph-backed context fabric and publishes the facts the router needs to make safe execution decisions. The router consumes those facts to decide:
+
+- whether a request must stay local;
+- whether a provider may spend legitimate free API credits;
+- which worker or provider lane is currently allowed;
+- what provenance to attach to the response or artifact.
+
+Static YAML remains useful for bootstrap and local development, but the design target is graph-synced context and lane metadata coming from AssistX. The router can point `AUTO_ROUTER_CONTEXT_CONFIG` at AssistX `/api/context/projection` to consume the live snapshot directly.
+
 ## 3. Non-goals
 
 - No evasion of provider limits.

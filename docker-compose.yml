@@ -7,9 +7,10 @@ services:
     environment:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
-      AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.yaml
-      AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
-      AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
+      AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.example.yaml
+      AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.example.yaml
+      AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.example.yaml
+      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://host.docker.internal:8000/api/context/projection}
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -26,6 +27,8 @@ services:
       - ./data:/data
       - ./artifacts:/artifacts
       - ./worktrees:/worktrees
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - redis
     restart: unless-stopped

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     provider_config: str = "config/providers.yaml"
     policy_config: str = "config/policies.yaml"
     agent_config: str = "config/agent_workers.yaml"
+    context_config: str = "config/context.yaml"
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "sqlite:///./data/router.sqlite3"
     log_prompts: bool = False

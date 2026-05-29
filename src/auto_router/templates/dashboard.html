@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-3xl font-bold">Dashboard</h1>
+    <div id="dashboard-content" hx-trigger="load, every 10s" hx-get="/api/dashboard/summary" hx-swap="innerHTML">
+        <!-- Dashboard components will be injected here -->
+        <p>Loading dashboard...</p>
+    </div>
+</div>
+{% endblock %}

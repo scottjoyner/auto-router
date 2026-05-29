@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from auto_router.config import PolicyRegistry, ProviderRegistry
+from auto_router.context import ContextProvider, ContextSnapshot, ExecutionLane
 from auto_router.models import (
     ExecutionPlan,
     ExecutionStage,
@@ -18,10 +19,17 @@ from auto_router.models import (
 class PolicyEngine:
     """Builds execution plans from request metadata and provider capabilities."""
 
-    def __init__(self, providers: ProviderRegistry, policies: PolicyRegistry, default_profile: str):
+    def __init__(
+        self,
+        providers: ProviderRegistry,
+        policies: PolicyRegistry,
+        default_profile: str,
+        context: ContextSnapshot | None = None,
+    ):
         self.providers = providers
         self.policies = policies
         self.default_profile = default_profile
+        self.context = context or ContextSnapshot()
 
     def classify_profile(self, request: RouterRequest) -> str:
         if request.local_only or request.priority == Priority.local_only:
@@ -53,9 +61,10 @@ class PolicyEngine:
 
         profile_name = self.classify_profile(request)
         profile = self.policies.profiles.get(profile_name) or self._fallback_profile()
-        stages = [self._build_stage(stage) for stage in profile.stages]
+        stages = [self._build_stage(stage, request) for stage in profile.stages]
         return ExecutionPlan(profile_name=profile_name, stages=stages)
 
+<<<<<<< Updated upstream
     def _exact_model_plan(self, request: RouterRequest) -> ExecutionPlan | None:
         requested_model = request.model or ""
         if not requested_model or requested_model.startswith("auto/"):
@@ -83,8 +92,13 @@ class PolicyEngine:
         return None
 
     def _build_stage(self, policy_stage: PolicyStage) -> ExecutionStage:
+=======
+    def _build_stage(self, policy_stage: PolicyStage, request: RouterRequest) -> ExecutionStage:
+>>>>>>> Stashed changes
         candidates: list[ProviderCandidate] = []
         for provider in self.providers.enabled():
+            if not self._provider_is_eligible(provider, request):
+                continue
             if policy_stage.provider_classes and str(provider.quota_class) not in policy_stage.provider_classes:
                 continue
             for model in provider.models:
@@ -108,6 +122,15 @@ class PolicyEngine:
             optional=policy_stage.optional,
         )
 
+    def _provider_is_eligible(self, provider: ProviderConfig, request: RouterRequest) -> bool:
+        context_provider = self.context.provider_for(provider.name)
+        lane = self._provider_lane(provider, context_provider)
+        if context_provider and context_provider.is_blocked:
+            return False
+        if request.local_only or request.priority == Priority.local_only or request.allow_cloud is False:
+            return lane == ExecutionLane.local
+        return True
+
     def _model_matches(self, model: ModelConfig, required: set[str]) -> bool:
         if not required:
             return True
@@ -115,15 +138,48 @@ class PolicyEngine:
 
     def _score(self, provider: ProviderConfig, model: ModelConfig, stage: PolicyStage) -> float:
         score = float(provider.priority)
+        context_provider = self.context.provider_for(provider.name)
+        lane = self._provider_lane(provider, context_provider)
+
+        if lane == ExecutionLane.local:
+            score -= 25
+        elif lane == ExecutionLane.free_api:
+            score -= 5
+
+        # Purpose alignment
         if stage.purpose == StagePurpose.draft and str(provider.quota_class) == "local":
             score -= 50
         if stage.purpose in {StagePurpose.refine, StagePurpose.judge} and str(provider.quota_class) == "local":
             score += 100
+
+        # Model capabilities
         if "low_latency" in model.capabilities:
             score -= 5
         if "reasoning" in model.capabilities and stage.purpose in {StagePurpose.refine, StagePurpose.judge}:
             score -= 10
+
+        # Node-specific capabilities from context
+        if context_provider and context_provider.node_id:
+            node = self.context.node_for(context_provider.node_id)
+            if node:
+                if "fast_draft" in node.capabilities and stage.purpose == StagePurpose.draft:
+                    score -= 40
+                if "gpu_accelerated" in node.capabilities:
+                    score -= 10
+                if "long_context" in node.capabilities:
+                    if stage.purpose in {StagePurpose.refine, StagePurpose.final}:
+                        score -= 20
+                    else:
+                        score += 30  # Slower for draft
+
         return score
+
+    def _provider_lane(self, provider: ProviderConfig, context_provider: ContextProvider | None) -> ExecutionLane:
+        if context_provider is not None:
+            return context_provider.lane
+        if str(provider.quota_class) == "local" or provider.type == "lmstudio":
+            return ExecutionLane.local
+        return ExecutionLane.free_api
 
     def _fallback_profile(self) -> PolicyProfile:
         return PolicyProfile(

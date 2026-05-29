@@ -107,5 +107,7 @@ export OPENAI_API_KEY=local-router
 - [`docs/QUOTA_STRATEGY.md`](docs/QUOTA_STRATEGY.md) — quota burn-down and reservation model
 - [`docs/PROVIDER_MATRIX.md`](docs/PROVIDER_MATRIX.md) — provider notes and volatile limits
 - [`docs/DASHBOARD.md`](docs/DASHBOARD.md) — dashboard design
+- [`docs/ALIGNMENT_EVENT.md`](docs/ALIGNMENT_EVENT.md) — Neo4j context and lane contract shared with AssistX
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — deployment setup for AssistX plus router
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — execution plan
 - [`docs/SECURITY_PRIVACY.md`](docs/SECURITY_PRIVACY.md) — privacy and key-handling constraints
