@@ -57,3 +57,26 @@ def test_high_priority_uses_high_priority_profile() -> None:
     request = RouterRequest(request_id="1", route="chat_completions", priority="critical")
 
     assert engine.classify_profile(request) == "high_priority_deliverable"
+
+
+def test_exact_model_alias_is_honored() -> None:
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="groq",
+                type="openai_compatible",
+                base_url="https://example.com/v1",
+                quota_class="fast_free",
+                models=[ModelConfig(alias="groq/fast", provider_model="llama", capabilities={"chat"})],
+            )
+        ]
+    )
+    policies = PolicyRegistry(profiles={"interactive_balanced": PolicyProfile(stages=[])})
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(request_id="1", route="chat_completions", model="groq/fast")
+
+    plan = engine.plan(request)
+
+    assert plan.profile_name == "exact_model"
+    assert plan.stages[0].candidates[0].provider.name == "groq"
+    assert plan.stages[0].candidates[0].model.provider_model == "llama"
