@@ -7,6 +7,19 @@ profiles:
         required_capabilities: [chat]
         allow_local_fallback: true
 
+  flash_start_planner:
+    description: Use the Cerebras WSE-3 free lane as an instant planning/decomposition starter, then hand off to local or higher-quality refine lanes.
+    stages:
+      - purpose: draft
+        provider_classes: [fast_free]
+        required_capabilities: [chat, low_latency, flash_planning]
+        allow_local_fallback: true
+      - purpose: refine
+        provider_classes: [local, premium_free, fast_free]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+        optional: true
+
   high_priority_deliverable:
     description: Local draft, best available free refine, optional judge for high-value deliverables.
     stages:
@@ -74,6 +87,7 @@ classification:
   default_profile: interactive_balanced
   model_alias_profiles:
     auto/fast: interactive_balanced
+    auto/flash-start: flash_start_planner
     auto/high-quality: high_priority_deliverable
     auto/code: code_high_quality
     auto/sophia: sophia_realtime
