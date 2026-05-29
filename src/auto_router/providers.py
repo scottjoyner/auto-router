@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import email.utils
 import os
-<<<<<<< Updated upstream
 import time
-from typing import Any
-=======
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
->>>>>>> Stashed changes
 
 import httpx
 
@@ -43,9 +39,9 @@ class ProviderStreamResponse:
 class OpenAICompatibleProvider:
     """Minimal OpenAI-compatible provider adapter.
 
-    This intentionally supports LM Studio and most hosted providers that expose `/v1` routes.
-    Provider-specific adapters can subclass this when custom headers, paths, or response handling
-    become necessary.
+    This intentionally supports LM Studio and hosted providers that expose `/v1`
+    routes. Provider-specific adapters can subclass this when custom headers,
+    paths, or response handling become necessary.
     """
 
     def __init__(self, config: ProviderConfig, timeout_seconds: float = 120.0):
@@ -68,7 +64,10 @@ class OpenAICompatibleProvider:
             return ProviderHealth(provider=self.name, ok=False, detail="missing API key")
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.config.base_url.rstrip('/')}/models", headers=self._headers())
+                response = await client.get(
+                    f"{self.config.base_url.rstrip('/')}/models",
+                    headers=self._headers(),
+                )
             if response.status_code < 500:
                 return ProviderHealth(provider=self.name, ok=True, detail=f"HTTP {response.status_code}")
             return ProviderHealth(provider=self.name, ok=False, detail=f"HTTP {response.status_code}")
@@ -95,7 +94,11 @@ class OpenAICompatibleProvider:
         payload["model"] = provider_model
         return await self._post("/completions", payload, provider_model)
 
-    async def stream_chat_completions(self, request: RouterRequest, provider_model: str) -> ProviderStreamResponse:
+    async def stream_chat_completions(
+        self,
+        request: RouterRequest,
+        provider_model: str,
+    ) -> ProviderStreamResponse:
         payload = dict(request.raw_body)
         payload["model"] = provider_model
         return await self._stream_post("/chat/completions", payload, provider_model)
@@ -165,9 +168,12 @@ class OpenAICompatibleProvider:
             await client.aclose()
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"provider {self.name} returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}",
+                f"provider {self.name} returned HTTP {response.status_code}: "
+                f"{body.decode('utf-8', errors='replace')[:500]}",
                 status_code=response.status_code,
                 retryable=retryable,
+                retry_after_seconds=parse_retry_after(response.headers),
+                headers={key.lower(): value for key, value in response.headers.items()},
             )
 
         async def body_stream() -> AsyncIterator[bytes]:
@@ -197,7 +203,6 @@ class OpenAICompatibleProvider:
         return headers
 
 
-<<<<<<< Updated upstream
 def parse_retry_after(headers: httpx.Headers | dict[str, str]) -> int | None:
     value = headers.get("retry-after") or headers.get("Retry-After")
     if not value:
@@ -205,47 +210,50 @@ def parse_retry_after(headers: httpx.Headers | dict[str, str]) -> int | None:
     try:
         return max(int(float(value)), 0)
     except ValueError:
-        parsed = email.utils.parsedate_to_datetime(value)
-        return max(int(parsed.timestamp() - time.time()), 0)
-=======
+        try:
+            parsed = email.utils.parsedate_to_datetime(value)
+            return max(int(parsed.timestamp() - time.time()), 0)
+        except Exception:
+            return None
+
+
 class LMStudioProvider(OpenAICompatibleProvider):
-    """Specialized provider for LM Studio that uses native APIs for richer health info."""
+    """LM Studio adapter with richer health probes and OpenAI-compatible dispatch."""
 
     async def health(self) -> ProviderHealth:
         base_url = self.config.base_url.rstrip("/")
-        if base_url.endswith("/v1"):
-            native_root = base_url[:-3].rstrip("/")
-        else:
-            native_root = base_url
+        native_root = base_url[:-3].rstrip("/") if base_url.endswith("/v1") else base_url
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                # Use native API to get loaded status and capabilities
                 response = await client.get(f"{native_root}/api/v1/models", headers=self._headers())
-            
+
             if response.status_code == 200:
                 data = response.json()
                 models = data.get("models") or []
                 loaded_count = 0
                 total_loaded_ctx = 0
-                loaded_models = []
+                loaded_models: list[dict[str, Any]] = []
 
-                for m in models:
-                    instances = m.get("loaded_instances") or []
-                    if instances:
-                        loaded_count += 1
-                        model_id = m.get("id") or m.get("key")
-                        ctx = instances[0].get("config", {}).get("context_length", 0)
-                        total_loaded_ctx += ctx
-                        loaded_models.append({
+                for model in models:
+                    instances = model.get("loaded_instances") or []
+                    if not instances:
+                        continue
+                    loaded_count += 1
+                    model_id = model.get("id") or model.get("key")
+                    ctx = instances[0].get("config", {}).get("context_length", 0)
+                    total_loaded_ctx += ctx
+                    loaded_models.append(
+                        {
                             "id": model_id,
                             "context_length": ctx,
-                            "gpu": any(inst.get("config", {}).get("gpu") for inst in instances)
-                        })
+                            "gpu": any(instance.get("config", {}).get("gpu") for instance in instances),
+                        }
+                    )
 
                 detail = f"online, {loaded_count} models loaded"
                 if loaded_count > 0:
-                    detail += f" ({total_loaded_ctx//1024}k total ctx)"
+                    detail += f" ({total_loaded_ctx // 1024}k total ctx)"
 
                 return ProviderHealth(
                     provider=self.name,
@@ -255,14 +263,12 @@ class LMStudioProvider(OpenAICompatibleProvider):
                         "type": "lmstudio",
                         "loaded_models": loaded_models,
                         "raw_model_count": len(models),
-                    }
+                    },
                 )
-            
-            # Fallback to standard /v1/models if native API fails
+
             return await super().health()
-        except Exception as exc:
-            return ProviderHealth(provider=self.name, ok=False, detail=str(exc))
->>>>>>> Stashed changes
+        except Exception:
+            return await super().health()
 
 
 def build_provider(config: ProviderConfig, timeout_seconds: float = 120.0) -> OpenAICompatibleProvider:
