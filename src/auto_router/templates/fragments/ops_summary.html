@@ -1,0 +1,119 @@
+<section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+    <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Production control plane</p>
+            <h2 class="text-2xl font-black text-white">Registry, outbox, CLIs, and backlog intake</h2>
+            <p class="mt-1 text-sm text-router-muted">Live-only operator controls for model inventory, provenance dispatch, agent CLI discovery, and AssistX backlog candidate intake.</p>
+        </div>
+        <div class="flex flex-wrap gap-2 text-xs">
+            <a href="/admin/live-models" class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40">models JSON</a>
+            <a href="/admin/outbox" class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40">outbox JSON</a>
+            <a href="/admin/agent-clis" class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40">CLI JSON</a>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-3xl border border-cyan-300/20 bg-cyan-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-cyan-200">Model registry</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ model_registry_summary.models or 0 }}</div>
+            <div class="mt-1 text-xs text-cyan-100/70">{{ model_registry_summary.providers or 0 }} providers · {{ model_registry_summary.stale or 0 }} stale</div>
+        </div>
+        <div class="rounded-3xl border border-amber-300/20 bg-amber-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-amber-200">Outbox</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ outbox_summary.pending or 0 }}</div>
+            <div class="mt-1 text-xs text-amber-100/70">pending · {{ outbox_summary.retry or 0 }} retry · {{ outbox_summary.dead_letter or 0 }} dead</div>
+        </div>
+        <div class="rounded-3xl border border-emerald-300/20 bg-emerald-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Agent CLIs</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ cli_summary.runnable or 0 }}</div>
+            <div class="mt-1 text-xs text-emerald-100/70">runnable · {{ cli_summary.installed or 0 }} installed · {{ cli_summary.missing or 0 }} missing</div>
+        </div>
+        <div class="rounded-3xl border {% if assistx_tasks_configured %}border-emerald-300/20 bg-emerald-300/10{% else %}border-rose-300/20 bg-rose-300/10{% endif %} p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider {% if assistx_tasks_configured %}text-emerald-200{% else %}text-rose-200{% endif %}">AssistX backlog</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ 'on' if assistx_tasks_configured else 'off' }}</div>
+            <div class="mt-1 truncate text-xs {% if assistx_tasks_configured %}text-emerald-100/70{% else %}text-rose-100/70{% endif %}">{{ assistx_tasks_url or 'task intake not configured' }}</div>
+        </div>
+    </div>
+
+    <div class="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Live model inventory</h3>
+                    <p class="text-xs text-router-muted">Latest durable `/models` snapshots</p>
+                </div>
+                <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100 hover:bg-cyan-300/20"
+                        hx-post="/admin/live-models/refresh"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    refresh all
+                </button>
+            </div>
+            <div class="space-y-2">
+                {% for snapshot in live_models[:6] %}
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="font-bold text-white">{{ snapshot.provider }}</div>
+                        <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if snapshot.ok %}bg-emerald-400/15 text-emerald-200{% else %}bg-rose-400/15 text-rose-200{% endif %}">{{ 'ok' if snapshot.ok else 'error' }}</span>
+                    </div>
+                    <div class="mt-1 text-xs text-router-muted">{{ snapshot.model_count }} models · {{ 'stale' if snapshot.stale else 'fresh' }}</div>
+                    {% if snapshot.error %}<div class="mt-1 line-clamp-2 text-xs text-rose-200">{{ snapshot.error }}</div>{% endif %}
+                </div>
+                {% else %}
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-sm text-router-muted">No live model registry snapshots yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Agent CLI discovery</h3>
+                    <p class="text-xs text-router-muted">Codex, Gemini CLI, and OpenCode on this node</p>
+                </div>
+                <button class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-100 hover:bg-emerald-300/20"
+                        hx-post="/admin/agent-clis/discover"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    discover
+                </button>
+            </div>
+            <div class="space-y-2">
+                {% for cli in cli_discovery %}
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="font-bold text-white">{{ cli.name }}</div>
+                        <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if cli.runnable %}bg-emerald-400/15 text-emerald-200{% elif cli.installed %}bg-yellow-400/15 text-yellow-100{% else %}bg-rose-400/15 text-rose-200{% endif %}">{{ 'runnable' if cli.runnable else ('installed' if cli.installed else 'missing') }}</span>
+                    </div>
+                    <div class="mt-1 truncate text-xs text-router-muted">{{ cli.path or cli.error or cli.command }}</div>
+                </div>
+                {% else %}
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-sm text-router-muted">No CLI discovery result yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Outbox and AssistX</h3>
+                    <p class="text-xs text-router-muted">Pending graph/provenance events</p>
+                </div>
+                <button class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-bold text-amber-100 hover:bg-amber-300/20"
+                        hx-post="/admin/outbox/dispatch?dry_run=true&limit=10"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    dispatch dry-run
+                </button>
+            </div>
+            <div class="space-y-2 text-sm">
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.pending or 0 }}</span> pending events</div>
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.retry or 0 }}</span> retry events</div>
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.delivered or 0 }}</span> delivered events</div>
+                <div class="rounded-2xl border {% if assistx_event_sink_configured %}border-emerald-300/20 bg-emerald-300/10 text-emerald-100/80{% else %}border-rose-300/20 bg-rose-300/10 text-rose-100/80{% endif %} p-3 text-xs truncate">
+                    {{ assistx_event_sink_url or 'AssistX event sink not configured' }}
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
