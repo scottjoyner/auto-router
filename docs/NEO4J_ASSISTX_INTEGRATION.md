@@ -2,7 +2,7 @@
 
 ## 1. Integration boundary
 
-AssistX is the source of truth for task state, Sophia ingestion, policy decisions, agent runs, and artifacts. `auto-router` is an execution-selection service. It reads graph-backed context from AssistX and emits routing outcomes back to AssistX, but it should not become a competing task database.
+AssistX is the source of truth for task state, Sophia ingestion, policy decisions, agent runs, service inventory, and artifacts. `auto-router` is an execution-selection service. It reads graph-backed context from AssistX and emits routing outcomes back to AssistX, but it should not become a competing task database.
 
 The reference `auto-assist` architecture currently keeps Sophia and non-realtime task execution aligned around AssistX, Paperclip, and the `hermes_local` adapter. Direct worker/fleet routing remains a follow-up surface, so `auto-router` should integrate as an advisory and routing node without replacing AssistX task ownership.
 
@@ -14,6 +14,7 @@ The reference `auto-assist` architecture currently keeps Sophia and non-realtime
 | Task lifecycle and dispatch state | AssistX | Receives task IDs and emits route outcomes |
 | Agent runs and artifacts | AssistX/Paperclip for current cutover | May attach routing provenance and artifact refs |
 | Provider/model capability inventory | AssistX plus router config | Router consumes projection and YAML bootstrap |
+| Homelab service inventory | AssistX/Neo4j plus optional scanners | Router renders links and health/status hints |
 | Quota reservations and transient counters | auto-router | Stored in Redis/in-memory and summarized to AssistX later |
 | Prompt bodies | Caller/router transient memory | Not written to Neo4j by default |
 
@@ -36,6 +37,7 @@ Minimum top-level fields:
 | `generated_at` | Unix timestamp for freshness checks |
 | `nodes` | Local machines, LM Studio hosts, Paperclip/Hermes workers, and agent workers |
 | `providers` | Provider/model lanes visible to the router |
+| `services` | Clickable service URLs and health metadata for the dashboard launchpad |
 | `metadata` | Policy revision, burn mode, reserve policy, and rollout flags |
 
 ## 4. Node projection
@@ -44,11 +46,12 @@ Each node record should describe whether a local or worker node is available and
 
 | Field | Example | Notes |
 |---|---|---|
-| `node_id` | `x1-370.lmstudio` | Stable identifier |
-| `display_name` | `x1-370 LM Studio` | Human label for dashboard |
+| `node_id` | `deathstar` | Stable identifier |
+| `display_name` | `GPU Specialist (Deathstar)` | Human label for dashboard |
 | `lane` | `local` | One of `local`, `free_api`, `paperclip`, `blocked` |
 | `running` | `true` | Health/heartbeat result |
 | `capabilities` | `chat`, `code`, `low_latency`, `gpu_accelerated` | Used for ranking |
+| `services` | list of service records | Node-local URLs such as LM Studio, Neo4j, dashboards, workers |
 | `detail` | `LM Studio over Tailscale` | Operator note |
 
 ## 5. Provider projection
@@ -57,17 +60,53 @@ Each provider record should describe whether a provider can be used and which la
 
 | Field | Example | Notes |
 |---|---|---|
-| `provider` | `groq` | Must match router provider config name or alias |
+| `provider` | `cerebras` | Must match router provider config name or alias |
 | `lane` | `free_api` | Routing lane from AssistX policy |
 | `local` | `false` | True for LM Studio/local endpoints |
 | `can_use_free_api` | `true` | Whether free quota may be burned |
 | `blocked` | `false` | Hard stop when true |
-| `node_id` | `x1-370.lmstudio` | Optional link to local node |
-| `aliases` | `auto/sophia`, `local/default` | Optional matching names |
+| `node_id` | `cerebras-wse3` | Optional link to local/cloud node |
+| `aliases` | `auto/flash-start` | Optional matching names |
 | `capabilities` | `chat`, `streaming`, `low_latency` | Used for profile selection |
+| `services` | list of service records | Provider URLs such as `/v1`, `/models`, dashboards, docs |
 | `detail` | `fast realtime lane` | Dashboard note |
 
-## 6. Suggested Neo4j model additions
+## 6. Service projection
+
+Services are the homelab and cloud URLs the dashboard should expose. They can appear at the top level, inside a node, or inside a provider. The router deduplicates them by `service_id` and renders them as a launchpad.
+
+| Field | Example | Notes |
+|---|---|---|
+| `service_id` | `deathstar.neo4j.browser` | Stable unique identifier |
+| `name` | `Deathstar Neo4j Browser` | Label shown in UI |
+| `url` | `http://deathstar-XPS-8920:7474` | Clickable destination |
+| `health_url` | `http://deathstar-XPS-8920:7474` | Optional probe target |
+| `service_type` | `graph_ui` | Category such as `lmstudio`, `graph_ui`, `router_ui`, `inference_api` |
+| `node_id` | `deathstar` | Optional node owner |
+| `provider` | `lmstudio-deathstar` | Optional provider owner |
+| `status` | `unknown` | `unknown`, `online`, `degraded`, `offline`, or `blocked` |
+| `tags` | `neo4j`, `graph`, `browser` | UI filtering and future scanning hints |
+| `priority` | `20` | Lower values render first |
+| `detail` | `Graph browser on legacy ingest host` | Operator note |
+
+### 6.1 How AssistX should populate services
+
+AssistX can register services from three sources:
+
+1. Static configuration in Neo4j: known services such as Neo4j Browser, AssistX UI, auto-router dashboard, LM Studio endpoints, Paperclip control plane, Redis, and hosted inference APIs.
+2. Node heartbeats: each homelab node reports open services it owns, including URL, health URL, service type, and status.
+3. Lightweight scanner jobs: optional private-network HTTP/TCP probes update `status`, `last_seen_at`, and `latency_ms` without changing canonical ownership.
+
+### 6.2 Suggested Neo4j service model
+
+```text
+(Service {service_id, name, url, health_url, service_type, status, priority, detail})
+(SwarmNode)-[:HOSTS_SERVICE]->(Service)
+(RouterProvider)-[:EXPOSES_SERVICE]->(Service)
+(RouterContextProjection)-[:INCLUDES_SERVICE]->(Service)
+```
+
+## 7. Suggested Neo4j model additions
 
 These graph concepts can be added to the `assistx` database or represented through existing nodes if AssistX already has equivalents.
 
@@ -77,18 +116,21 @@ These graph concepts can be added to the `assistx` database or represented throu
 | `RouterModel` | Model capability registry | `model_id`, `alias`, `provider_model`, `capabilities`, `context_window` |
 | `RouterDecision` | One routing stage decision | `decision_id`, `request_id`, `stage`, `profile`, `status`, `reason` |
 | `QuotaSnapshot` | Periodic operational quota state | `quota_id`, `dimension`, `limit`, `used`, `remaining`, `reset_at` |
+| `Service` | Service launchpad and health registry | `service_id`, `name`, `url`, `health_url`, `service_type`, `status` |
 | `RouterContextProjection` | Published projection revision | `revision`, `generated_at`, `source` |
 
 Recommended relationships in plain language:
 
 - A provider serves one or more router models.
 - A local or swarm node exposes one or more providers.
+- A node hosts one or more services.
+- A provider exposes one or more service URLs.
 - A task or agent run used one or more router decisions.
 - A router decision selected one provider and one model.
 - A provider has periodic quota snapshots.
-- A context projection includes the nodes and providers that were visible when generated.
+- A context projection includes the nodes, providers, and services that were visible when generated.
 
-## 7. Event write-back contract
+## 8. Event write-back contract
 
 Router should emit idempotent events to AssistX through the existing event system. The first implementation can use a local outbox table and retry loop before a direct Neo4j writer is added.
 
@@ -101,6 +143,7 @@ Recommended event types:
 | `router.execution_stage.skipped` | A provider is skipped because of quota, privacy, circuit, or capability |
 | `router.backlog_job.selected` | Scheduler selects a safe backlog job for surplus quota burn |
 | `router.quota_snapshot.recorded` | Router publishes quota state for dashboard/history |
+| `router.service_snapshot.recorded` | Router or AssistX records service status/latency from a probe |
 
 Minimum payload fields:
 
@@ -119,7 +162,7 @@ Minimum payload fields:
 | `privacy_decision` | Local-only, safe-cloud, blocked, or unknown |
 | `artifact_refs` | Optional refs to patch, stdout, stderr, summary, or test output |
 
-## 8. Backlog scheduler integration
+## 9. Backlog scheduler integration
 
 The backlog scheduler should prefer AssistX APIs over direct graph queries. A future direct Neo4j adapter can be added after the event contract is stable.
 
@@ -133,21 +176,24 @@ Required AssistX capabilities:
 
 The router should not automatically mutate repositories or external systems from backlog work. Repo writes, commits, pushes, financial actions, or legal/production side effects require explicit operator approval.
 
-## 9. Security requirements
+## 10. Security requirements
 
 - Context projection endpoint must be private-network only or signed.
+- Service links can be displayed, but service-scanning must remain private-network scoped and rate limited.
 - Router event write-back must be idempotent.
 - Prompt bodies are not written to Neo4j by default.
 - Secrets and `.env` values are never sent to cloud providers.
 - Voice authentication and enrollment records are always local-only.
 - Backlog burn-down cannot override privacy labels or critical reserves.
 
-## 10. MVP implementation path
+## 11. MVP implementation path
 
 1. Keep YAML bootstrap but support `AUTO_ROUTER_CONTEXT_CONFIG=http://assistx:8000/api/router/context-projection`.
 2. Expose `/admin/context` and dashboard context cards.
 3. Emit local SQLite `usage_events` for every stage.
-4. Add an outbox table for router events.
-5. Add AssistX event sink client with retry and idempotency.
-6. Add dry-run backlog scheduler using AssistX APIs.
-7. Add Neo4j write-back after AssistX event ingestion is stable.
+4. Add service registry rendering from context projection.
+5. Add service status scanner as private-network opt-in.
+6. Add an outbox table for router events.
+7. Add AssistX event sink client with retry and idempotency.
+8. Add dry-run backlog scheduler using AssistX APIs.
+9. Add Neo4j write-back after AssistX event ingestion is stable.
