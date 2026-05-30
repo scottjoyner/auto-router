@@ -10,7 +10,7 @@ Use the enhanced app wrapper by default:
 uvicorn auto_router.main_live:app --host 0.0.0.0 --port 8088
 ```
 
-`auto_router.main_live` includes the base OpenAI-compatible router plus live model discovery, service registry/scan routes, event outbox routes, AssistX event dispatch, dry-run backlog scheduling, AssistX backlog intake, and agent CLI discovery routes.
+`auto_router.main_live` includes the base OpenAI-compatible router plus live model discovery, service registry/scan routes, event outbox routes, AssistX event dispatch, dry-run backlog scheduling, AssistX backlog intake, deployment preflight checks, and agent CLI discovery routes.
 
 ## 2. First boot
 
@@ -49,7 +49,7 @@ export OPENAI_BASE_URL=http://localhost:8088/v1
 export OPENAI_API_KEY=local-router
 ```
 
-## 4. Smoke checks
+## 4. Smoke and preflight checks
 
 Run locally:
 
@@ -66,7 +66,12 @@ curl http://localhost:8088/admin/services | jq
 curl http://localhost:8088/admin/outbox | jq
 curl http://localhost:8088/admin/agent-clis | jq
 curl http://localhost:8088/admin/backlog/assistx/config | jq
+curl http://localhost:8088/admin/ops/summary | jq
+curl http://localhost:8088/admin/ops/preflight | jq
+curl http://localhost:8088/metrics/ops
 ```
+
+Deployment preflight returns `ready` or `not_ready` and includes pass/warn/fail checks for prompt logging, provider fallback, policies, context projection, services, model registry, outbox, AssistX settings, CLI discovery, and dry-run agent posture.
 
 ## 5. Cerebras flash-start setup
 
