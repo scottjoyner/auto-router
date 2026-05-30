@@ -1,6 +1,19 @@
 <div class="space-y-8">
+    {% set flash = namespace(requests=0, latency_total=0, latency_count=0) %}
+    {% for event in recent_usage %}
+        {% set provider = event.provider_id if event.provider_id is defined else event.provider %}
+        {% set model = event.model_id if event.model_id is defined else event.model %}
+        {% if provider == 'cerebras' or 'gpt-oss' in (model|string) or 'zai-glm' in (model|string) %}
+            {% set flash.requests = flash.requests + 1 %}
+            {% if event.latency_ms is not none %}
+                {% set flash.latency_total = flash.latency_total + event.latency_ms %}
+                {% set flash.latency_count = flash.latency_count + 1 %}
+            {% endif %}
+        {% endif %}
+    {% endfor %}
+
     <!-- Stat Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
         <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
             <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Providers</span>
             <div class="text-2xl font-bold text-gray-900">{{ snapshots|length }} enabled</div>
@@ -17,7 +30,46 @@
             <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Local Backstop</span>
             <div class="text-2xl font-bold text-gray-900">{{ context.local_provider_names()|length }} nodes</div>
         </div>
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-yellow-200">
+            <span class="text-xs font-semibold text-yellow-700 uppercase tracking-wider">Flash Start</span>
+            <div class="text-2xl font-bold text-gray-900">{{ flash.requests }} recent</div>
+            <div class="text-xs text-gray-500 mt-1">
+                {% if flash.latency_count > 0 %}
+                    avg {{ (flash.latency_total / flash.latency_count)|round|int }} ms
+                {% else %}
+                    waiting for usage
+                {% endif %}
+            </div>
+        </div>
     </div>
+
+    <!-- Flash Start Node -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Cerebras Flash-Start Node</h2>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="bg-white rounded-xl shadow-sm border border-yellow-100 p-6">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Purpose</span>
+                <div class="text-lg font-bold text-gray-900 mt-1">Instant planner bootstrap</div>
+                <p class="text-sm text-gray-600 mt-2">Use <code>auto/flash-start</code> for first-pass task decomposition, repo plans, backlog triage, and Sophia command planning before local/refine lanes take over.</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-yellow-100 p-6">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Recent Activity</span>
+                <div class="text-lg font-bold text-gray-900 mt-1">{{ flash.requests }} Cerebras events</div>
+                <p class="text-sm text-gray-600 mt-2">
+                    {% if flash.latency_count > 0 %}
+                        Average recent latency: {{ (flash.latency_total / flash.latency_count)|round|int }} ms.
+                    {% else %}
+                        No recent Cerebras usage has been recorded in the local ledger yet.
+                    {% endif %}
+                </p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-yellow-100 p-6">
+                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Guardrails</span>
+                <div class="text-lg font-bold text-gray-900 mt-1">Cloud-safe only</div>
+                <p class="text-sm text-gray-600 mt-2">The node remains blocked for <code>local_only</code>, <code>allow_cloud=false</code>, voice auth, enrollment samples, secrets, and graph-blocked context.</p>
+            </div>
+        </div>
+    </section>
 
     <!-- Context Alignment - Providers -->
     <section>
@@ -91,7 +143,6 @@
         </div>
     </section>
 
-
     <!-- Provider Health & Models -->
     <section>
         <h2 class="text-lg font-semibold text-gray-800 mb-4">Provider Health & Models</h2>
@@ -149,7 +200,7 @@
                 <tbody class="divide-y divide-gray-100">
                     {% for snapshot in snapshots %}
                         {% for dimension, values in snapshot.dimensions.items() %}
-                        <tr>
+                        <tr class="{% if snapshot.provider == 'cerebras' %}bg-yellow-50{% endif %}">
                             <td class="px-6 py-4 font-medium text-gray-900">{{ snapshot.provider }}</td>
                             <td class="px-6 py-4 text-gray-900">{{ snapshot.model }}</td>
                             <td class="px-6 py-4 text-gray-600">{{ dimension }}</td>
@@ -240,5 +291,36 @@
         </div>
     </section>
 
-    <!-- Recent Usage - already there -->
+    <!-- Recent Usage -->
+    <section>
+        <h2 class="text-lg font-semibold text-gray-800 mb-4">Recent Usage</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b">
+                    <tr>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Model</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Route</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Stage</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
+                        <th class="px-6 py-3 text-left font-medium text-gray-500">Latency</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for event in recent_usage %}
+                    {% set provider = event.provider_id if event.provider_id is defined else event.provider %}
+                    {% set model = event.model_id if event.model_id is defined else event.model %}
+                    <tr class="{% if provider == 'cerebras' or 'gpt-oss' in (model|string) or 'zai-glm' in (model|string) %}bg-yellow-50{% endif %}">
+                        <td class="px-6 py-4 font-medium text-gray-900">{{ provider or '-' }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ model or '-' }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ event.route }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ event.stage }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ event.status_code if event.status_code is not none else '-' }}</td>
+                        <td class="px-6 py-4 text-gray-600">{{ event.latency_ms if event.latency_ms is not none else '-' }} ms</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </div>
