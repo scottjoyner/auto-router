@@ -1,8 +1,8 @@
 # auto-router
 
-Local-first OpenAI-compatible router for model requests, free-quota burn-down, service discovery, and agent capability orchestration across the homelab.
+Local-first OpenAI-compatible router for model requests, free-quota burn-down, service discovery, model registry, and agent capability orchestration across the homelab.
 
-`auto-router` exposes a local endpoint that looks like a standard LM Studio / OpenAI-compatible server while routing each request through policy, quota, context, and privacy controls. It is designed to sit between Sophia, AssistX, local LM Studio endpoints, hosted free-tier providers, and code-agent CLIs.
+`auto-router` exposes a local endpoint that looks like a standard LM Studio / OpenAI-compatible server while routing each request through policy, quota, context, and privacy controls. It is designed to sit between Sophia, AssistX, local LM Studio endpoints, hosted free-tier providers, service URLs, and code-agent CLIs.
 
 ## What it does now
 
@@ -13,16 +13,18 @@ Local-first OpenAI-compatible router for model requests, free-quota burn-down, s
 - Reads AssistX/Neo4j-style context projection for providers, nodes, services, and lane policy.
 - Renders an operations dashboard with quota burn-down, provider lanes, service launchpad, Cerebras flash-start status, and recent usage.
 - Discovers hosted provider live models through `/admin/live-models` and `/admin/live-models/refresh`.
+- Persists model registry snapshots so provider inventory survives restarts and exposes drift/history data.
 - Registers service URLs, scans local/private services, persists scan history, and updates service status in the dashboard.
 - Discovers host-local agent CLIs: Codex, Gemini CLI, and OpenCode.
-- Queues service and agent discovery events into a durable SQLite outbox for future AssistX/Neo4j write-back.
+- Queues service, model, agent discovery, and route execution provenance into a durable SQLite outbox for AssistX/Neo4j write-back.
+- Dispatches pending outbox events to a configured AssistX event sink with retry/dead-letter handling.
 
 ## Design principles
 
 - **Free quota is a resource to schedule.** Daily quotas should be spent on useful work before reset, not accidentally left idle.
 - **Sophia realtime traffic is protected.** Realtime app requests get low-latency, privacy-aware routing and should not be starved by backlog burn-down.
 - **AssistX owns canonical graph state.** The router consumes context projection from AssistX/Neo4j and queues provenance events back; it does not become the task authority.
-- **Discovery is not policy.** A CLI or service can be installed and visible while still blocked by credits, safety, or operator policy.
+- **Discovery is not policy.** A CLI, service, or hosted model can be visible while still blocked by credits, safety, or operator policy.
 - **Local-first privacy.** Requests tagged `local_only`, likely sensitive, or matching configured privacy rules bypass cloud providers.
 - **Provider terms are respected.** The router is not for account/key rotation to evade limits. It only balances across explicitly configured providers, keys, models, and quotas.
 - **LM Studio remains the backstop.** Local OpenAI-compatible endpoints stay usable even when cloud quota is depleted, unhealthy, blocked, or disallowed.
@@ -51,6 +53,7 @@ Operations:
 - `GET /admin/services`
 - `POST /admin/services/scan`
 - `GET /admin/outbox`
+- `POST /admin/outbox/dispatch`
 - `GET /admin/agent-clis`
 - `POST /admin/agent-clis/discover`
 - `POST /jobs/agent`
@@ -79,9 +82,10 @@ Sophia / AssistX / OpenAI-compatible clients / operator dashboard
       -> quota manager
       -> provider adapters
       -> service registry and scanner
+      -> durable model registry
       -> agent CLI discovery
       -> durable usage ledger
-      -> durable event outbox
+      -> durable event outbox and AssistX dispatcher
   -> local LM Studio endpoints
   -> free hosted provider endpoints
   -> CLI coding agents
@@ -93,9 +97,9 @@ Sophia / AssistX / OpenAI-compatible clients / operator dashboard
 ```text
 .
 ├── config/                  # provider, policy, agent-worker, and context examples
-├── docs/                    # design docs, runbook, roadmap, dashboard notes
+├── docs/                    # design docs, runbook, deployment, dashboard, discovery notes
 ├── src/auto_router/         # FastAPI app and routing core
-├── tests/                   # unit tests for quota, policy, providers, services, outbox
+├── tests/                   # unit tests for quota, policy, providers, services, model registry, outbox
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
@@ -147,14 +151,18 @@ make smoke
 curl http://localhost:8088/health | jq
 curl http://localhost:8088/v1/models | jq
 curl -X POST 'http://localhost:8088/admin/live-models/refresh?provider=cerebras' | jq
+curl http://localhost:8088/admin/live-models | jq
 curl -X POST http://localhost:8088/admin/services/scan | jq
 curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
 curl http://localhost:8088/admin/outbox | jq
+curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10' | jq
 ```
 
 ## Documentation
 
+- [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md) — production topology, persistence, security, deployment, and ops guide
 - [`docs/OPERATOR_RUNBOOK.md`](docs/OPERATOR_RUNBOOK.md) — practical run/deploy/smoke-test guide
+- [`docs/SERVICE_DISCOVERY.md`](docs/SERVICE_DISCOVERY.md) — service registry, service scanning, and durable model registry
 - [`docs/HLD.md`](docs/HLD.md) — high-level design
 - [`docs/LLD.md`](docs/LLD.md) — low-level design
 - [`docs/ROUTER_SWITCHING_MECHANISM.md`](docs/ROUTER_SWITCHING_MECHANISM.md) — detailed switching design for Sophia, backlog, quota, and fallback routing
@@ -169,8 +177,8 @@ curl http://localhost:8088/admin/outbox | jq
 
 ## Next implementation priorities
 
-1. Add an AssistX event sink dispatcher that posts pending outbox events and marks delivery/retry/dead-letter.
-2. Add route execution events to the outbox, not just service/CLI discovery events.
-3. Add dry-run backlog scheduler using `auto/backlog-burn` and `auto/flash-start`.
-4. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
-5. Add local-vs-cloud dashboard split, circuit retry timers, and backlog queue status.
+1. Add dry-run backlog scheduler using `auto/backlog-burn` and `auto/flash-start`.
+2. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
+3. Add model registry write-back events to AssistX/Neo4j.
+4. Add local-vs-cloud dashboard split, circuit retry timers, and backlog queue status.
+5. Add background scan/refresh cadence with strict allow-lists and jitter.
