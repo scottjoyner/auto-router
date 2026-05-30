@@ -9,6 +9,7 @@
 - keep Redis-backed quota reservation state;
 - persist usage, service scans, model registry snapshots, and event outbox data in SQLite;
 - render the operator dashboard;
+- expose machine-readable operations summaries and Prometheus-style ops metrics;
 - consume AssistX/Neo4j context projection;
 - read AssistX backlog candidates in dry-run mode;
 - dispatch durable outbox events to AssistX when the sink is available.
@@ -127,6 +128,7 @@ Recommended:
 - Bind `auto-router` to LAN/Tailscale only.
 - Put Caddy/Nginx/Traefik in front only if you add auth and TLS.
 - Keep `/admin/*` private.
+- Keep `/metrics/ops` private unless exposed only to a trusted Prometheus instance.
 - Do not expose `/admin/services/scan` publicly.
 - Do not expose `/admin/agent-clis/discover` publicly.
 - Do not expose `/admin/backlog/dry-run` publicly.
@@ -154,6 +156,8 @@ curl http://localhost:8088/admin/services | jq
 curl http://localhost:8088/admin/live-models | jq
 curl http://localhost:8088/admin/backlog/assistx/config | jq
 curl http://localhost:8088/admin/outbox | jq
+curl http://localhost:8088/admin/ops/summary | jq
+curl http://localhost:8088/metrics/ops
 ```
 
 Then run controlled operations:
@@ -230,6 +234,22 @@ Real dispatch:
 curl -X POST 'http://localhost:8088/admin/outbox/dispatch?limit=25' | jq
 ```
 
+### 8.6 Operations summary and metrics
+
+JSON summary:
+
+```bash
+curl http://localhost:8088/admin/ops/summary | jq
+```
+
+Prometheus-style ops metrics:
+
+```bash
+curl http://localhost:8088/metrics/ops
+```
+
+The ops summary includes model registry counts, outbox backlog, service status counts, CLI discovery counts, and AssistX task/event-sink configuration flags.
+
 ## 9. Health and metrics
 
 Health:
@@ -238,13 +258,19 @@ Health:
 curl http://localhost:8088/health | jq
 ```
 
-Prometheus-style metrics:
+Core Prometheus-style metrics:
 
 ```bash
 curl http://localhost:8088/metrics
 ```
 
-Current metrics include quota remaining, request count, and circuit state. Future metrics should add service status, model registry status, outbox backlog, backlog candidate selection, and local-vs-cloud split.
+Production ops metrics:
+
+```bash
+curl http://localhost:8088/metrics/ops
+```
+
+Current core metrics include quota remaining, request count, and circuit state. Ops metrics include service status, model registry status, outbox backlog, CLI discovery, and AssistX configuration flags.
 
 ## 10. Upgrade checklist
 
@@ -263,6 +289,7 @@ curl http://localhost:8088/health | jq
 curl http://localhost:8088/admin/outbox | jq
 curl http://localhost:8088/admin/live-models | jq
 curl http://localhost:8088/admin/backlog/assistx/config | jq
+curl http://localhost:8088/admin/ops/summary | jq
 ```
 
 ## 11. Failure handling
@@ -277,6 +304,7 @@ curl http://localhost:8088/admin/backlog/assistx/config | jq
 | AssistX event sink unreachable | Events remain pending/retry in outbox |
 | Service scan reports offline | Check node/Tailscale/DNS/health URL before changing policy |
 | Agent CLI missing | Install CLI on that node or have another node self-report capability |
+| Ops metrics unavailable | Confirm `auto_router.main_live:app` is running, not the base app |
 
 ## 12. Production safety defaults
 
