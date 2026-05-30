@@ -15,7 +15,7 @@ The current public Cerebras model catalog lists these shared endpoint models:
 | `cerebras/flash-reasoner` | `gpt-oss-120b` | Production flash reasoning, first-pass plans, code-review scaffolds |
 | `cerebras/glm-4.7-preview` | `zai-glm-4.7` | Preview high-capacity reasoning, evaluation, migration testing |
 
-The live `/v1/models` endpoint should still be queried at runtime because hosted model availability changes.
+Hosted model availability can change, so the router now includes live provider model discovery through the OpenAI-compatible `/models` endpoint.
 
 ## 3. Quota model
 
@@ -104,7 +104,21 @@ Cerebras should not be used for:
 
 The router should always honor `local_only`, `allow_cloud=false`, blocked context projection entries, and critical reserve thresholds.
 
-## 7. Implementation status
+## 7. Runtime model discovery
+
+The live model discovery path is intentionally separate from router aliases. Static aliases such as `auto/flash-start` and `cerebras/flash-reasoner` remain stable for clients, while live provider inventory can be refreshed and inspected by operators.
+
+Endpoints:
+
+```text
+GET  /admin/live-models
+POST /admin/live-models/refresh
+POST /admin/live-models/refresh?provider=cerebras
+```
+
+Deployment entrypoints now use `auto_router.main_live:app`, which wraps the base FastAPI app and registers the live-model admin routes. The console script also targets `auto_router.main_live:run`.
+
+## 8. Implementation status
 
 Implemented:
 
@@ -113,16 +127,20 @@ Implemented:
 - `config/policies.example.yaml` includes `flash_start_planner` and maps `auto/flash-start` to that profile.
 - `PolicyEngine.classify_profile` recognizes `auto/flash-start` and selects `flash_start_planner`.
 - Draft-stage scoring boosts models tagged with `flash_planning`.
-- `tests/test_flash_start.py` verifies alias classification and Cerebras draft-priority selection.
+- `/v1/models` advertises `auto/flash-start` as a logical router alias.
+- Dashboard shows flash-start purpose, recent activity, quota highlighting, and usage highlighting.
+- `OpenAICompatibleProvider.list_models()` supports live `/models` discovery.
+- `LiveModelCache` stores provider discovery results with TTL and error snapshots.
+- `auto_router.main_live` registers `/admin/live-models` and refresh endpoints.
+- Tests cover flash-start policy selection and live model cache behavior.
 
 Remaining follow-up tasks:
 
-1. Add `auto/flash-start` to the static `/v1/models` logical alias list.
-2. Add dashboard card for flash-start quota burn and average latency.
-3. Add scheduler support for `flash_triage_only` mode.
-4. Add optional runtime `/v1/models` refresh to detect live Cerebras model changes.
+1. Add the live-model table to the dashboard fragment itself.
+2. Add scheduler support for `flash_triage_only` mode.
+3. Add automatic background refresh cadence for selected volatile providers.
 
-## 8. Example request
+## 9. Example request
 
 ```json
 {
@@ -143,7 +161,7 @@ Remaining follow-up tasks:
 }
 ```
 
-## 9. Success criteria
+## 10. Success criteria
 
 - Flash planning returns fast enough to feel interactive.
 - Quota use is capped and visible in the dashboard.
