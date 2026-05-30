@@ -10,7 +10,7 @@ Use the enhanced app wrapper by default:
 uvicorn auto_router.main_live:app --host 0.0.0.0 --port 8088
 ```
 
-`auto_router.main_live` includes the base OpenAI-compatible router plus live model discovery, service registry/scan routes, event outbox routes, AssistX event dispatch, and agent CLI discovery routes.
+`auto_router.main_live` includes the base OpenAI-compatible router plus live model discovery, service registry/scan routes, event outbox routes, AssistX event dispatch, dry-run backlog scheduling, and agent CLI discovery routes.
 
 ## 2. First boot
 
@@ -127,7 +127,48 @@ Discovery is capability reporting only. Scheduling is still policy-gated by cred
 
 Discovery events are queued as `router.agent_cli.discovered` events in the outbox.
 
-## 8. Outbox workflow
+## 8. Dry-run backlog scheduling
+
+The backlog scheduler is selection-only right now. It does not call providers, spend quota, execute CLI agents, mutate repositories, or dispatch jobs.
+
+Example dry-run request:
+
+```bash
+curl -X POST http://localhost:8088/admin/backlog/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "enqueue_events": true,
+    "tasks": [
+      {
+        "task_id": "docs-router-review-001",
+        "title": "Review router docs for stale wording",
+        "prompt": "Review docs and identify stale TODOs. Do not modify files.",
+        "model": "auto/backlog-burn",
+        "priority": "background",
+        "allow_cloud": true,
+        "sensitive": false,
+        "max_completion_tokens": 700
+      },
+      {
+        "task_id": "private-memory-001",
+        "title": "Summarize private memory transcript",
+        "priority": "background",
+        "local_only": true,
+        "sensitive": true
+      }
+    ]
+  }' | jq
+```
+
+Expected behavior:
+
+- safe batch/background tasks may be selected;
+- sensitive tasks are skipped;
+- local-only tasks are skipped by dry-run cloud backlog burn;
+- non-batch priorities are skipped;
+- selected/skipped decisions are queued as `router.backlog_job.selected` or `router.backlog_job.skipped` events.
+
+## 9. Outbox workflow
 
 Inspect pending events:
 
@@ -160,7 +201,7 @@ curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=manual-
 curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=terminal&retry=false' | jq
 ```
 
-## 9. AssistX context projection and event sink
+## 10. AssistX context projection and event sink
 
 When AssistX exposes the graph-backed projection endpoint, set:
 
@@ -176,13 +217,14 @@ AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_TIMEOUT_SECONDS=10
 AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_MAX_ATTEMPTS=5
 ```
 
-The projection should include nodes, providers, services, and eventually agent CLI capabilities. The event sink should accept service snapshots, agent CLI discovery events, and later route execution events.
+The projection should include nodes, providers, services, and eventually agent CLI capabilities. The event sink should accept service snapshots, agent CLI discovery events, route execution events, and dry-run backlog selection events.
 
-## 10. Safety rules
+## 11. Safety rules
 
 - Keep `AUTO_ROUTER_LOG_PROMPTS=false` unless debugging non-sensitive local-only data.
 - Treat CLI discovery as a local-only/node-agent function.
 - Service scanning should remain private-network scoped unless explicitly allowed.
 - Keep event dispatch operator-triggered until the AssistX event sink is stable.
+- Keep backlog scheduling dry-run until AssistX task ownership and approval flows are implemented.
 - Do not enable agent write/commit/push by default.
 - Cloud routing must honor `local_only`, `allow_cloud=false`, voice-auth, enrollment, secrets, and private-memory labels.
