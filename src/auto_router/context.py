@@ -14,6 +14,32 @@ class ExecutionLane(StrEnum):
     blocked = "blocked"
 
 
+class ServiceStatus(StrEnum):
+    unknown = "unknown"
+    online = "online"
+    degraded = "degraded"
+    offline = "offline"
+    blocked = "blocked"
+
+
+class ContextService(BaseModel):
+    service_id: str
+    name: str
+    url: str
+    service_type: str = "service"
+    node_id: str | None = None
+    provider: str | None = None
+    status: ServiceStatus = ServiceStatus.unknown
+    health_url: str | None = None
+    tags: set[str] = Field(default_factory=set)
+    detail: str = ""
+    priority: int = 100
+
+    @property
+    def is_online(self) -> bool:
+        return self.status == ServiceStatus.online
+
+
 class ContextNode(BaseModel):
     node_id: str
     display_name: str | None = None
@@ -23,6 +49,7 @@ class ContextNode(BaseModel):
     running: bool = True
     capabilities: set[str] = Field(default_factory=set)
     detail: str = ""
+    services: list[ContextService] = Field(default_factory=list)
 
     @property
     def is_blocked(self) -> bool:
@@ -40,6 +67,7 @@ class ContextProvider(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     capabilities: set[str] = Field(default_factory=set)
     detail: str = ""
+    services: list[ContextService] = Field(default_factory=list)
 
     @property
     def is_blocked(self) -> bool:
@@ -60,6 +88,7 @@ class ContextSnapshot(BaseModel):
     generated_at: int = Field(default_factory=lambda: int(time.time()))
     nodes: list[ContextNode] = Field(default_factory=list)
     providers: list[ContextProvider] = Field(default_factory=list)
+    services: list[ContextService] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def provider_for(self, provider_name: str) -> ContextProvider | None:
@@ -87,3 +116,21 @@ class ContextSnapshot(BaseModel):
 
     def running_local_node_names(self) -> list[str]:
         return [node.node_id for node in self.nodes if node.local and node.running and not node.is_blocked]
+
+    def all_services(self) -> list[ContextService]:
+        services: dict[str, ContextService] = {}
+        for service in self.services:
+            services[service.service_id] = service
+        for node in self.nodes:
+            for service in node.services:
+                services[service.service_id] = service
+        for provider in self.providers:
+            for service in provider.services:
+                services[service.service_id] = service
+        return sorted(services.values(), key=lambda item: (item.priority, item.name.lower()))
+
+    def services_for_node(self, node_id: str) -> list[ContextService]:
+        return [service for service in self.all_services() if service.node_id == node_id]
+
+    def services_for_provider(self, provider_name: str) -> list[ContextService]:
+        return [service for service in self.all_services() if service.provider == provider_name]
