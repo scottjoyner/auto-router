@@ -174,6 +174,7 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 
 - [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md) — production topology, persistence, security, deployment, and ops guide
 - [`docs/OPERATOR_RUNBOOK.md`](docs/OPERATOR_RUNBOOK.md) — practical run/deploy/smoke-test guide
+- [`docs/AGENT_SKILLS.md`](docs/AGENT_SKILLS.md) — Codex/Gemini/OpenCode skill contract and execution safety states
 - [`docs/SERVICE_DISCOVERY.md`](docs/SERVICE_DISCOVERY.md) — service registry, service scanning, and durable model registry
 - [`docs/HLD.md`](docs/HLD.md) — high-level design
 - [`docs/LLD.md`](docs/LLD.md) — low-level design
