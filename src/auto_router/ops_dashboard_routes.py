@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
+from auto_router.preflight import build_preflight_report
 from auto_router.settings import get_settings
 
 
@@ -25,6 +26,10 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
     @app.get("/admin/ops/summary")
     async def admin_ops_summary() -> dict[str, Any]:
         return build_ops_summary(state)
+
+    @app.get("/admin/ops/preflight")
+    async def admin_ops_preflight() -> dict[str, Any]:
+        return build_preflight_report(state, get_settings())
 
     @app.get("/metrics/ops", response_class=PlainTextResponse)
     async def ops_metrics() -> str:
