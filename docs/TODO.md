@@ -6,8 +6,11 @@
 - Added Cerebras as `cerebras-wse3`, a first-class free API flash-start node.
 - Added `auto/flash-start` to the policy engine and `/v1/models` logical aliases.
 - Added `flash_start_planner` policy profile and `flash_planning` draft-stage scoring boost.
-- Added `tests/test_flash_start.py` for profile mapping and Cerebras draft-priority selection.
 - Added dashboard visibility for flash-start purpose, recent activity, quota rows, and recent usage highlighting.
+- Added service registry support in context projection: top-level services, node services, and provider services.
+- Added service launchpad cards and node/provider service links in the dashboard.
+- Added opt-in local/private service scanner with external probing disabled by default.
+- Added durable SQLite service scan history and startup hydration.
 
 ## P0 - Stabilize the current repo
 
@@ -63,7 +66,7 @@
 - [x] Add scoring boost for `flash_planning` draft stages.
 - [x] Advertise `auto/flash-start` from `/v1/models`.
 - [x] Add dashboard card and recent usage highlighting.
-- [ ] Add runtime Cerebras `/v1/models` refresh/cache.
+- [x] Add runtime provider `/models` refresh/cache via `main_live` wrapper.
 - [ ] Add `flash_triage_only` scheduler mode.
 
 ## P2 - Neo4j/AssistX integration
@@ -74,20 +77,23 @@
 - [x] Refresh projection in a background loop.
 - [x] Show revision/source in `/health`, `/admin/context`, and dashboard.
 - [x] Fall back to YAML/bootstrap context when AssistX is unreachable.
+- [x] Support service registry projection from AssistX/Neo4j.
 
 ### P2.2 AssistX event write-back
 
 - [ ] Add an outbox table for router events.
 - [ ] Emit `router.execution_stage.completed` and `router.execution_stage.skipped` events.
-- [ ] Add idempotency keys based on request/stage/provider/model.
+- [ ] Emit `router.service_snapshot.recorded` events from service scan results.
+- [ ] Add idempotency keys based on request/stage/provider/model/service/check timestamp.
 - [ ] Add retry with exponential backoff and dead-letter state.
 
 ### P2.3 Neo4j schema alignment
 
-- [x] Add docs for `RouterProvider`, `RouterModel`, `RouterDecision`, and `QuotaSnapshot`.
+- [x] Add docs for `RouterProvider`, `RouterModel`, `RouterDecision`, `QuotaSnapshot`, and `Service`.
 - [ ] Add migrations/schema scripts once AssistX event sink shape is finalized.
 - [ ] Link `Task -> RouterDecision` and `AgentRun -> RouterDecision` through AssistX write-back.
 - [x] Store quota snapshots without prompt bodies in the local ledger/dashboard path.
+- [x] Store service scan snapshots locally in SQLite.
 
 ## P3 - Backlog burn-down scheduler
 
@@ -132,6 +138,8 @@
 ### P5.1 Dashboard upgrades
 
 - [x] Add provider lane cards: `local`, `free_api`, `paperclip`, `blocked` through context/provider tables.
+- [x] Add service launchpad with clickable URLs.
+- [x] Add service status scan button and dashboard status counts.
 - [ ] Add local-vs-cloud request split.
 - [x] Add quota burn-down progress.
 - [ ] Add quota reset times.
@@ -142,5 +150,5 @@
 
 - [ ] Add `.env.example` entries for AssistX context/event URLs.
 - [ ] Add Docker healthcheck for `/health`.
-- [ ] Add Prometheus metrics for quota, route count, fallback count, flash-start usage, and circuits.
+- [ ] Add Prometheus metrics for quota, route count, fallback count, flash-start usage, service status, and circuits.
 - [ ] Add secure secret handling guidance.
