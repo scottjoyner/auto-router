@@ -1,5 +1,7 @@
-<div class="space-y-8">
+<div class="space-y-6">
     {% set flash = namespace(requests=0, latency_total=0, latency_count=0) %}
+    {% set cloud = namespace(count=0) %}
+    {% set local = namespace(count=0) %}
     {% for event in recent_usage %}
         {% set provider = event.provider_id if event.provider_id is defined else event.provider %}
         {% set model = event.model_id if event.model_id is defined else event.model %}
@@ -11,312 +13,189 @@
             {% endif %}
         {% endif %}
     {% endfor %}
+    {% for p in context.providers %}
+        {% if p.lane == 'local' %}{% set local.count = local.count + 1 %}{% endif %}
+        {% if p.lane == 'free_api' %}{% set cloud.count = cloud.count + 1 %}{% endif %}
+    {% endfor %}
 
-    <!-- Stat Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Providers</span>
-            <div class="text-2xl font-bold text-gray-900">{{ snapshots|length }} enabled</div>
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div class="rounded-3xl border border-router-line bg-router-panel p-5 shadow-glow">
+            <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Providers</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ snapshots|length }}</div>
+            <div class="mt-1 text-xs text-router-muted">quota-tracked routes</div>
         </div>
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Agent Workers</span>
-            <div class="text-2xl font-bold text-gray-900">{{ agents|length }} configured</div>
+        <div class="rounded-3xl border border-router-line bg-router-panel p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Free API lane</div>
+            <div class="mt-2 text-3xl font-black text-cyan-200">{{ cloud.count }}</div>
+            <div class="mt-1 text-xs text-router-muted">cloud quota nodes</div>
         </div>
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Context Revision</span>
-            <div class="text-2xl font-bold text-gray-900">{{ context.revision|truncate(12) }}</div>
+        <div class="rounded-3xl border border-router-line bg-router-panel p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Local backstop</div>
+            <div class="mt-2 text-3xl font-black text-emerald-200">{{ local.count }}</div>
+            <div class="mt-1 text-xs text-router-muted">LM Studio / local nodes</div>
         </div>
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Local Backstop</span>
-            <div class="text-2xl font-bold text-gray-900">{{ context.local_provider_names()|length }} nodes</div>
+        <div class="rounded-3xl border border-router-line bg-router-panel p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Context</div>
+            <div class="mt-2 text-xl font-black text-white">{{ context.revision|truncate(18) }}</div>
+            <div class="mt-1 text-xs text-router-muted">{{ context.source }}</div>
         </div>
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-yellow-200">
-            <span class="text-xs font-semibold text-yellow-700 uppercase tracking-wider">Flash Start</span>
-            <div class="text-2xl font-bold text-gray-900">{{ flash.requests }} recent</div>
-            <div class="text-xs text-gray-500 mt-1">
-                {% if flash.latency_count > 0 %}
-                    avg {{ (flash.latency_total / flash.latency_count)|round|int }} ms
-                {% else %}
-                    waiting for usage
-                {% endif %}
+        <div class="rounded-3xl border border-amber-300/30 bg-amber-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-amber-200">Flash start</div>
+            <div class="mt-2 text-3xl font-black text-amber-100">{{ flash.requests }}</div>
+            <div class="mt-1 text-xs text-amber-100/70">
+                {% if flash.latency_count > 0 %}avg {{ (flash.latency_total / flash.latency_count)|round|int }} ms{% else %}no recent usage{% endif %}
             </div>
         </div>
     </div>
 
-    <!-- Flash Start Node -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Cerebras Flash-Start Node</h2>
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="bg-white rounded-xl shadow-sm border border-yellow-100 p-6">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Purpose</span>
-                <div class="text-lg font-bold text-gray-900 mt-1">Instant planner bootstrap</div>
-                <p class="text-sm text-gray-600 mt-2">Use <code>auto/flash-start</code> for first-pass task decomposition, repo plans, backlog triage, and Sophia command planning before local/refine lanes take over.</p>
+    <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <section class="rounded-[2rem] border border-amber-300/20 bg-router-panel p-6 xl:col-span-1">
+            <div class="flex items-center justify-between gap-4">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-amber-200">Cerebras WSE-3</p>
+                    <h2 class="mt-1 text-2xl font-black text-white">Flash planner</h2>
+                </div>
+                <span class="rounded-full bg-amber-300/15 px-3 py-1 text-xs font-bold text-amber-100">auto/flash-start</span>
             </div>
-            <div class="bg-white rounded-xl shadow-sm border border-yellow-100 p-6">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Recent Activity</span>
-                <div class="text-lg font-bold text-gray-900 mt-1">{{ flash.requests }} Cerebras events</div>
-                <p class="text-sm text-gray-600 mt-2">
-                    {% if flash.latency_count > 0 %}
-                        Average recent latency: {{ (flash.latency_total / flash.latency_count)|round|int }} ms.
+            <p class="mt-4 text-sm leading-6 text-router-muted">Use this node as the instant ignition layer for task decomposition, repo plans, backlog triage, and Sophia command planning before local/refine lanes take over.</p>
+            <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
+                <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                    <div class="text-router-muted">Recent events</div>
+                    <div class="mt-1 text-2xl font-bold text-white">{{ flash.requests }}</div>
+                </div>
+                <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                    <div class="text-router-muted">Avg latency</div>
+                    <div class="mt-1 text-2xl font-bold text-white">{% if flash.latency_count > 0 %}{{ (flash.latency_total / flash.latency_count)|round|int }}ms{% else %}—{% endif %}</div>
+                </div>
+            </div>
+            <div class="mt-5 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-4 text-sm text-rose-100/90">Guardrails: blocked for local-only, voice auth, enrollment samples, secrets, private memory, and graph-blocked providers.</div>
+        </section>
+
+        <section class="rounded-[2rem] border border-router-line bg-router-panel p-6 xl:col-span-2">
+            <div class="mb-4 flex items-center justify-between gap-4">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Provider lanes</p>
+                    <h2 class="text-2xl font-black text-white">Context alignment</h2>
+                </div>
+                <span class="text-xs text-router-muted">{{ context.providers|length }} providers</span>
+            </div>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {% for p in context.providers %}
+                <div class="rounded-2xl border {% if p.blocked %}border-rose-400/30 bg-rose-400/10{% elif p.lane == 'local' %}border-emerald-400/20 bg-emerald-400/10{% elif p.lane == 'free_api' %}border-cyan-400/20 bg-cyan-400/10{% else %}border-router-line bg-router-panel2{% endif %} p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="font-bold text-white">{{ p.provider }}</div>
+                            <div class="mt-1 text-xs text-router-muted">{{ p.detail or 'no detail' }}</div>
+                        </div>
+                        <div class="rounded-full border border-white/10 px-2 py-1 text-xs text-router-text">{{ p.lane }}</div>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                        <span class="rounded-full bg-black/20 px-2 py-1">{{ 'blocked' if p.blocked else 'ready' }}</span>
+                        <span class="rounded-full bg-black/20 px-2 py-1">free api: {{ p.can_use_free_api }}</span>
+                        {% if p.free_api_credits is not none %}<span class="rounded-full bg-black/20 px-2 py-1">credits {{ p.free_api_credits }}</span>{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+            <div class="mb-4 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Quota burn-down</p>
+                    <h2 class="text-2xl font-black text-white">Daily capacity</h2>
+                </div>
+            </div>
+            <div class="space-y-3">
+                {% for snapshot in snapshots %}
+                    {% for dimension, values in snapshot.dimensions.items() %}
+                    {% if values.limit is not none and values.limit > 0 %}
+                        {% set pct = ((values.used / values.limit) * 100) if values.used is not none else 0 %}
                     {% else %}
-                        No recent Cerebras usage has been recorded in the local ledger yet.
+                        {% set pct = 0 %}
                     {% endif %}
-                </p>
+                    <div class="rounded-2xl border {% if snapshot.provider == 'cerebras' %}border-amber-300/25 bg-amber-300/10{% else %}border-router-line bg-router-panel2{% endif %} p-4">
+                        <div class="flex items-center justify-between gap-3 text-sm">
+                            <div><span class="font-bold text-white">{{ snapshot.provider }}</span> <span class="text-router-muted">/ {{ snapshot.model }} / {{ dimension }}</span></div>
+                            <div class="text-router-muted">{{ values.remaining if values.remaining is not none else '∞' }} left</div>
+                        </div>
+                        <div class="mt-3 h-2 overflow-hidden rounded-full bg-black/30">
+                            <div class="h-full rounded-full {% if snapshot.provider == 'cerebras' %}bg-amber-300{% else %}bg-cyan-300{% endif %}" style="width: {{ pct if pct < 100 else 100 }}%"></div>
+                        </div>
+                        <div class="mt-2 text-xs text-router-muted">used {{ values.used if values.used is not none else 0 }} / {{ values.limit if values.limit is not none else 'unlimited' }}</div>
+                    </div>
+                    {% endfor %}
+                {% endfor %}
             </div>
-            <div class="bg-white rounded-xl shadow-sm border border-yellow-100 p-6">
-                <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Guardrails</span>
-                <div class="text-lg font-bold text-gray-900 mt-1">Cloud-safe only</div>
-                <p class="text-sm text-gray-600 mt-2">The node remains blocked for <code>local_only</code>, <code>allow_cloud=false</code>, voice auth, enrollment samples, secrets, and graph-blocked context.</p>
+        </section>
+
+        <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+            <div class="mb-4 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Health</p>
+                    <h2 class="text-2xl font-black text-white">Providers and workers</h2>
+                </div>
             </div>
-        </div>
-    </section>
-
-    <!-- Context Alignment - Providers -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Context Alignment (Providers)</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Lane</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Free API</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Credits</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Detail</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                    {% for p in context.providers %}
-                    <tr class="{% if p.lane == 'local' %}bg-blue-50{% elif p.lane == 'free_api' %}bg-yellow-50{% elif p.blocked %}bg-red-50{% endif %}">
-                        <td class="px-6 py-4 font-medium text-gray-900">{{ p.provider }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ p.lane }}</td>
-                        <td class="px-6 py-4">
-                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-red-100 text-red-700' if p.blocked else 'bg-green-100 text-green-700' }}">
-                                {{ 'blocked' if p.blocked else 'ready' }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 text-gray-600">{{ p.can_use_free_api }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ p.free_api_credits if p.free_api_credits is not none else '-' }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ p.detail }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <!-- Context Alignment - Nodes -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Context Alignment (Nodes)</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Node</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Lane</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Running</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Local</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Capabilities</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Detail</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                    {% for node in context.nodes %}
-                    <tr>
-                        <td class="px-6 py-4 font-medium text-gray-900">{{ node.node_id }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ node.lane }}</td>
-                        <td class="px-6 py-4">
-                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-700' if node.running else 'bg-red-100 text-red-700' }}">
-                                {{ 'Yes' if node.running else 'No' }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 text-gray-600">{{ 'Yes' if node.local else 'No' }}</td>
-                        <td class="px-6 py-4 text-gray-600">
-                            {% if node.capabilities %}{{ node.capabilities|join(', ') }}{% else %}-{% endif %}
-                        </td>
-                        <td class="px-6 py-4 text-gray-600">{{ node.detail }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <!-- Provider Health & Models -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Provider Health & Models</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Detail / Loaded Models</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                    {% for item in provider_health %}
-                    <tr>
-                        <td class="px-6 py-4 font-medium text-gray-900">{{ item.provider }}</td>
-                        <td class="px-6 py-4">
-                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-700' if item.ok else 'bg-red-100 text-red-700' }}">
-                                {{ 'Ok' if item.ok else 'Unhealthy' }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 text-gray-600">
-                            {{ item.detail | safe }}
-                            {% if item.metadata and item.metadata.type == 'lmstudio' and item.metadata.loaded_models %}
-                            <div class="mt-2 text-xs text-gray-500">
-                                {% for m in item.metadata.loaded_models %}
-                                <div><b>{{ m.id }}</b> ({{ (m.context_length // 1024) if m.context_length else 0 }}k{% if m.gpu %} + GPU{% endif %})</div>
-                                {% endfor %}
-                            </div>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <!-- Quota Burn-down -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Quota Burn-down</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Model</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Dimension</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Limit</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Used</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Remaining</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Progress</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                    {% for snapshot in snapshots %}
-                        {% for dimension, values in snapshot.dimensions.items() %}
-                        <tr class="{% if snapshot.provider == 'cerebras' %}bg-yellow-50{% endif %}">
-                            <td class="px-6 py-4 font-medium text-gray-900">{{ snapshot.provider }}</td>
-                            <td class="px-6 py-4 text-gray-900">{{ snapshot.model }}</td>
-                            <td class="px-6 py-4 text-gray-600">{{ dimension }}</td>
-                            <td class="px-6 py-4 text-gray-600">{{ values.limit if values.limit is not none else 'Unlimited' }}</td>
-                            <td class="px-6 py-4 text-gray-600">{{ values.used if values.used is not none else '0' }}</td>
-                            <td class="px-6 py-4 text-gray-600">{{ values.remaining if values.remaining is not none else 'Unlimited' }}</td>
-                            <td class="px-6 py-4">
-                                {% if values.limit is not none and values.limit > 0 %}
-                                    {% set progress = (values.used / values.limit) * 100 %}
-                                    <div class="w-full bg-gray-200 rounded-full h-2.5">
-                                        <div class="bg-blue-600 h-2.5 rounded-full" style="width: {{ progress }}%;"></div>
-                                    </div>
-                                {% else %}
-                                    N/A
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <!-- Agent Workers -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Agent Workers</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Name</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Type</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
+            <div class="space-y-3">
+                {% for item in provider_health %}
+                <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="font-bold text-white">{{ item.provider }}</div>
+                        <span class="rounded-full px-2 py-1 text-xs font-bold {{ 'bg-emerald-400/15 text-emerald-200' if item.ok else 'bg-rose-400/15 text-rose-200' }}">{{ 'ok' if item.ok else 'unhealthy' }}</span>
+                    </div>
+                    <div class="mt-2 text-xs text-router-muted">{{ item.detail | safe }}</div>
+                    {% if item.metadata and item.metadata.type == 'lmstudio' and item.metadata.loaded_models %}
+                    <div class="mt-3 flex flex-wrap gap-2 text-xs text-router-muted">
+                        {% for m in item.metadata.loaded_models %}<span class="rounded-full bg-black/20 px-2 py-1">{{ m.id }} · {{ (m.context_length // 1024) if m.context_length else 0 }}k{% if m.gpu %} · GPU{% endif %}</span>{% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {% for worker in agents %}
-                    <tr>
-                        <td class="px-6 py-4 font-medium text-gray-900">{{ worker.name }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ worker.type }}</td>
-                        <td class="px-6 py-4">
-                            <span class="px-2 py-1 rounded-full text-xs font-bold {{ 'bg-green-100 text-green-700' if worker.enabled else 'bg-red-100 text-red-700' }}">
-                                {{ 'Enabled' if worker.enabled else 'Disabled' }}
-                            </span>
-                        </td>
-                    </tr>
+                    <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                        <div class="font-bold text-white">{{ worker.name }}</div>
+                        <div class="text-xs text-router-muted">{{ worker.type }} · {{ 'enabled' if worker.enabled else 'disabled' }}</div>
+                    </div>
                     {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
+                </div>
+            </div>
+        </section>
+    </div>
 
-    <!-- Recent Agent Jobs -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Recent Agent Jobs</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Execution history</p>
+                <h2 class="text-2xl font-black text-white">Recent usage</h2>
+            </div>
+            <div class="text-xs text-router-muted">{{ recent_usage|length }} recent events</div>
+        </div>
+        <div class="overflow-hidden rounded-2xl border border-router-line">
+            <table class="w-full text-left text-sm">
+                <thead class="bg-router-panel2 text-xs uppercase tracking-wider text-router-muted">
                     <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">ID</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Task</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Priority</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Worker</th>
+                        <th class="px-4 py-3">Provider</th>
+                        <th class="px-4 py-3">Model</th>
+                        <th class="px-4 py-3">Route</th>
+                        <th class="px-4 py-3">Stage</th>
+                        <th class="px-4 py-3">Status</th>
+                        <th class="px-4 py-3">Latency</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100">
-                    {% for job in jobs %}
-                    <tr>
-                        <td class="px-6 py-4 text-gray-500 font-mono text-xs">{{ job.request.job_id[:8] }}</td>
-                        <td class="px-6 py-4 text-gray-900">{{ job.request.task[:50] }}{% if job.request.task|length > 50 %}...{% endif %}</td>
-                        <td class="px-6 py-4">
-                            <span class="px-2 py-1 rounded-full text-xs font-bold 
-                                {% if job.status == 'succeeded' %}bg-green-100 text-green-700
-                                {% elif job.status == 'failed' %}bg-red-100 text-red-700
-                                {% elif job.status == 'running' %}bg-blue-100 text-blue-700
-                                {% else %}bg-gray-100 text-gray-700{% endif %}">
-                                {{ job.status }}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 text-gray-600">{{ job.request.priority }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ job.worker_name if job.worker_name else '-' }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-
-    <!-- Recent Usage -->
-    <section>
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">Recent Usage</h2>
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-gray-50 border-b">
-                    <tr>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Provider</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Model</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Route</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Stage</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Status</th>
-                        <th class="px-6 py-3 text-left font-medium text-gray-500">Latency</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
+                <tbody class="divide-y divide-router-line bg-router-panel/70">
                     {% for event in recent_usage %}
                     {% set provider = event.provider_id if event.provider_id is defined else event.provider %}
                     {% set model = event.model_id if event.model_id is defined else event.model %}
-                    <tr class="{% if provider == 'cerebras' or 'gpt-oss' in (model|string) or 'zai-glm' in (model|string) %}bg-yellow-50{% endif %}">
-                        <td class="px-6 py-4 font-medium text-gray-900">{{ provider or '-' }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ model or '-' }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ event.route }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ event.stage }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ event.status_code if event.status_code is not none else '-' }}</td>
-                        <td class="px-6 py-4 text-gray-600">{{ event.latency_ms if event.latency_ms is not none else '-' }} ms</td>
+                    <tr class="{% if provider == 'cerebras' or 'gpt-oss' in (model|string) or 'zai-glm' in (model|string) %}bg-amber-300/10{% endif %}">
+                        <td class="px-4 py-3 font-semibold text-white">{{ provider or '-' }}</td>
+                        <td class="px-4 py-3 text-router-muted">{{ model or '-' }}</td>
+                        <td class="px-4 py-3 text-router-muted">{{ event.route }}</td>
+                        <td class="px-4 py-3 text-router-muted">{{ event.stage }}</td>
+                        <td class="px-4 py-3 text-router-muted">{{ event.status_code if event.status_code is not none else '-' }}</td>
+                        <td class="px-4 py-3 text-router-muted">{{ event.latency_ms if event.latency_ms is not none else '-' }} ms</td>
                     </tr>
                     {% endfor %}
                 </tbody>
