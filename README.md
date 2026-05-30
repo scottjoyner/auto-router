@@ -1,31 +1,44 @@
 # auto-router
 
-Local-first OpenAI-compatible LLM router for aggressively using legitimate free cloud LLM quota on high-priority deliverables, then falling back to local LM Studio endpoints across the homelab.
+Local-first OpenAI-compatible router for model requests, free-quota burn-down, service discovery, and agent capability orchestration across the homelab.
 
-## Goal
+`auto-router` exposes a local endpoint that looks like a standard LM Studio / OpenAI-compatible server while routing each request through policy, quota, context, and privacy controls. It is designed to sit between Sophia, AssistX, local LM Studio endpoints, hosted free-tier providers, and code-agent CLIs.
 
-`auto-router` exposes a local endpoint that looks like a standard LM Studio / OpenAI-compatible server while routing each request through a policy engine:
+## What it does now
 
-1. classify task priority, privacy, modality, source, and quality needs;
-2. draft with cheap/local models when useful;
-3. refine, judge, or repair using the best available free cloud quota for high-priority deliverables;
-4. consume daily/monthly free quota intentionally before reset on safe backlog work;
-5. support realtime Sophia app requests with low-latency local-first fallback;
-6. consume AssistX/Neo4j context projection so routing decisions follow the shared graph state;
-7. fail back to LM Studio endpoints when free cloud quota is exhausted, unhealthy, blocked, or disallowed by privacy policy.
+- Serves OpenAI-compatible endpoints for chat, responses, embeddings, completions, and model listing.
+- Routes logical aliases such as `auto/fast`, `auto/high-quality`, `auto/code`, `auto/sophia`, `auto/backlog-burn`, `auto/flash-start`, `auto/local`, and `auto/private`.
+- Adds Cerebras as a WSE-3 flash-start planning lane through `auto/flash-start`.
+- Tracks quota reservations and usage with Redis plus a local SQLite ledger.
+- Reads AssistX/Neo4j-style context projection for providers, nodes, services, and lane policy.
+- Renders an operations dashboard with quota burn-down, provider lanes, service launchpad, Cerebras flash-start status, and recent usage.
+- Discovers hosted provider live models through `/admin/live-models` and `/admin/live-models/refresh`.
+- Registers service URLs, scans local/private services, persists scan history, and updates service status in the dashboard.
+- Discovers host-local agent CLIs: Codex, Gemini CLI, and OpenCode.
+- Queues service and agent discovery events into a durable SQLite outbox for future AssistX/Neo4j write-back.
 
-## Target API surface
+## Design principles
 
-The router should support the same core shape expected by OpenAI-compatible clients and LM Studio workflows:
+- **Free quota is a resource to schedule.** Daily quotas should be spent on useful work before reset, not accidentally left idle.
+- **Sophia realtime traffic is protected.** Realtime app requests get low-latency, privacy-aware routing and should not be starved by backlog burn-down.
+- **AssistX owns canonical graph state.** The router consumes context projection from AssistX/Neo4j and queues provenance events back; it does not become the task authority.
+- **Discovery is not policy.** A CLI or service can be installed and visible while still blocked by credits, safety, or operator policy.
+- **Local-first privacy.** Requests tagged `local_only`, likely sensitive, or matching configured privacy rules bypass cloud providers.
+- **Provider terms are respected.** The router is not for account/key rotation to evade limits. It only balances across explicitly configured providers, keys, models, and quotas.
+- **LM Studio remains the backstop.** Local OpenAI-compatible endpoints stay usable even when cloud quota is depleted, unhealthy, blocked, or disallowed.
+
+## API surface
+
+OpenAI-compatible:
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
-- `POST /v1/completions` where feasible
-- streaming Server-Sent Events for chat/responses
-- tool/function calling pass-through where supported
-- structured output / JSON schema pass-through where supported
+- `POST /v1/completions`
+
+Operations:
+
 - `GET /health`
 - `GET /metrics`
 - `GET /dashboard`
@@ -33,75 +46,56 @@ The router should support the same core shape expected by OpenAI-compatible clie
 - `GET /admin/context`
 - `GET /admin/usage`
 - `GET /admin/circuits`
+- `GET /admin/live-models`
+- `POST /admin/live-models/refresh`
+- `GET /admin/services`
+- `POST /admin/services/scan`
+- `GET /admin/outbox`
+- `GET /admin/agent-clis`
+- `POST /admin/agent-clis/discover`
 - `POST /jobs/agent`
-
-## Design principles
-
-- **Free quota is a resource to schedule.** Daily quotas should be spent on useful work before reset, not accidentally left idle.
-- **Sophia realtime traffic is protected.** Realtime app requests get low-latency, privacy-aware routing and should not be starved by backlog burn-down.
-- **AssistX owns canonical graph state.** The router consumes context projection from AssistX/Neo4j and writes provenance back; it does not become the task authority.
-- **Quality beats raw cost on high-priority deliverables.** Important work can use a local draft plus a stronger free-tier refinement/judge pass.
-- **Local-first privacy.** Requests tagged `local_only`, likely sensitive, or matching configured privacy rules bypass cloud providers.
-- **Provider terms are respected.** The router is not for account/key rotation to evade limits. It only balances across explicitly configured providers, keys, models, and quotas.
-- **LM Studio remains the backstop.** Local OpenAI-compatible endpoints such as `http://r2d2:1234/v1` or `http://deathstar-XPS-8920:1234/v1` should be usable even when every cloud quota is depleted.
-- **Dashboard-first operations.** The operator should see remaining quota, burn-down, fallbacks, latency, errors, context revision, circuits, and why a route was chosen.
-
-## Initial provider set
-
-- Google Gemini
-- Groq
-- Cerebras
-- Mistral AI
-- GitHub Models
-- Cloudflare Workers AI
-- Z.AI / Zhipu
-- OpenRouter
-- Local LM Studio endpoints
-- CLI agent workers: Codex, Gemini CLI, GitHub Copilot surfaces, OpenCode
-
-See [`docs/PROVIDER_MATRIX.md`](docs/PROVIDER_MATRIX.md), [`config/providers.example.yaml`](config/providers.example.yaml), and [`config/policies.example.yaml`](config/policies.example.yaml).
-
-## Planned architecture
-
-```text
-Sophia realtime app / OpenAI-compatible clients / AssistX / scheduler
-  -> auto-router FastAPI container
-      -> request normalizer
-      -> privacy classifier
-      -> task/priority/source classifier
-      -> AssistX context projection consumer
-      -> quota-aware policy engine
-      -> provider and agent-worker adapters
-      -> Redis quota reservations
-      -> SQLite/Postgres usage ledger
-      -> optional AssistX event outbox
-      -> dashboard + metrics
-  -> free cloud endpoints
-  -> CLI coding agents
-  -> local LM Studio fallback endpoints
-  -> AssistX/Neo4j provenance write-back
-```
 
 ## Logical model aliases
 
 | Alias | Purpose |
 |---|---|
 | `auto/fast` | Normal interactive fast-free/local routing |
-| `auto/high-quality` | Local draft + stronger free refine/judge |
-| `auto/code` | Code-focused local draft + free/cloud refinement |
+| `auto/flash-start` | Cerebras WSE-3 instant planning/decomposition starter |
+| `auto/high-quality` | Local draft plus stronger free refine/judge |
+| `auto/code` | Code-focused local draft plus free/cloud refinement |
 | `auto/sophia` | Low-latency Sophia realtime profile |
 | `auto/backlog-burn` | Controlled surplus-quota burn profile for safe backlog tasks |
 | `auto/local` | LM Studio/local-only |
 | `auto/private` | LM Studio/local-only with stricter logging/redaction expectations |
+
+## Architecture
+
+```text
+Sophia / AssistX / OpenAI-compatible clients / operator dashboard
+  -> auto-router FastAPI app
+      -> request normalizer
+      -> policy engine
+      -> AssistX context projection consumer
+      -> quota manager
+      -> provider adapters
+      -> service registry and scanner
+      -> agent CLI discovery
+      -> durable usage ledger
+      -> durable event outbox
+  -> local LM Studio endpoints
+  -> free hosted provider endpoints
+  -> CLI coding agents
+  -> AssistX/Neo4j write-back path
+```
 
 ## Repo layout
 
 ```text
 .
 ├── config/                  # provider, policy, agent-worker, and context examples
-├── docs/                    # HLD, LLD, router switching, Neo4j integration, roadmap
+├── docs/                    # design docs, runbook, roadmap, dashboard notes
 ├── src/auto_router/         # FastAPI app and routing core
-├── tests/                   # unit tests for quota, policy, providers
+├── tests/                   # unit tests for quota, policy, providers, services, outbox
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
@@ -116,11 +110,24 @@ cp .env.example .env
 cp config/providers.example.yaml config/providers.yaml
 cp config/policies.example.yaml config/policies.yaml
 cp config/agent_workers.example.yaml config/agent_workers.yaml
+cp config/context.example.yaml config/context.yaml
+make install
+make dev
+```
 
+Open:
+
+```text
+http://localhost:8088/dashboard
+```
+
+Or use Docker:
+
+```bash
 docker compose up --build
 ```
 
-Then point LM Studio/OpenAI-compatible clients at:
+Point LM Studio/OpenAI-compatible clients at:
 
 ```bash
 export OPENAI_BASE_URL=http://localhost:8088/v1
@@ -133,27 +140,37 @@ For AssistX alignment, point the context config to the graph-backed projection e
 export AUTO_ROUTER_CONTEXT_CONFIG=http://assistx:8000/api/router/context-projection
 ```
 
+## Useful operator commands
+
+```bash
+make smoke
+curl http://localhost:8088/health | jq
+curl http://localhost:8088/v1/models | jq
+curl -X POST 'http://localhost:8088/admin/live-models/refresh?provider=cerebras' | jq
+curl -X POST http://localhost:8088/admin/services/scan | jq
+curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
+curl http://localhost:8088/admin/outbox | jq
+```
+
 ## Documentation
 
+- [`docs/OPERATOR_RUNBOOK.md`](docs/OPERATOR_RUNBOOK.md) — practical run/deploy/smoke-test guide
 - [`docs/HLD.md`](docs/HLD.md) — high-level design
 - [`docs/LLD.md`](docs/LLD.md) — low-level design
 - [`docs/ROUTER_SWITCHING_MECHANISM.md`](docs/ROUTER_SWITCHING_MECHANISM.md) — detailed switching design for Sophia, backlog, quota, and fallback routing
-- [`docs/NEO4J_ASSISTX_INTEGRATION.md`](docs/NEO4J_ASSISTX_INTEGRATION.md) — graph projection, Neo4j schema, and AssistX provenance write-back
-- [`docs/TODO.md`](docs/TODO.md) — prioritized implementation backlog with P0/P1/P2/P3/P4/P5 tasks
+- [`docs/CEREBRAS_FLASH_NODE.md`](docs/CEREBRAS_FLASH_NODE.md) — Cerebras WSE-3 flash-start lane design
+- [`docs/NEO4J_ASSISTX_INTEGRATION.md`](docs/NEO4J_ASSISTX_INTEGRATION.md) — graph projection, Neo4j schema, service registry, agent CLI discovery, and AssistX provenance write-back
+- [`docs/DASHBOARD.md`](docs/DASHBOARD.md) — dashboard design
+- [`docs/TODO.md`](docs/TODO.md) — prioritized implementation backlog
 - [`docs/IDEAS.md`](docs/IDEAS.md) — future router, backlog, Sophia, and graph ideas
 - [`docs/QUOTA_STRATEGY.md`](docs/QUOTA_STRATEGY.md) — quota burn-down and reservation model
 - [`docs/PROVIDER_MATRIX.md`](docs/PROVIDER_MATRIX.md) — provider notes and volatile limits
-- [`docs/DASHBOARD.md`](docs/DASHBOARD.md) — dashboard design
-- [`docs/ALIGNMENT_EVENT.md`](docs/ALIGNMENT_EVENT.md) — Neo4j context and lane contract shared with AssistX
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — deployment setup for AssistX plus router
-- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — execution plan
 - [`docs/SECURITY_PRIVACY.md`](docs/SECURITY_PRIVACY.md) — privacy and key-handling constraints
 
-## Immediate priorities
+## Next implementation priorities
 
-1. Keep the app importable and remove merge-conflict debris.
-2. Prove local-only routing and concrete model alias routing with tests.
-3. Add `auto/sophia` and `auto/backlog-burn` policy profiles.
-4. Consume AssistX context projection and expose it in `/health`, `/admin/context`, and dashboard.
-5. Add AssistX/Neo4j provenance write-back through an outbox.
-6. Add a dry-run backlog burn-down scheduler before enabling automated execution.
+1. Add an AssistX event sink dispatcher that posts pending outbox events and marks delivery/retry/dead-letter.
+2. Add route execution events to the outbox, not just service/CLI discovery events.
+3. Add dry-run backlog scheduler using `auto/backlog-burn` and `auto/flash-start`.
+4. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
+5. Add local-vs-cloud dashboard split, circuit retry timers, and backlog queue status.
