@@ -45,6 +45,9 @@ class LiveModelCache:
     def get(self, provider_name: str) -> LiveModelSnapshot | None:
         return self._snapshots.get(provider_name)
 
+    def put(self, snapshot: LiveModelSnapshot) -> None:
+        self._snapshots[snapshot.provider] = snapshot
+
     async def get_or_refresh(self, provider: ProviderConfig, fetcher: Any, force: bool = False) -> LiveModelSnapshot:
         current = self._snapshots.get(provider.name)
         if current is not None and not force and not current.stale:
@@ -70,5 +73,5 @@ class LiveModelCache:
                 expires_at=now + min(self.ttl_seconds, 300),
                 error=str(exc),
             )
-        self._snapshots[provider.name] = snapshot
+        self.put(snapshot)
         return snapshot
