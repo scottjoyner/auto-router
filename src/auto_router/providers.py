@@ -37,12 +37,7 @@ class ProviderStreamResponse:
 
 
 class OpenAICompatibleProvider:
-    """Minimal OpenAI-compatible provider adapter.
-
-    This intentionally supports LM Studio and hosted providers that expose `/v1`
-    routes. Provider-specific adapters can subclass this when custom headers,
-    paths, or response handling become necessary.
-    """
+    """Minimal OpenAI-compatible provider adapter."""
 
     def __init__(self, config: ProviderConfig, timeout_seconds: float = 120.0):
         self.config = config
@@ -74,6 +69,29 @@ class OpenAICompatibleProvider:
         except Exception as exc:  # pragma: no cover - network dependent
             return ProviderHealth(provider=self.name, ok=False, detail=str(exc))
 
+    async def list_models(self) -> list[dict[str, Any]]:
+        if not self.is_configured():
+            raise ProviderError(f"provider {self.name} is not configured", retryable=True)
+        url = f"{self.config.base_url.rstrip('/')}/models"
+        try:
+            async with httpx.AsyncClient(timeout=min(self.timeout_seconds, 30.0)) as client:
+                response = await client.get(url, headers=self._headers())
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"provider {self.name} model discovery returned HTTP {response.status_code}: {response.text[:500]}",
+                status_code=response.status_code,
+                retryable=response.status_code in {408, 409, 425, 429, 500, 502, 503, 504},
+                retry_after_seconds=parse_retry_after(response.headers),
+                headers={key.lower(): value for key, value in response.headers.items()},
+            )
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            return []
+        return [normalize_model_record(item) for item in data if isinstance(item, dict)]
+
     async def chat_completions(self, request: RouterRequest, provider_model: str) -> ProviderResponse:
         payload = dict(request.raw_body)
         payload["model"] = provider_model
@@ -94,11 +112,7 @@ class OpenAICompatibleProvider:
         payload["model"] = provider_model
         return await self._post("/completions", payload, provider_model)
 
-    async def stream_chat_completions(
-        self,
-        request: RouterRequest,
-        provider_model: str,
-    ) -> ProviderStreamResponse:
+    async def stream_chat_completions(self, request: RouterRequest, provider_model: str) -> ProviderStreamResponse:
         payload = dict(request.raw_body)
         payload["model"] = provider_model
         return await self._stream_post("/chat/completions", payload, provider_model)
@@ -116,14 +130,12 @@ class OpenAICompatibleProvider:
     async def _post(self, path: str, payload: dict[str, Any], provider_model: str) -> ProviderResponse:
         if not self.is_configured():
             raise ProviderError(f"provider {self.name} is not configured", retryable=True)
-
         url = f"{self.config.base_url.rstrip('/')}{path}"
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(url, headers=self._headers(), json=payload)
         except httpx.HTTPError as exc:
             raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
-
         if response.status_code >= 400:
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
@@ -133,26 +145,13 @@ class OpenAICompatibleProvider:
                 retry_after_seconds=parse_retry_after(response.headers),
                 headers={key.lower(): value for key, value in response.headers.items()},
             )
-
         data = response.json()
         usage = data.get("usage") if isinstance(data, dict) else None
-        return ProviderResponse(
-            provider=self.name,
-            model=provider_model,
-            data=data,
-            usage=usage or {},
-            status_code=response.status_code,
-        )
+        return ProviderResponse(provider=self.name, model=provider_model, data=data, usage=usage or {}, status_code=response.status_code)
 
-    async def _stream_post(
-        self,
-        path: str,
-        payload: dict[str, Any],
-        provider_model: str,
-    ) -> ProviderStreamResponse:
+    async def _stream_post(self, path: str, payload: dict[str, Any], provider_model: str) -> ProviderStreamResponse:
         if not self.is_configured():
             raise ProviderError(f"provider {self.name} is not configured", retryable=True)
-
         url = f"{self.config.base_url.rstrip('/')}{path}"
         client = httpx.AsyncClient(timeout=self.timeout_seconds)
         stream_cm = client.stream("POST", url, headers=self._headers(), json=payload)
@@ -161,15 +160,13 @@ class OpenAICompatibleProvider:
         except Exception as exc:
             await client.aclose()
             raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
-
         if response.status_code >= 400:
             body = await response.aread()
             await stream_cm.__aexit__(None, None, None)
             await client.aclose()
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"provider {self.name} returned HTTP {response.status_code}: "
-                f"{body.decode('utf-8', errors='replace')[:500]}",
+                f"provider {self.name} returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}",
                 status_code=response.status_code,
                 retryable=retryable,
                 retry_after_seconds=parse_retry_after(response.headers),
@@ -185,13 +182,7 @@ class OpenAICompatibleProvider:
                 await client.aclose()
 
         headers = {key.lower(): value for key, value in response.headers.items()}
-        return ProviderStreamResponse(
-            provider=self.name,
-            model=provider_model,
-            status_code=response.status_code,
-            headers=headers,
-            body=body_stream(),
-        )
+        return ProviderStreamResponse(provider=self.name, model=provider_model, status_code=response.status_code, headers=headers, body=body_stream())
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -201,6 +192,17 @@ class OpenAICompatibleProvider:
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
         return headers
+
+
+def normalize_model_record(item: dict[str, Any]) -> dict[str, Any]:
+    model_id = item.get("id") or item.get("name") or item.get("model")
+    return {
+        "id": model_id,
+        "object": item.get("object", "model"),
+        "owned_by": item.get("owned_by") or item.get("owner"),
+        "created": item.get("created"),
+        "raw": item,
+    }
 
 
 def parse_retry_after(headers: httpx.Headers | dict[str, str]) -> int | None:
@@ -218,23 +220,18 @@ def parse_retry_after(headers: httpx.Headers | dict[str, str]) -> int | None:
 
 
 class LMStudioProvider(OpenAICompatibleProvider):
-    """LM Studio adapter with richer health probes and OpenAI-compatible dispatch."""
-
     async def health(self) -> ProviderHealth:
         base_url = self.config.base_url.rstrip("/")
         native_root = base_url[:-3].rstrip("/") if base_url.endswith("/v1") else base_url
-
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{native_root}/api/v1/models", headers=self._headers())
-
             if response.status_code == 200:
                 data = response.json()
                 models = data.get("models") or []
                 loaded_count = 0
                 total_loaded_ctx = 0
                 loaded_models: list[dict[str, Any]] = []
-
                 for model in models:
                     instances = model.get("loaded_instances") or []
                     if not instances:
@@ -243,29 +240,11 @@ class LMStudioProvider(OpenAICompatibleProvider):
                     model_id = model.get("id") or model.get("key")
                     ctx = instances[0].get("config", {}).get("context_length", 0)
                     total_loaded_ctx += ctx
-                    loaded_models.append(
-                        {
-                            "id": model_id,
-                            "context_length": ctx,
-                            "gpu": any(instance.get("config", {}).get("gpu") for instance in instances),
-                        }
-                    )
-
+                    loaded_models.append({"id": model_id, "context_length": ctx, "gpu": any(instance.get("config", {}).get("gpu") for instance in instances)})
                 detail = f"online, {loaded_count} models loaded"
                 if loaded_count > 0:
                     detail += f" ({total_loaded_ctx // 1024}k total ctx)"
-
-                return ProviderHealth(
-                    provider=self.name,
-                    ok=True,
-                    detail=detail,
-                    metadata={
-                        "type": "lmstudio",
-                        "loaded_models": loaded_models,
-                        "raw_model_count": len(models),
-                    },
-                )
-
+                return ProviderHealth(provider=self.name, ok=True, detail=detail, metadata={"type": "lmstudio", "loaded_models": loaded_models, "raw_model_count": len(models)})
             return await super().health()
         except Exception:
             return await super().health()
