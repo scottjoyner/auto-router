@@ -16,7 +16,8 @@ Local-first OpenAI-compatible router for model requests, free-quota burn-down, s
 - Persists model registry snapshots so provider inventory survives restarts and exposes drift/history data.
 - Registers service URLs, scans local/private services, persists scan history, and updates service status in the dashboard.
 - Discovers host-local agent CLIs: Codex, Gemini CLI, and OpenCode.
-- Queues service, model, agent discovery, and route execution provenance into a durable SQLite outbox for AssistX/Neo4j write-back.
+- Reads AssistX backlog candidates for dry-run scheduling without claiming, mutating, or executing tasks.
+- Queues service, model, agent discovery, backlog dry-run, and route execution provenance into a durable SQLite outbox for AssistX/Neo4j write-back.
 - Dispatches pending outbox events to a configured AssistX event sink with retry/dead-letter handling.
 
 ## Design principles
@@ -24,7 +25,8 @@ Local-first OpenAI-compatible router for model requests, free-quota burn-down, s
 - **Free quota is a resource to schedule.** Daily quotas should be spent on useful work before reset, not accidentally left idle.
 - **Sophia realtime traffic is protected.** Realtime app requests get low-latency, privacy-aware routing and should not be starved by backlog burn-down.
 - **AssistX owns canonical graph state.** The router consumes context projection from AssistX/Neo4j and queues provenance events back; it does not become the task authority.
-- **Discovery is not policy.** A CLI, service, or hosted model can be visible while still blocked by credits, safety, or operator policy.
+- **Discovery is not policy.** A CLI, service, hosted model, or backlog task can be visible while still blocked by credits, safety, or operator policy.
+- **Dry-run before execution.** Backlog scheduling currently selects/skips only; it does not spend quota, call providers, claim tasks, or run agents.
 - **Local-first privacy.** Requests tagged `local_only`, likely sensitive, or matching configured privacy rules bypass cloud providers.
 - **Provider terms are respected.** The router is not for account/key rotation to evade limits. It only balances across explicitly configured providers, keys, models, and quotas.
 - **LM Studio remains the backstop.** Local OpenAI-compatible endpoints stay usable even when cloud quota is depleted, unhealthy, blocked, or disallowed.
@@ -56,6 +58,8 @@ Operations:
 - `POST /admin/outbox/dispatch`
 - `GET /admin/agent-clis`
 - `POST /admin/agent-clis/discover`
+- `GET /admin/backlog/assistx/config`
+- `POST /admin/backlog/dry-run`
 - `POST /jobs/agent`
 
 ## Logical model aliases
@@ -79,6 +83,7 @@ Sophia / AssistX / OpenAI-compatible clients / operator dashboard
       -> request normalizer
       -> policy engine
       -> AssistX context projection consumer
+      -> AssistX read-only backlog task intake
       -> quota manager
       -> provider adapters
       -> service registry and scanner
@@ -144,6 +149,12 @@ For AssistX alignment, point the context config to the graph-backed projection e
 export AUTO_ROUTER_CONTEXT_CONFIG=http://assistx:8000/api/router/context-projection
 ```
 
+For read-only AssistX backlog intake:
+
+```bash
+export AUTO_ROUTER_ASSISTX_TASKS_URL=http://assistx:8000/api/router/backlog-candidates
+```
+
 ## Useful operator commands
 
 ```bash
@@ -154,6 +165,7 @@ curl -X POST 'http://localhost:8088/admin/live-models/refresh?provider=cerebras'
 curl http://localhost:8088/admin/live-models | jq
 curl -X POST http://localhost:8088/admin/services/scan | jq
 curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
+curl -X POST 'http://localhost:8088/admin/backlog/dry-run?source=assistx&limit=10' -H 'Content-Type: application/json' -d '{"enqueue_events":true}' | jq
 curl http://localhost:8088/admin/outbox | jq
 curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10' | jq
 ```
@@ -177,7 +189,7 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 
 ## Next implementation priorities
 
-1. Add dry-run backlog scheduler using `auto/backlog-burn` and `auto/flash-start`.
+1. Add AssistX task claim/approval flow after dry-run selection.
 2. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
 3. Add model registry write-back events to AssistX/Neo4j.
 4. Add local-vs-cloud dashboard split, circuit retry timers, and backlog queue status.
