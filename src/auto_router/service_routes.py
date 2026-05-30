@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from auto_router.context import ContextService, ContextSnapshot, ServiceStatus
+from auto_router.event_dispatcher import AssistXEventDispatcher
 from auto_router.event_outbox import EventOutbox, OutboxEvent
 from auto_router.service_scanner import ServiceProbeResult, ServiceStatusCache, scan_services
 from auto_router.service_store import ServiceStatusStore
@@ -67,6 +68,23 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
             "summary": state.event_outbox.summary(),
             "pending": state.event_outbox.pending(limit=limit),
             "recent": state.event_outbox.recent(limit=limit),
+        }
+
+    @app.post("/admin/outbox/dispatch")
+    async def dispatch_outbox(limit: int = 25, dry_run: bool = False) -> dict[str, Any]:
+        settings = get_settings()
+        dispatcher = AssistXEventDispatcher(
+            outbox=state.event_outbox,
+            sink_url=settings.assistx_event_sink_url,
+            timeout_seconds=settings.assistx_event_dispatch_timeout_seconds,
+            max_attempts=settings.assistx_event_dispatch_max_attempts,
+        )
+        results = await dispatcher.dispatch_pending(limit=limit, dry_run=dry_run)
+        return {
+            "configured": dispatcher.configured,
+            "dry_run": dry_run,
+            "results": [result.to_dict() for result in results],
+            "summary": state.event_outbox.summary(),
         }
 
     @app.post("/admin/outbox/{event_id}/delivered")
