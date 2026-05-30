@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from auto_router.cli_discovery import CliDiscoveryResult, cli_summary
-from auto_router.cli_routes import enqueue_cli_discovery_events
+from auto_router.cli_discovery import CliDiscoveryResult
+from auto_router.cli_routes import cli_summary, enqueue_cli_discovery_events
 from auto_router.context import ContextSnapshot
 from auto_router.event_outbox import EventOutbox
 
