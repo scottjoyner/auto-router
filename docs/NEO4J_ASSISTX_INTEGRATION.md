@@ -16,6 +16,7 @@ The reference `auto-assist` architecture currently keeps Sophia and non-realtime
 | Provider/model capability inventory | AssistX plus router config | Router consumes projection and YAML bootstrap |
 | Homelab service inventory | AssistX/Neo4j plus optional scanners | Router renders links and health/status hints |
 | Quota reservations and transient counters | auto-router | Stored in Redis/in-memory and summarized to AssistX later |
+| Service scan snapshots | auto-router first, AssistX later | Persisted to SQLite and queued into the outbox as graph events |
 | Prompt bodies | Caller/router transient memory | Not written to Neo4j by default |
 
 ## 3. Context projection contract
@@ -130,9 +131,17 @@ Recommended relationships in plain language:
 - A provider has periodic quota snapshots.
 - A context projection includes the nodes, providers, and services that were visible when generated.
 
-## 8. Event write-back contract
+## 8. Event outbox and write-back contract
 
-Router should emit idempotent events to AssistX through the existing event system. The first implementation can use a local outbox table and retry loop before a direct Neo4j writer is added.
+Router now stores outgoing graph events in a local SQLite outbox before any network write-back. This keeps route execution and service scanning resilient when AssistX is unavailable.
+
+Implemented admin endpoints:
+
+```text
+GET  /admin/outbox
+POST /admin/outbox/{event_id}/delivered
+POST /admin/outbox/{event_id}/failed?error=<message>&retry=true
+```
 
 Recommended event types:
 
@@ -143,9 +152,36 @@ Recommended event types:
 | `router.execution_stage.skipped` | A provider is skipped because of quota, privacy, circuit, or capability |
 | `router.backlog_job.selected` | Scheduler selects a safe backlog job for surplus quota burn |
 | `router.quota_snapshot.recorded` | Router publishes quota state for dashboard/history |
-| `router.service_snapshot.recorded` | Router or AssistX records service status/latency from a probe |
+| `router.service_snapshot.recorded` | Router records service status/latency from a probe; this is implemented in the local outbox |
 
-Minimum payload fields:
+### 8.1 Implemented service snapshot payload
+
+Service scans enqueue one `router.service_snapshot.recorded` event per result with an idempotency key:
+
+```text
+router.service_snapshot.recorded:<service_id>:<checked_at>:<status>
+```
+
+Payload fields:
+
+| Field | Meaning |
+|---|---|
+| `service_id` | Stable service identifier |
+| `name` | Human display name |
+| `url` | Probed URL or health URL |
+| `status` | `online`, `offline`, `degraded`, `blocked`, or `unknown` |
+| `checked_at` | Unix timestamp of the probe |
+| `latency_ms` | Probe latency when available |
+| `status_code` | HTTP status code when available |
+| `error` | Short probe error if failed |
+| `skipped` | Whether the scanner skipped the probe |
+| `reason` | Skip/failure reason such as external probing disabled |
+| `context_revision` | Context revision used during the scan |
+| `context_source` | Context source used during the scan |
+
+### 8.2 Execution event payload targets
+
+Future route execution events should include:
 
 | Field | Meaning |
 |---|---|
@@ -194,6 +230,7 @@ The router should not automatically mutate repositories or external systems from
 4. Add service registry rendering from context projection.
 5. Add service status scanner as private-network opt-in.
 6. Add an outbox table for router events.
-7. Add AssistX event sink client with retry and idempotency.
-8. Add dry-run backlog scheduler using AssistX APIs.
-9. Add Neo4j write-back after AssistX event ingestion is stable.
+7. Enqueue `router.service_snapshot.recorded` events from scans.
+8. Add AssistX event sink client with retry and idempotency.
+9. Add dry-run backlog scheduler using AssistX APIs.
+10. Add Neo4j write-back after AssistX event ingestion is stable.
