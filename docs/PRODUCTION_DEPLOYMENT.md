@@ -10,6 +10,7 @@
 - persist usage, service scans, model registry snapshots, and event outbox data in SQLite;
 - render the operator dashboard;
 - consume AssistX/Neo4j context projection;
+- read AssistX backlog candidates in dry-run mode;
 - dispatch durable outbox events to AssistX when the sink is available.
 
 ## 2. Recommended topology
@@ -26,7 +27,7 @@ SQLite volume ./data/router.sqlite3
         ↓
 local LM Studio endpoints
 hosted free provider APIs
-AssistX context projection + event sink
+AssistX context projection + read-only backlog candidates + event sink
 Neo4j behind AssistX
 ```
 
@@ -106,6 +107,7 @@ AssistX integration:
 
 ```bash
 AUTO_ROUTER_CONTEXT_CONFIG=http://assistx:8000/api/router/context-projection
+AUTO_ROUTER_ASSISTX_TASKS_URL=http://assistx:8000/api/router/backlog-candidates
 AUTO_ROUTER_ASSISTX_EVENT_SINK_URL=http://assistx:8000/api/events
 ```
 
@@ -127,6 +129,7 @@ Recommended:
 - Keep `/admin/*` private.
 - Do not expose `/admin/services/scan` publicly.
 - Do not expose `/admin/agent-clis/discover` publicly.
+- Do not expose `/admin/backlog/dry-run` publicly.
 - Do not expose `/admin/outbox/dispatch` publicly.
 
 Example Caddy private-network stance:
@@ -149,6 +152,7 @@ curl http://localhost:8088/v1/models | jq
 curl http://localhost:8088/admin/context | jq
 curl http://localhost:8088/admin/services | jq
 curl http://localhost:8088/admin/live-models | jq
+curl http://localhost:8088/admin/backlog/assistx/config | jq
 curl http://localhost:8088/admin/outbox | jq
 ```
 
@@ -158,6 +162,7 @@ Then run controlled operations:
 curl -X POST http://localhost:8088/admin/services/scan | jq
 curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
 curl -X POST 'http://localhost:8088/admin/live-models/refresh?provider=cerebras' | jq
+curl -X POST 'http://localhost:8088/admin/backlog/dry-run?source=assistx&limit=10' -H 'Content-Type: application/json' -d '{"enqueue_events":true}' | jq
 curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10' | jq
 ```
 
@@ -191,7 +196,27 @@ curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
 
 This is especially useful on hosts with Codex, Gemini CLI, or OpenCode installed.
 
-### 8.4 Outbox dispatch
+### 8.4 Backlog dry-run selection
+
+Manual candidates:
+
+```bash
+curl -X POST http://localhost:8088/admin/backlog/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{"enqueue_events":true,"tasks":[{"task_id":"docs-1","title":"Review docs","prompt":"Review docs only.","priority":"background"}]}' | jq
+```
+
+AssistX candidates:
+
+```bash
+curl -X POST 'http://localhost:8088/admin/backlog/dry-run?source=assistx&queue=backlog&limit=10' \
+  -H 'Content-Type: application/json' \
+  -d '{"enqueue_events":true}' | jq
+```
+
+This is read-only and selection-only. It does not claim tasks, call providers, or run agents.
+
+### 8.5 Outbox dispatch
 
 Dry-run:
 
@@ -219,7 +244,7 @@ Prometheus-style metrics:
 curl http://localhost:8088/metrics
 ```
 
-Current metrics include quota remaining, request count, and circuit state. Future metrics should add service status, model registry status, outbox backlog, and local-vs-cloud split.
+Current metrics include quota remaining, request count, and circuit state. Future metrics should add service status, model registry status, outbox backlog, backlog candidate selection, and local-vs-cloud split.
 
 ## 10. Upgrade checklist
 
@@ -237,6 +262,7 @@ After deploy:
 curl http://localhost:8088/health | jq
 curl http://localhost:8088/admin/outbox | jq
 curl http://localhost:8088/admin/live-models | jq
+curl http://localhost:8088/admin/backlog/assistx/config | jq
 ```
 
 ## 11. Failure handling
@@ -247,6 +273,7 @@ curl http://localhost:8088/admin/live-models | jq
 | Redis unavailable | Quota manager may fall back depending on implementation; restore Redis quickly |
 | SQLite locked | Stop duplicate router instance or inspect long-running writes |
 | AssistX context unreachable | Router uses existing/bootstrap context; check context source in `/health` |
+| AssistX task endpoint unreachable | Manual backlog dry-run still works; AssistX-sourced dry-run fails safely |
 | AssistX event sink unreachable | Events remain pending/retry in outbox |
 | Service scan reports offline | Check node/Tailscale/DNS/health URL before changing policy |
 | Agent CLI missing | Install CLI on that node or have another node self-report capability |
@@ -258,5 +285,6 @@ curl http://localhost:8088/admin/live-models | jq
 - Keep admin endpoints private.
 - Do not schedule agent write/commit/push by default.
 - Keep service scanning local/private unless explicitly testing hosted APIs.
+- Keep backlog scheduling dry-run/read-only until AssistX task ownership and approval flows are implemented.
 - Dispatch outbox manually until AssistX event sink is mature.
 - Treat discovery data as advisory; policy still decides whether something may run.
