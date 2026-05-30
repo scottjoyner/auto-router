@@ -4,9 +4,11 @@ import uvicorn
 
 from auto_router.live_model_routes import register_live_model_routes
 from auto_router.main import app, state
+from auto_router.service_routes import register_service_routes
 from auto_router.settings import get_settings
 
 register_live_model_routes(app, state)
+register_service_routes(app, state)
 
 
 def run() -> None:
