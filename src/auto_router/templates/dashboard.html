@@ -10,16 +10,22 @@
             </div>
             <h1 class="text-3xl font-black tracking-tight text-white md:text-5xl">Model routing, quota burn, and swarm context.</h1>
             <p class="mt-3 max-w-3xl text-sm leading-6 text-router-muted md:text-base">
-                Watch live provider state, Cerebras flash-start planning, local LM Studio fallback, AssistX context alignment, and recent routing outcomes from one operator surface.
+                Watch live provider state, service URLs, Cerebras flash-start planning, local LM Studio fallback, AssistX context alignment, and recent routing outcomes from one operator surface.
             </p>
         </div>
-        <div class="flex max-w-sm flex-col gap-3">
+        <div class="flex max-w-xl flex-col gap-3">
             <div class="flex flex-wrap gap-3">
                 <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20"
                         hx-post="/admin/live-models/refresh?provider=cerebras"
                         hx-target="#action-status"
                         hx-swap="innerHTML">
                     Refresh Cerebras models
+                </button>
+                <button class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-300/20"
+                        hx-post="/admin/services/scan"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    Scan local services
                 </button>
                 <button class="rounded-2xl border border-router-line bg-router-panel2 px-4 py-2 text-sm font-semibold text-router-text hover:border-cyan-300/40"
                         hx-get="/api/dashboard/summary"
@@ -29,7 +35,7 @@
                 </button>
             </div>
             <div id="action-status" class="min-h-6 rounded-2xl border border-router-line/60 bg-router-panel2/70 px-3 py-2 text-xs text-router-muted">
-                Actions appear here. Use the dashboard refresh after live-model discovery completes.
+                Actions appear here. Service scans are local/private by default; external API probes require explicit allow_external=true.
             </div>
         </div>
     </div>
