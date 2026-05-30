@@ -16,6 +16,7 @@ The reference `auto-assist` architecture currently keeps Sophia and non-realtime
 | Provider/model capability inventory | AssistX plus router config | Router consumes projection and YAML bootstrap |
 | Agent CLI inventory | Node self-report plus router discovery | Router checks host-local CLI availability and queues capability events |
 | Homelab service inventory | AssistX/Neo4j plus optional scanners | Router renders links and health/status hints |
+| Route execution provenance | auto-router first, AssistX later | Queued into the outbox without prompt/response bodies |
 | Quota reservations and transient counters | auto-router | Stored in Redis/in-memory and summarized to AssistX later |
 | Service scan snapshots | auto-router first, AssistX later | Persisted to SQLite and queued into the outbox as graph events |
 | Prompt bodies | Caller/router transient memory | Not written to Neo4j by default |
@@ -189,27 +190,34 @@ Recommended relationships in plain language:
 
 ## 9. Event outbox and write-back contract
 
-Router now stores outgoing graph events in a local SQLite outbox before any network write-back. This keeps route execution and service scanning resilient when AssistX is unavailable.
+Router stores outgoing graph events in a local SQLite outbox before any network write-back. This keeps route execution, service scanning, and agent discovery resilient when AssistX is unavailable.
 
 Implemented admin endpoints:
 
 ```text
 GET  /admin/outbox
+POST /admin/outbox/dispatch?dry_run=true&limit=10
+POST /admin/outbox/dispatch?limit=25
 POST /admin/outbox/{event_id}/delivered
 POST /admin/outbox/{event_id}/failed?error=<message>&retry=true
 ```
 
-Recommended event types:
+Implemented event types:
 
 | Event type | When emitted |
 |---|---|
-| `router.execution_stage.completed` | A provider or worker stage succeeds |
-| `router.execution_stage.failed` | A provider or worker stage fails |
+| `router.execution_stage.completed` | A provider stage succeeds; emitted by `main_live` route event patch |
+| `router.execution_stage.failed` | A provider stage fails; emitted by `main_live` route event patch |
+| `router.service_snapshot.recorded` | Router records service status/latency from a probe |
+| `router.agent_cli.discovered` | Router records discovered Codex/Gemini/OpenCode CLI availability |
+
+Planned event types:
+
+| Event type | When emitted |
+|---|---|
 | `router.execution_stage.skipped` | A provider is skipped because of quota, privacy, circuit, or capability |
 | `router.backlog_job.selected` | Scheduler selects a safe backlog job for surplus quota burn |
 | `router.quota_snapshot.recorded` | Router publishes quota state for dashboard/history |
-| `router.service_snapshot.recorded` | Router records service status/latency from a probe; this is implemented in the local outbox |
-| `router.agent_cli.discovered` | Router records discovered Codex/Gemini/OpenCode CLI availability; this is implemented in the local outbox |
 
 ### 9.1 Implemented service snapshot payload
 
@@ -246,24 +254,44 @@ router.agent_cli.discovered:<node_id>:<name>:<checked_at>:<installed>:<runnable>
 
 Payload fields are the discovery result fields listed in Section 7 plus `context_revision` and `context_source`.
 
-### 9.3 Execution event payload targets
+### 9.3 Implemented route execution payload
 
-Future route execution events should include:
+Route execution events are emitted by the enhanced `auto_router.main_live` app. The base app remains minimal; the live wrapper installs a small patch around `_record_usage` and queues provenance events to the outbox.
+
+Idempotency key format:
+
+```text
+router.execution_stage.<status>:<request_id>:<stage>:<provider>:<model>:<status_code>:<error_type>
+```
+
+Payload fields:
 
 | Field | Meaning |
 |---|---|
 | `request_id` | Router request ID |
-| `task_id` | AssistX task ID when available |
-| `profile` | Policy profile such as `sophia_realtime` or `backlog_burn` |
+| `route` | OpenAI-compatible route such as `chat_completions` |
+| `requested_model` | Requested alias, such as `auto/flash-start` |
+| `priority` | Router priority |
+| `profile` | Explicit metadata profile when supplied |
 | `stage` | Draft/refine/judge/final/agent stage |
 | `provider` | Selected provider name |
 | `model` | Selected provider model |
-| `lane` | Local/free_api/paperclip/blocked |
-| `status` | Succeeded, failed, skipped, timeout, unavailable |
+| `status` | `completed` or `failed` |
+| `status_code` | Provider status code when available |
 | `latency_ms` | Runtime latency |
+| `input_tokens` | Prompt/input token estimate or provider-reported count |
+| `output_tokens` | Completion/output tokens when available |
+| `total_tokens` | Total token estimate or provider-reported count |
 | `quota_units` | Request/token/neuron/job counters consumed or reserved |
-| `privacy_decision` | Local-only, safe-cloud, blocked, or unknown |
-| `artifact_refs` | Optional refs to patch, stdout, stderr, summary, or test output |
+| `local_only` | Whether request was marked local-only |
+| `allow_cloud` | Explicit cloud allowance/denial when supplied |
+| `stream` | Whether the request was streaming |
+| `error_type` | Error class for failures |
+| `error_message` | Short error message for failures |
+| `context_revision` | Context revision used by the router |
+| `context_source` | Context source used by the router |
+
+Route events explicitly do not include raw request bodies, prompt messages, tool payloads, response content, or secrets.
 
 ## 10. Backlog scheduler integration
 
@@ -286,6 +314,7 @@ The router should not automatically mutate repositories or external systems from
 - Router event write-back must be idempotent.
 - CLI discovery should only run locally on the node or via a trusted node agent.
 - Prompt bodies are not written to Neo4j by default.
+- Route execution events must not store raw request/response bodies.
 - Secrets and `.env` values are never sent to cloud providers.
 - Voice authentication and enrollment records are always local-only.
 - Backlog burn-down cannot override privacy labels or critical reserves.
@@ -301,5 +330,6 @@ The router should not automatically mutate repositories or external systems from
 7. Enqueue `router.service_snapshot.recorded` events from scans.
 8. Add agent CLI discovery and enqueue `router.agent_cli.discovered` events.
 9. Add AssistX event sink client with retry and idempotency.
-10. Add dry-run backlog scheduler using AssistX APIs.
-11. Add Neo4j write-back after AssistX event ingestion is stable.
+10. Enqueue `router.execution_stage.completed` and `router.execution_stage.failed` events from provider execution.
+11. Add dry-run backlog scheduler using AssistX APIs.
+12. Add Neo4j write-back after AssistX event ingestion is stable.
