@@ -24,7 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-auto-router = "auto_router.main:run"
+auto-router = "auto_router.main_live:run"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
