@@ -14,6 +14,7 @@ The reference `auto-assist` architecture currently keeps Sophia and non-realtime
 | Task lifecycle and dispatch state | AssistX | Receives task IDs and emits route outcomes |
 | Agent runs and artifacts | AssistX/Paperclip for current cutover | May attach routing provenance and artifact refs |
 | Provider/model capability inventory | AssistX plus router config | Router consumes projection and YAML bootstrap |
+| Agent CLI inventory | Node self-report plus router discovery | Router checks host-local CLI availability and queues capability events |
 | Homelab service inventory | AssistX/Neo4j plus optional scanners | Router renders links and health/status hints |
 | Quota reservations and transient counters | auto-router | Stored in Redis/in-memory and summarized to AssistX later |
 | Service scan snapshots | auto-router first, AssistX later | Persisted to SQLite and queued into the outbox as graph events |
@@ -107,7 +108,60 @@ AssistX can register services from three sources:
 (RouterContextProjection)-[:INCLUDES_SERVICE]->(Service)
 ```
 
-## 7. Suggested Neo4j model additions
+## 7. Agent CLI discovery and node registration
+
+Agent CLIs such as Codex, Gemini CLI, and OpenCode should not be modeled as permanently blocked just because the static example config disables execution by default. Discovery answers whether a CLI exists and runs on a node. Policy answers whether the router may schedule it.
+
+Implemented local discovery endpoints:
+
+```text
+GET  /admin/agent-clis
+POST /admin/agent-clis/discover
+```
+
+The router checks the host-local PATH for:
+
+| CLI | Command | Intended lane | Notes |
+|---|---|---|---|
+| Codex | `codex` | premium repo-critical | Subscription/reset dependent; keep write/commit disabled unless explicitly approved |
+| Gemini CLI | `gemini` | large-context review/batch | Useful while credits remain |
+| OpenCode | `opencode` | local/default code-agent | Useful for local coding-agent workflows |
+
+Discovery result fields:
+
+| Field | Meaning |
+|---|---|
+| `name` | Worker name such as `gemini-cli` |
+| `command` | Command checked on PATH |
+| `type` | `codex`, `gemini_cli`, or `opencode` |
+| `installed` | Command exists on the checked node |
+| `runnable` | Version command exited successfully |
+| `path` | Resolved command path |
+| `node_id` | Host/node identifier |
+| `checked_at` | Unix timestamp |
+| `version` | First version output line if available |
+| `error` | Short failure if missing or not runnable |
+| `credit_hint` | Manual quota/credit note for scheduling policy |
+
+Remote nodes should self-register this same payload through AssistX. The future graph shape should be:
+
+```text
+(SwarmNode)-[:HAS_AGENT_CLI]->(AgentCli {name, command, type, installed, runnable, version, checked_at})
+(AgentCli)-[:EXPOSES_WORKER]->(AgentWorker)
+```
+
+Policy should then combine discovery plus credits:
+
+```text
+installed=false      -> unavailable
+installed=true       -> available capability
+runnable=false       -> degraded/unavailable
+credits exhausted    -> blocked by policy
+subscription reset   -> blocked until reset
+write not approved   -> read/review-only execution
+```
+
+## 8. Suggested Neo4j model additions
 
 These graph concepts can be added to the `assistx` database or represented through existing nodes if AssistX already has equivalents.
 
@@ -118,6 +172,7 @@ These graph concepts can be added to the `assistx` database or represented throu
 | `RouterDecision` | One routing stage decision | `decision_id`, `request_id`, `stage`, `profile`, `status`, `reason` |
 | `QuotaSnapshot` | Periodic operational quota state | `quota_id`, `dimension`, `limit`, `used`, `remaining`, `reset_at` |
 | `Service` | Service launchpad and health registry | `service_id`, `name`, `url`, `health_url`, `service_type`, `status` |
+| `AgentCli` | Discovered code-agent CLI on a node | `name`, `command`, `type`, `installed`, `runnable`, `version`, `checked_at` |
 | `RouterContextProjection` | Published projection revision | `revision`, `generated_at`, `source` |
 
 Recommended relationships in plain language:
@@ -125,13 +180,14 @@ Recommended relationships in plain language:
 - A provider serves one or more router models.
 - A local or swarm node exposes one or more providers.
 - A node hosts one or more services.
+- A node has zero or more discovered agent CLIs.
 - A provider exposes one or more service URLs.
 - A task or agent run used one or more router decisions.
 - A router decision selected one provider and one model.
 - A provider has periodic quota snapshots.
-- A context projection includes the nodes, providers, and services that were visible when generated.
+- A context projection includes the nodes, providers, services, and agent capabilities that were visible when generated.
 
-## 8. Event outbox and write-back contract
+## 9. Event outbox and write-back contract
 
 Router now stores outgoing graph events in a local SQLite outbox before any network write-back. This keeps route execution and service scanning resilient when AssistX is unavailable.
 
@@ -153,8 +209,9 @@ Recommended event types:
 | `router.backlog_job.selected` | Scheduler selects a safe backlog job for surplus quota burn |
 | `router.quota_snapshot.recorded` | Router publishes quota state for dashboard/history |
 | `router.service_snapshot.recorded` | Router records service status/latency from a probe; this is implemented in the local outbox |
+| `router.agent_cli.discovered` | Router records discovered Codex/Gemini/OpenCode CLI availability; this is implemented in the local outbox |
 
-### 8.1 Implemented service snapshot payload
+### 9.1 Implemented service snapshot payload
 
 Service scans enqueue one `router.service_snapshot.recorded` event per result with an idempotency key:
 
@@ -179,7 +236,17 @@ Payload fields:
 | `context_revision` | Context revision used during the scan |
 | `context_source` | Context source used during the scan |
 
-### 8.2 Execution event payload targets
+### 9.2 Implemented agent CLI discovery payload
+
+CLI discovery enqueues one `router.agent_cli.discovered` event per result with an idempotency key:
+
+```text
+router.agent_cli.discovered:<node_id>:<name>:<checked_at>:<installed>:<runnable>
+```
+
+Payload fields are the discovery result fields listed in Section 7 plus `context_revision` and `context_source`.
+
+### 9.3 Execution event payload targets
 
 Future route execution events should include:
 
@@ -198,7 +265,7 @@ Future route execution events should include:
 | `privacy_decision` | Local-only, safe-cloud, blocked, or unknown |
 | `artifact_refs` | Optional refs to patch, stdout, stderr, summary, or test output |
 
-## 9. Backlog scheduler integration
+## 10. Backlog scheduler integration
 
 The backlog scheduler should prefer AssistX APIs over direct graph queries. A future direct Neo4j adapter can be added after the event contract is stable.
 
@@ -212,17 +279,18 @@ Required AssistX capabilities:
 
 The router should not automatically mutate repositories or external systems from backlog work. Repo writes, commits, pushes, financial actions, or legal/production side effects require explicit operator approval.
 
-## 10. Security requirements
+## 11. Security requirements
 
 - Context projection endpoint must be private-network only or signed.
 - Service links can be displayed, but service-scanning must remain private-network scoped and rate limited.
 - Router event write-back must be idempotent.
+- CLI discovery should only run locally on the node or via a trusted node agent.
 - Prompt bodies are not written to Neo4j by default.
 - Secrets and `.env` values are never sent to cloud providers.
 - Voice authentication and enrollment records are always local-only.
 - Backlog burn-down cannot override privacy labels or critical reserves.
 
-## 11. MVP implementation path
+## 12. MVP implementation path
 
 1. Keep YAML bootstrap but support `AUTO_ROUTER_CONTEXT_CONFIG=http://assistx:8000/api/router/context-projection`.
 2. Expose `/admin/context` and dashboard context cards.
@@ -231,6 +299,7 @@ The router should not automatically mutate repositories or external systems from
 5. Add service status scanner as private-network opt-in.
 6. Add an outbox table for router events.
 7. Enqueue `router.service_snapshot.recorded` events from scans.
-8. Add AssistX event sink client with retry and idempotency.
-9. Add dry-run backlog scheduler using AssistX APIs.
-10. Add Neo4j write-back after AssistX event ingestion is stable.
+8. Add agent CLI discovery and enqueue `router.agent_cli.discovered` events.
+9. Add AssistX event sink client with retry and idempotency.
+10. Add dry-run backlog scheduler using AssistX APIs.
+11. Add Neo4j write-back after AssistX event ingestion is stable.
