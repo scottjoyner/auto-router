@@ -27,6 +27,18 @@
                         hx-swap="innerHTML">
                     Scan local services
                 </button>
+                <button class="rounded-2xl border border-purple-300/30 bg-purple-300/10 px-4 py-2 text-sm font-semibold text-purple-100 hover:bg-purple-300/20"
+                        hx-post="/admin/agent-clis/discover"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    Discover CLIs
+                </button>
+                <button class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-300/20"
+                        hx-post="/admin/outbox/dispatch?dry_run=true&limit=10"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    Outbox dry-run
+                </button>
                 <button class="rounded-2xl border border-router-line bg-router-panel2 px-4 py-2 text-sm font-semibold text-router-text hover:border-cyan-300/40"
                         hx-get="/api/dashboard/summary"
                         hx-target="#dashboard-content"
@@ -41,7 +53,13 @@
     </div>
 </section>
 
-<div id="dashboard-content" hx-trigger="load, every 10s" hx-get="/api/dashboard/summary" hx-swap="innerHTML">
-    <div class="rounded-3xl border border-router-line bg-router-panel p-6 text-router-muted">Loading dashboard telemetry...</div>
+<div class="space-y-6">
+    <div id="dashboard-content" hx-trigger="load, every 10s" hx-get="/api/dashboard/summary" hx-swap="innerHTML">
+        <div class="rounded-3xl border border-router-line bg-router-panel p-6 text-router-muted">Loading dashboard telemetry...</div>
+    </div>
+
+    <div id="ops-dashboard-content" hx-trigger="load, every 15s" hx-get="/api/dashboard/ops-summary" hx-swap="innerHTML">
+        <div class="rounded-3xl border border-router-line bg-router-panel p-6 text-router-muted">Loading production control-plane telemetry...</div>
+    </div>
 </div>
 {% endblock %}
