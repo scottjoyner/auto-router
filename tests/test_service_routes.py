@@ -1,5 +1,12 @@
-from auto_router.context import ContextProvider, ContextService, ContextSnapshot, ServiceStatus
-from auto_router.service_routes import apply_service_results_to_context, service_summary
+from types import SimpleNamespace
+
+from auto_router.context import ContextService, ContextSnapshot, ServiceStatus
+from auto_router.event_outbox import EventOutbox
+from auto_router.service_routes import (
+    apply_service_results_to_context,
+    enqueue_service_snapshot_events,
+    service_summary,
+)
 from auto_router.service_scanner import ServiceProbeResult
 
 
@@ -55,3 +62,32 @@ def test_service_summary_counts_statuses() -> None:
     assert summary["offline"] == 1
     assert summary["blocked"] == 1
     assert summary["unknown"] == 1
+
+
+def test_enqueue_service_snapshot_events(tmp_path) -> None:
+    outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    state = SimpleNamespace(
+        event_outbox=outbox,
+        context=ContextSnapshot(revision="rev-1", source="unit-test"),
+    )
+    results = [
+        ServiceProbeResult(
+            service_id="neo4j.browser",
+            name="Neo4j Browser",
+            url="http://localhost:7474",
+            status=ServiceStatus.online,
+            checked_at=123,
+            latency_ms=12,
+            status_code=200,
+        )
+    ]
+
+    event_ids = enqueue_service_snapshot_events(state, results)
+    events = outbox.pending()
+
+    assert len(event_ids) == 1
+    assert len(events) == 1
+    assert events[0]["event_type"] == "router.service_snapshot.recorded"
+    assert events[0]["payload"]["service_id"] == "neo4j.browser"
+    assert events[0]["payload"]["context_revision"] == "rev-1"
+    assert events[0]["payload"]["context_source"] == "unit-test"
