@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     default_profile: str = "interactive_balanced"
     request_timeout_seconds: float = 120.0
     live_model_cache_ttl_seconds: int = 3600
+    assistx_event_sink_url: str | None = None
+    assistx_event_dispatch_timeout_seconds: float = 10.0
+    assistx_event_dispatch_max_attempts: int = 5
 
 
 @lru_cache
