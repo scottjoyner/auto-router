@@ -13,20 +13,24 @@
                 Watch live provider state, Cerebras flash-start planning, local LM Studio fallback, AssistX context alignment, and recent routing outcomes from one operator surface.
             </p>
         </div>
-        <div class="flex flex-wrap gap-3">
-            <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20"
-                    hx-post="/admin/live-models/refresh?provider=cerebras"
-                    hx-target="#dashboard-content"
-                    hx-get="/api/dashboard/summary"
-                    hx-swap="innerHTML">
-                Refresh Cerebras
-            </button>
-            <button class="rounded-2xl border border-router-line bg-router-panel2 px-4 py-2 text-sm font-semibold text-router-text hover:border-cyan-300/40"
-                    hx-get="/api/dashboard/summary"
-                    hx-target="#dashboard-content"
-                    hx-swap="innerHTML">
-                Refresh Dashboard
-            </button>
+        <div class="flex max-w-sm flex-col gap-3">
+            <div class="flex flex-wrap gap-3">
+                <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20"
+                        hx-post="/admin/live-models/refresh?provider=cerebras"
+                        hx-target="#action-status"
+                        hx-swap="innerHTML">
+                    Refresh Cerebras models
+                </button>
+                <button class="rounded-2xl border border-router-line bg-router-panel2 px-4 py-2 text-sm font-semibold text-router-text hover:border-cyan-300/40"
+                        hx-get="/api/dashboard/summary"
+                        hx-target="#dashboard-content"
+                        hx-swap="innerHTML">
+                    Refresh Dashboard
+                </button>
+            </div>
+            <div id="action-status" class="min-h-6 rounded-2xl border border-router-line/60 bg-router-panel2/70 px-3 py-2 text-xs text-router-muted">
+                Actions appear here. Use the dashboard refresh after live-model discovery completes.
+            </div>
         </div>
     </div>
 </section>
