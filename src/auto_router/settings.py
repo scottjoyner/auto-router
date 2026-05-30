@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     log_prompts: bool = False
     default_profile: str = "interactive_balanced"
     request_timeout_seconds: float = 120.0
+    live_model_cache_ttl_seconds: int = 3600
 
 
 @lru_cache
