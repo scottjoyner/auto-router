@@ -1,668 +1,812 @@
 # Low-Level Design: auto-router
 
-## 1. API layer
+## 1. Purpose
 
-The API layer uses FastAPI and exposes OpenAI/LM Studio-compatible routes while also exposing admin, dashboard, and agent-job endpoints.
+This low-level design maps the current `auto-router` architecture to concrete modules, APIs, data models, persistence tables, event payloads, and runtime flows.
 
-### 1.1 Initial endpoints
+It matches the current HLD and production shape:
 
-```text
-GET  /health
-GET  /metrics
-GET  /dashboard
-GET  /admin/quota
-GET  /admin/providers
-GET  /admin/agent-workers
-GET  /v1/models
-POST /v1/chat/completions
-POST /v1/responses
-POST /v1/embeddings
-POST /v1/completions
-POST /jobs/agent
-GET  /jobs/agent/{job_id}
-GET  /jobs/agent/{job_id}/artifacts
-```
+- OpenAI-compatible routing;
+- quota-aware provider selection;
+- Cerebras flash-start lane;
+- AssistX context projection;
+- read-only AssistX backlog intake;
+- service registry and scanner;
+- durable model registry;
+- agent CLI discovery;
+- route execution provenance;
+- durable event outbox and dispatch;
+- dry-run backlog scheduling;
+- dashboard/operator endpoints.
 
-### 1.2 Compatibility behavior
+## 2. Application entrypoints
 
-- Preserve unknown OpenAI-compatible request fields and pass through when provider supports them.
-- Normalize provider-specific response shapes back into OpenAI-compatible output.
-- Support streaming with Server-Sent Events.
-- Return compatible error envelopes with provider provenance metadata hidden unless debug is enabled.
-- Support LM Studio-style local clients without requiring client changes.
-- Support model aliases that map to routing profiles rather than one physical model.
-
-### 1.3 Model alias examples
+### 2.1 Base app
 
 ```text
-auto/fast              -> fast free provider, then local
-auto/high-quality      -> local draft + strongest free refine
-auto/code              -> local coder draft + cloud/code refine
-auto/repo-agent        -> agent worker job path
-auto/local             -> LM Studio only
-auto/private           -> LM Studio only with stricter logging redaction
+auto_router.main:app
 ```
 
-### 1.4 AssistX alignment
+The base app owns the core OpenAI-compatible API and routing runtime.
 
-auto-router should treat AssistX as the context authority when operating in the aligned deployment. The request path may still begin from OpenAI-compatible payloads, but the final routing decision should be informed by a graph-backed registry of:
+Responsibilities:
 
-- local nodes and their current status;
-- free API lanes and remaining credit;
-- provider capabilities and known limitations;
-- privacy flags that force local-only execution;
-- agent-worker availability and preferred lanes.
+- load provider/policy/agent/context config;
+- initialize quota manager;
+- initialize usage ledger;
+- initialize policy engine;
+- expose `/v1/*`, health, metrics, dashboard, usage, quota, circuits, context, and agent job routes;
+- execute provider dispatch;
+- record usage.
 
-This means the router should be able to answer, in metadata, not just what ran but why it ran there.
+### 2.2 Production/enhanced app
 
-## 2. Internal request model
+```text
+auto_router.main_live:app
+```
 
-Every synchronous request becomes a `RouterRequest`.
-
-### 2.1 Context inputs
-
-In the aligned deployment, the router should consume context snapshots that identify:
-
-- the request locality policy (`local_only`, `safe_cloud`, or unrestricted);
-- the current lane preference (`local`, `free_api`, `paperclip`, `blocked`);
-- the provider/model capabilities available for that lane;
-- whether the request may spend legitimate free API credits;
-- whether an agent worker is available locally or only via a cloud-backed lane.
-
-YAML files remain the bootstrap mechanism, but they should be treated as a projection of graph state, not the system of record.
+The live wrapper imports the base app and registers production extensions:
 
 ```python
-class RouterRequest(BaseModel):
-    request_id: str
-    route: Literal[
-        "chat_completions",
-        "responses",
-        "embeddings",
-        "completions",
-    ]
-    model: str | None
-    messages: list[dict] = []
-    input: Any | None = None
-    max_tokens: int | None = None
-    stream: bool = False
-    tools: list[dict] | None = None
-    response_format: dict | None = None
-    metadata: dict = {}
-    required_capabilities: set[str] = set()
-    priority: Literal[
-        "critical",
-        "repo_critical",
-        "interactive",
-        "batch",
-        "background",
-        "local_only",
-    ] = "interactive"
-    local_only: bool = False
-    allow_cloud: bool | None = None
-    privacy_labels: set[str] = set()
+install_route_event_patch(main_module)
+register_live_model_routes(app, state)
+register_service_routes(app, state)
+register_cli_routes(app, state)
+register_backlog_routes(app, state)
 ```
 
-## 3. Execution planes
+Use this entrypoint for production and operator workflows.
 
-`auto-router` has two execution planes.
+## 3. Runtime state object
 
-### 3.1 API routing plane
+The base app uses a shared runtime `state` object. Production extensions add attributes lazily.
 
-The API routing plane handles synchronous model requests through provider adapters.
+| Attribute | Owner | Purpose |
+|---|---|---|
+| `providers` | `main.py` | Provider registry loaded from YAML |
+| `policies` | `main.py` | Policy registry loaded from YAML |
+| `agents` | `main.py` | Agent worker registry loaded from YAML |
+| `context` | `main.py` | AssistX/YAML context snapshot |
+| `policy_engine` | `main.py` | Routing/profile planner |
+| `quota` | `main.py` | Redis/in-memory quota manager |
+| `usage_ledger` | `main.py` | SQLite usage ledger |
+| `live_models` | `live_model_routes.py` | In-memory live model cache |
+| `model_registry` | `live_model_routes.py` | Durable model registry store |
+| `service_status` | `service_routes.py` | In-memory service scan cache |
+| `service_store` | `service_routes.py` | Durable service scan store |
+| `event_outbox` | service/CLI/backlog/route modules | Durable event queue |
+| `cli_discovery` | `cli_routes.py` | Last host-local CLI discovery result |
+
+## 4. API endpoints
+
+### 4.1 OpenAI-compatible endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/v1/models` | List concrete and logical models |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| POST | `/v1/responses` | OpenAI-compatible responses shim |
+| POST | `/v1/embeddings` | OpenAI-compatible embeddings |
+| POST | `/v1/completions` | OpenAI-compatible completions |
+
+### 4.2 Core admin/operator endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Router health and context status |
+| GET | `/metrics` | Prometheus-style metrics |
+| GET | `/dashboard` | Operator dashboard shell |
+| GET | `/api/dashboard/summary` | HTMX dashboard summary fragment |
+| GET | `/admin/quota` | Quota snapshots |
+| GET | `/admin/context` | Current context projection |
+| GET | `/admin/usage` | Recent usage events |
+| GET | `/admin/circuits` | Circuit breaker state |
+
+### 4.3 Live model/model registry endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/admin/live-models` | In-memory live model cache plus durable registry summary/history |
+| POST | `/admin/live-models/refresh` | Refresh all non-LM Studio provider `/models` endpoints |
+| POST | `/admin/live-models/refresh?provider=cerebras` | Refresh one provider |
+
+### 4.4 Service registry/scanner endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/admin/services` | Registered services plus latest status/history |
+| POST | `/admin/services/scan` | Scan local/private registered services |
+| POST | `/admin/services/scan?allow_external=true` | Explicitly include external hosted service URLs |
+
+### 4.5 Agent CLI discovery endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/admin/agent-clis` | Last CLI discovery result |
+| POST | `/admin/agent-clis/discover` | Check host-local `codex`, `gemini`, and `opencode` |
+
+### 4.6 Event outbox endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/admin/outbox` | Pending and recent outbox events |
+| POST | `/admin/outbox/dispatch` | Dispatch pending events to AssistX |
+| POST | `/admin/outbox/dispatch?dry_run=true` | Preview dispatch without state mutation |
+| POST | `/admin/outbox/{event_id}/delivered` | Manually mark delivered |
+| POST | `/admin/outbox/{event_id}/failed` | Manually mark retry/dead-letter |
+
+### 4.7 Backlog dry-run endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/admin/backlog/assistx/config` | Show AssistX task intake config |
+| POST | `/admin/backlog/dry-run` | Dry-run manual backlog task selection |
+| POST | `/admin/backlog/dry-run?source=assistx` | Fetch read-only AssistX candidates and dry-run selection |
+
+### 4.8 Agent job endpoint
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/jobs/agent` | Existing placeholder/surface for future agent jobs |
+
+Current repo posture: dry-run backlog selection and agent CLI discovery exist; actual agent execution is not enabled.
+
+## 5. Configuration files
+
+| File | Purpose |
+|---|---|
+| `config/providers.example.yaml` | Provider definitions, models, quota classes, capabilities |
+| `config/policies.example.yaml` | Logical profile/stage routing policy |
+| `config/agent_workers.example.yaml` | Agent worker definitions, disabled by default |
+| `config/context.example.yaml` | Bootstrap AssistX-style context projection, nodes, providers, services |
+| `.env.example` | Runtime environment variables |
+| `docker-compose.yml` | Container deployment with Redis and persistent data volumes |
+
+## 6. Environment variables
+
+Important variables:
+
+| Variable | Purpose |
+|---|---|
+| `AUTO_ROUTER_PROVIDER_CONFIG` | Provider YAML path |
+| `AUTO_ROUTER_POLICY_CONFIG` | Policy YAML path |
+| `AUTO_ROUTER_AGENT_CONFIG` | Agent worker YAML path |
+| `AUTO_ROUTER_CONTEXT_CONFIG` | YAML or HTTP AssistX context projection |
+| `AUTO_ROUTER_REDIS_URL` | Redis quota/reservation store |
+| `AUTO_ROUTER_DATABASE_URL` | SQLite URL |
+| `AUTO_ROUTER_LOG_PROMPTS` | Prompt logging flag; should stay false |
+| `AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS` | Provider request timeout |
+| `AUTO_ROUTER_LIVE_MODEL_CACHE_TTL_SECONDS` | Live model cache TTL |
+| `AUTO_ROUTER_ASSISTX_EVENT_SINK_URL` | AssistX event sink endpoint |
+| `AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_TIMEOUT_SECONDS` | Outbox dispatch HTTP timeout |
+| `AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_MAX_ATTEMPTS` | Dead-letter threshold |
+| `AUTO_ROUTER_ASSISTX_TASKS_URL` | Read-only AssistX backlog candidate endpoint |
+| `AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS` | AssistX task intake timeout |
+
+Provider keys are loaded from environment variables such as `CEREBRAS_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, and `OPENROUTER_API_KEY`.
+
+## 7. Core request model
+
+`RouterRequest` is the normalized request object used by the policy engine and provider dispatch path.
+
+Key fields:
+
+| Field | Description |
+|---|---|
+| `request_id` | Unique request ID |
+| `route` | `chat_completions`, `responses`, `embeddings`, or `completions` |
+| `model` | Requested model or logical alias |
+| `messages` | Chat messages for chat route |
+| `input` | Responses/embedding input |
+| `max_tokens` | Output cap |
+| `stream` | Streaming request flag |
+| `tools` | Tool/function definitions |
+| `response_format` | JSON/structured output hints |
+| `metadata` | Caller metadata, profile hints, task IDs |
+| `required_capabilities` | Capability requirements |
+| `priority` | `critical`, `repo_critical`, `interactive`, `batch`, `background`, `local_only` |
+| `local_only` | Hard local-only flag |
+| `allow_cloud` | Explicit cloud permission/denial |
+| `privacy_labels` | Privacy labels from caller/context |
+| `raw_body` | Original body for provider dispatch; excluded from route events |
+
+## 8. Policy planning model
+
+### 8.1 Logical aliases
+
+| Alias | Typical profile |
+|---|---|
+| `auto/fast` | Interactive fast/free/local profile |
+| `auto/flash-start` | `flash_start_planner` |
+| `auto/high-quality` | high-priority draft/refine/judge profile |
+| `auto/code` | code/repo planning profile |
+| `auto/sophia` | `sophia_realtime` |
+| `auto/backlog-burn` | `backlog_burn` |
+| `auto/local` | local-only |
+| `auto/private` | local-only/private |
+
+### 8.2 Policy plan shape
+
+A policy plan contains one or more stages.
+
+Stage fields:
+
+| Field | Description |
+|---|---|
+| `purpose` | draft/refine/judge/final/agent-style purpose |
+| `provider_classes` | Allowed quota/provider classes |
+| `required_capabilities` | Required model capabilities |
+| `candidate_limit` | Max candidates |
+| `fallback_behavior` | Continue/fail semantics |
+
+The planner ranks provider/model candidates by profile, class, capabilities, context projection, provider status, and quota class.
+
+## 9. Provider adapter design
+
+Provider adapter responsibilities:
+
+- build outbound HTTP requests;
+- apply provider auth headers;
+- pass through supported request fields;
+- normalize response/error envelopes;
+- extract usage when available;
+- expose health and model listing;
+- enforce timeout behavior.
+
+OpenAI-compatible providers use a common adapter with provider-specific base URL, key env var, and model map.
+
+LM Studio providers are treated as local OpenAI-compatible endpoints and should be preferred when privacy/local-only policy requires local execution.
+
+## 10. Quota design
+
+### 10.1 QuotaEstimate
+
+Quota estimates include:
+
+| Field | Description |
+|---|---|
+| `request_units` | Request count cost |
+| `input_tokens` | Prompt/input token estimate |
+| `output_tokens` | Expected output token estimate |
+| `total_tokens` | Estimated total token usage |
+| `dimensions` | Provider/model quota dimensions |
+
+### 10.2 Quota operations
+
+Required quota operations:
+
+| Operation | Description |
+|---|---|
+| `estimate(model, body)` | Estimate request quota cost |
+| `can_reserve(provider, model, estimate)` | Check availability without mutation |
+| `reserve(provider, model, estimate)` | Reserve quota before dispatch |
+| `release(reservation)` | Release unused reservation after failure |
+| `record_usage(provider, model, usage)` | Persist actual usage when available |
+| `snapshots()` | Return dashboard/admin quota view |
+
+Redis is preferred for atomic reservations. In-memory fallback supports local/dev mode.
+
+## 11. Usage and route provenance
+
+### 11.1 Usage ledger
+
+The base router records usage events in SQLite for dashboard and local history.
+
+Usage includes:
+
+- request ID;
+- provider;
+- model;
+- stage;
+- route;
+- latency;
+- status;
+- token usage when available;
+- error info when applicable.
+
+### 11.2 Route execution outbox events
+
+The production wrapper patches `_record_usage()` and queues route provenance events.
+
+Event types:
 
 ```text
-RouterRequest
-  -> PolicyEngine.plan_sync()
-  -> QuotaManager.reserve()
-  -> ProviderAdapter.dispatch()
-  -> ResponseNormalizer
-  -> UsageLedger.record()
+router.execution_stage.completed
+router.execution_stage.failed
 ```
 
-### 3.2 Agent worker plane
+Payload fields:
 
-The agent worker plane handles repo-scoped or multi-step tasks using CLI agents. Jobs may run asynchronously and produce artifacts.
+| Field | Description |
+|---|---|
+| `request_id` | Router request ID |
+| `route` | OpenAI-compatible route |
+| `requested_model` | Requested alias/model |
+| `priority` | Request priority |
+| `profile` | Explicit profile metadata, when present |
+| `stage` | Execution stage |
+| `provider` | Provider name |
+| `model` | Provider model alias |
+| `status` | completed/failed |
+| `status_code` | HTTP/provider status |
+| `latency_ms` | Runtime latency |
+| `input_tokens` | Input usage/estimate |
+| `output_tokens` | Output usage |
+| `total_tokens` | Total usage/estimate |
+| `quota_units` | Quota dimensions |
+| `local_only` | Local-only flag |
+| `allow_cloud` | Cloud permission |
+| `stream` | Streaming flag |
+| `error_type` | Failure class |
+| `error_message` | Short failure detail |
+| `context_revision` | Context revision |
+| `context_source` | Context source |
+
+Excluded fields:
+
+- raw prompt bodies;
+- messages;
+- tool payloads;
+- response content;
+- secrets.
+
+## 12. AssistX context projection
+
+`ContextSnapshot` fields:
+
+| Field | Description |
+|---|---|
+| `revision` | Projection revision |
+| `source` | Source name/URL |
+| `generated_at` | Unix timestamp |
+| `nodes` | `ContextNode[]` |
+| `providers` | `ContextProvider[]` |
+| `services` | global `ContextService[]` |
+| `metadata` | arbitrary projection metadata |
+
+### 12.1 ContextNode
+
+| Field | Description |
+|---|---|
+| `node_id` | Stable node ID |
+| `display_name` | Operator label |
+| `lane` | `local`, `free_api`, `paperclip`, `blocked` |
+| `local` | Local node flag |
+| `can_use_free_api` | Whether free API lane is available |
+| `running` | Node heartbeat/status |
+| `capabilities` | Capability tags |
+| `detail` | Operator note |
+| `services` | Node-owned service links |
+
+### 12.2 ContextProvider
+
+| Field | Description |
+|---|---|
+| `provider` | Provider name |
+| `lane` | Provider lane |
+| `local` | Local provider flag |
+| `can_use_free_api` | Free API permission |
+| `free_api_credits` | Optional credit value |
+| `blocked` | Hard block flag |
+| `node_id` | Owning node |
+| `aliases` | Provider/model aliases |
+| `capabilities` | Capability tags |
+| `detail` | Operator note |
+| `services` | Provider-owned service links |
+
+### 12.3 ContextService
+
+| Field | Description |
+|---|---|
+| `service_id` | Stable service ID |
+| `name` | Display name |
+| `url` | Launch URL |
+| `service_type` | Service category |
+| `node_id` | Owning node |
+| `provider` | Owning provider |
+| `status` | `unknown`, `online`, `degraded`, `offline`, `blocked` |
+| `health_url` | Probe URL |
+| `tags` | UI/filter tags |
+| `detail` | Operator note |
+| `priority` | Sort priority |
+
+## 13. Service registry and scanner
+
+### 13.1 Scanner rules
+
+`service_scanner.py` probes:
+
+| Scheme | Probe |
+|---|---|
+| `http://` | HTTP GET |
+| `https://` | HTTP GET; external skipped unless allowed |
+| `bolt://` | TCP connect |
+| `redis://` | TCP connect |
+| `tcp://` | TCP connect |
+
+Local/private host detection allows:
+
+- localhost;
+- loopback;
+- RFC1918/private IPs;
+- link-local IPs;
+- single-label hostnames;
+- `.lan` hostnames.
+
+### 13.2 ServiceProbeResult
+
+| Field | Description |
+|---|---|
+| `service_id` | Service ID |
+| `name` | Service name |
+| `url` | Probed URL |
+| `status` | ServiceStatus |
+| `checked_at` | Unix timestamp |
+| `latency_ms` | Latency |
+| `status_code` | HTTP status |
+| `error` | Failure detail |
+| `skipped` | Whether skipped |
+| `reason` | Skip/failure reason |
+
+## 14. Durable service store
+
+SQLite table: `service_scan_events`.
+
+Columns:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer primary key | autoincrement |
+| `service_id` | text | indexed with checked_at |
+| `name` | text | service name |
+| `url` | text | probed URL |
+| `status` | text | online/offline/degraded/etc. |
+| `checked_at` | integer | unix timestamp |
+| `latency_ms` | integer nullable | probe latency |
+| `status_code` | integer nullable | HTTP status |
+| `error` | text nullable | short error |
+| `skipped` | integer | 0/1 |
+| `reason` | text nullable | skip/failure reason |
+
+Startup hydrates the latest status into `state.service_status` and merges it into `state.context`.
+
+## 15. Live model cache and durable model registry
+
+### 15.1 LiveModelSnapshot
+
+| Field | Description |
+|---|---|
+| `provider` | Provider name |
+| `ok` | Refresh success flag |
+| `fetched_at` | Unix timestamp |
+| `expires_at` | Cache expiry |
+| `models` | Normalized model records |
+| `error` | Error string |
+| `stale` | Computed expiry flag |
+
+### 15.2 SQLite table: `model_registry_snapshots`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer primary key | autoincrement |
+| `provider` | text | indexed with fetched_at |
+| `ok` | integer | 0/1 |
+| `fetched_at` | integer | unix timestamp |
+| `expires_at` | integer | unix timestamp |
+| `model_count` | integer | count at refresh |
+| `error` | text nullable | refresh error |
+| `models_json` | text | normalized model list |
+
+Refresh flow:
 
 ```text
-AgentJobRequest
-  -> AgentPolicyEngine.plan_job()
-  -> AgentQuotaManager.reserve()
-  -> SandboxManager.prepare_worktree()
-  -> AgentWorkerAdapter.run()
-  -> ArtifactCollector
-  -> optional test/lint runner
-  -> UsageLedger.record_agent_event()
+POST /admin/live-models/refresh
+  -> provider adapter list_models()
+  -> LiveModelSnapshot
+  -> LiveModelCache.put()
+  -> ModelRegistryStore.save_snapshot()
 ```
 
-## 4. Agent job model
-
-```python
-class AgentJobRequest(BaseModel):
-    job_id: str
-    repo_url: str | None = None
-    repo_path: str | None = None
-    branch: str | None = None
-    task: str
-    priority: Literal["repo_critical", "critical", "batch", "background"]
-    preferred_workers: list[str] = []
-    allowed_workers: list[str] = []
-    max_runtime_seconds: int = 1800
-    allow_write: bool = False
-    allow_commit: bool = False
-    allow_network: bool = True
-    commands_allowlist: list[str] = []
-    expected_artifacts: list[str] = []
-    metadata: dict = {}
-
-class AgentJobResult(BaseModel):
-    job_id: str
-    worker_name: str
-    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
-    summary: str | None
-    artifacts: list[dict]
-    stdout_path: str | None
-    stderr_path: str | None
-    patch_path: str | None
-    commit_sha: str | None
-    tests_run: list[dict]
-    usage: dict
-```
-
-## 5. Provider adapter interface
-
-```python
-class ProviderAdapter(Protocol):
-    name: str
-    provider_type: str
-
-    async def list_models(self) -> list[ModelInfo]: ...
-    async def chat_completions(self, request: RouterRequest) -> ProviderResponse: ...
-    async def responses(self, request: RouterRequest) -> ProviderResponse: ...
-    async def embeddings(self, request: RouterRequest) -> ProviderResponse: ...
-    async def completions(self, request: RouterRequest) -> ProviderResponse: ...
-    async def health(self) -> ProviderHealth: ...
-    def estimate_quota(self, request: RouterRequest) -> QuotaEstimate: ...
-    def parse_rate_limit_headers(self, headers: Mapping[str, str]) -> RateLimitSnapshot: ...
-```
-
-Adapters implement:
-
-- OpenAI-compatible HTTP transport;
-- provider-specific auth and headers;
-- error mapping;
-- rate-limit header parsing;
-- usage extraction;
-- response normalization;
-- feature support flags for streaming, JSON mode, tools, embeddings, vision, and long context.
-
-## 6. Agent worker adapter interface
-
-```python
-class AgentWorkerAdapter(Protocol):
-    name: str
-    worker_type: Literal["codex", "gemini_cli", "copilot", "opencode", "custom"]
-
-    async def health(self) -> AgentWorkerHealth: ...
-    async def estimate_usage(self, job: AgentJobRequest) -> AgentUsageEstimate: ...
-    async def run(self, job: AgentJobRequest, sandbox: SandboxContext) -> AgentJobResult: ...
-```
-
-### 6.1 Codex worker
-
-Purpose:
-
-- premium implementation pass;
-- difficult debugging;
-- repo-wide refactor planning;
-- final review of critical code changes.
-
-Policy:
-
-- reserve for `repo_critical` and selected `critical` tasks;
-- do not use for low-value background work;
-- record plan tier/manual quota metadata rather than assuming token-level API accounting.
-
-### 6.2 Gemini CLI worker
-
-Purpose:
-
-- large-context codebase review;
-- repo Q&A;
-- generated implementation plans;
-- documentation and test suggestions.
-
-Policy:
-
-- strong free worker for repo analysis;
-- suitable for surplus free-use burn-down if allowed;
-- run non-interactively where possible.
-
-### 6.3 GitHub Copilot worker
-
-Purpose:
-
-- focused code assistance;
-- selected CLI/IDE-adjacent review;
-- patch suggestions where available.
-
-Policy:
-
-- model as monthly constrained quota;
-- use for developer productivity and reviews, not generic chat;
-- track prompt/job count and manual remaining allowance.
-
-### 6.4 OpenCode worker
-
-Purpose:
-
-- local terminal agent orchestration;
-- provider-flexible coding tasks;
-- integration with existing OpenCode provider config.
-
-Policy:
-
-- good default worker when provider configuration is already available;
-- may be local-only or cloud-backed depending on its provider settings;
-- record downstream provider where known.
-
-## 7. Policy engine
-
-The policy engine produces an execution plan rather than a single provider.
-
-```python
-class ExecutionStage(BaseModel):
-    purpose: Literal["draft", "refine", "judge", "repair", "final"]
-    candidates: list[ProviderCandidate]
-    required_capabilities: set[str]
-    quota_class: str
-    allow_local_fallback: bool = True
-    max_attempts: int = 1
-
-class AgentStage(BaseModel):
-    purpose: Literal["repo_analyze", "implement", "review", "test", "repair"]
-    candidates: list[AgentWorkerCandidate]
-    allow_write: bool
-    allow_commit: bool
-    max_runtime_seconds: int
-
-class ExecutionPlan(BaseModel):
-    sync_stages: list[ExecutionStage] = []
-    agent_stages: list[AgentStage] = []
-    final_selection_strategy: Literal[
-        "first_success",
-        "best_judged",
-        "refine_over_draft",
-        "agent_artifact",
-    ]
-```
-
-### 7.1 Example high-priority code answer plan
+Startup flow:
 
 ```text
-1. draft: local LM Studio coding model
-2. refine: Mistral/Gemini/Cerebras/Groq high-quality free model
-3. judge: different provider if quota is available
-4. final: return refined answer unless judge rejects it
+ModelRegistryStore.latest_snapshots()
+  -> LiveModelCache.put(snapshot)
 ```
 
-### 7.2 Example repo implementation plan
+## 16. Agent CLI discovery
+
+### 16.1 Candidates
+
+| Name | Command | Type |
+|---|---|---|
+| `codex` | `codex` | `codex` |
+| `gemini-cli` | `gemini` | `gemini_cli` |
+| `opencode` | `opencode` | `opencode` |
+
+### 16.2 Discovery result
+
+| Field | Description |
+|---|---|
+| `name` | CLI name |
+| `command` | Command checked |
+| `type` | CLI type |
+| `installed` | Command found on PATH |
+| `runnable` | Version check succeeded |
+| `path` | Resolved binary path |
+| `node_id` | Hostname/node ID |
+| `checked_at` | Unix timestamp |
+| `version` | First version output line |
+| `error` | Error detail |
+| `credit_hint` | Manual quota/credit hint |
+| `notes` | Operator note |
+
+Discovery emits `router.agent_cli.discovered` events when requested.
+
+## 17. AssistX task intake
+
+### 17.1 Client
+
+`AssistXTaskClient` is read-only.
+
+Configuration:
 
 ```text
-1. repo_analyze: Gemini CLI or OpenCode
-2. implement: Codex or OpenCode depending on priority/quota
-3. test: local shell command allow-list
-4. review: Gemini CLI/Copilot/Groq/Cerebras judge pass
-5. final: return patch summary, artifacts, and next commands
+AUTO_ROUTER_ASSISTX_TASKS_URL=http://assistx:8000/api/router/backlog-candidates
+AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS=10
 ```
 
-## 8. Quota manager
-
-### 8.1 Responsibilities
-
-- Track configured limits.
-- Estimate request cost before dispatch.
-- Atomically reserve quota.
-- Reconcile with actual usage after response.
-- Consume expiring quota intentionally for high-priority and batch jobs.
-- Open circuit breakers on 429/5xx/timeout patterns.
-- Track agent-worker usage separately from API-provider usage.
-
-### 8.2 Quota dimensions
+Request:
 
 ```text
-rpm        requests per minute
-rpd        requests per day
-tpm        tokens per minute
-tph        tokens per hour
-tpd        tokens per day
-tpmth      tokens per month
-neurons_d  neurons per day
-premium_m  premium requests per month
-jobs_d     agent jobs per day
-jobs_m     agent jobs per month
-conc       concurrency
+GET <tasks_url>?limit=<n>&queue=backlog&dry_run=true
 ```
 
-### 8.3 Redis key examples
+Accepted response shapes:
+
+```json
+[{"id": "task-1", "title": "..."}]
+```
+
+or:
+
+```json
+{"tasks": []}
+{"items": []}
+{"results": []}
+{"backlog": []}
+```
+
+### 17.2 Normalized BacklogTaskCandidate
+
+| Field | Description |
+|---|---|
+| `task_id` | AssistX task ID or fallback |
+| `title` | Display title |
+| `prompt` | Prompt/description for planning only |
+| `model` | default `auto/backlog-burn` |
+| `priority` | batch/background preferred |
+| `local_only` | Preserved from task/privacy |
+| `allow_cloud` | Explicit or derived |
+| `sensitive` | Preserved/derived from privacy labels |
+| `max_completion_tokens` | Planning cap |
+| `metadata` | Includes `assistx_source`, raw status, queue |
+
+Privacy mapping:
+
+| AssistX value | Normalized behavior |
+|---|---|
+| `privacy=private` | `local_only=true`, `sensitive=true`, `allow_cloud=false` |
+| `privacy=secret` | `local_only=true`, `sensitive=true`, `allow_cloud=false` |
+| `privacy=voice_auth` | sensitive skip path |
+| `privacy=enrollment_sample` | sensitive skip path |
+
+## 18. Dry-run backlog scheduler
+
+### 18.1 Input
+
+`BacklogDryRunRequest`:
+
+| Field | Description |
+|---|---|
+| `tasks` | Manual task candidates; replaced by AssistX candidates when `source=assistx` |
+| `enqueue_events` | Whether to enqueue outbox decisions |
+| `preserve_realtime_reserve` | Reserved for future reserve logic |
+| `max_tasks` | Optional local cap |
+
+### 18.2 Decision logic
 
 ```text
-quota:{provider}:{model}:rpm:{minute_epoch}
-quota:{provider}:{model}:rpd:{date}
-quota:{provider}:{model}:tpm:{minute_epoch}
-quota:{provider}:{model}:tpd:{date}
-quota:{provider}:{model}:neurons:{date}
-quota:{agent_worker}:jobs_m:{yyyy_mm}
-quota:{agent_worker}:premium_m:{yyyy_mm}
-circuit:{provider}:{model}
-circuit:agent:{agent_worker}
+for task in candidates:
+  if sensitive -> skipped
+  if local_only or allow_cloud is false -> skipped
+  if priority not batch/background -> skipped
+  build RouterRequest(model=auto/backlog-burn)
+  plan = policy_engine.plan(request)
+  for each stage candidate:
+    estimate = quota.estimate(...)
+    if quota.can_reserve(...): selected
+  else skipped no eligible provider/model
 ```
 
-### 8.4 Reservation algorithm
+No quota is reserved. No provider is called. No task is claimed.
+
+### 18.3 Decision output
+
+`BacklogDecision`:
+
+| Field | Description |
+|---|---|
+| `task_id` | Task ID |
+| `title` | Title |
+| `status` | selected/skipped |
+| `reason` | Human-readable reason |
+| `profile` | Policy profile |
+| `stage` | Selected stage |
+| `provider` | Selected provider |
+| `model` | Selected model |
+| `quota_estimate` | Estimate dict |
+| `event_id` | Outbox event ID |
+
+Outbox events:
 
 ```text
-estimate units
-check all quota dimensions
-reserve all dimensions atomically
-send request or run job
-reconcile usage and headers/manual counters
-release unused reservation or mark overage
-record event
+router.backlog_job.selected
+router.backlog_job.skipped
 ```
 
-## 9. Burn-down scheduler
+## 19. Event outbox
 
-The scheduler identifies quota that will expire and raises provider priority for useful work.
+SQLite table: `event_outbox`.
 
-Signals:
+| Column | Type | Notes |
+|---|---|---|
+| `id` | integer primary key | autoincrement |
+| `event_id` | text unique | UUID |
+| `event_type` | text | event name |
+| `source_service` | text | default `auto-router` |
+| `idempotency_key` | text unique | sink dedupe key |
+| `payload_json` | text | event payload |
+| `status` | text | pending/retry/delivered/dead_letter |
+| `attempts` | integer | dispatch attempts |
+| `last_error` | text nullable | latest dispatch error |
+| `created_at` | integer | unix timestamp |
+| `updated_at` | integer | unix timestamp |
 
-- reset time within configured horizon;
-- quota remaining above target reserve;
-- queued batch/background work;
-- high-priority deliverables awaiting refinement;
+### 19.1 Implemented event types
+
+| Event type | Producer |
+|---|---|
+| `router.service_snapshot.recorded` | service scanner |
+| `router.agent_cli.discovered` | CLI discovery |
+| `router.execution_stage.completed` | route event patch |
+| `router.execution_stage.failed` | route event patch |
+| `router.backlog_job.selected` | dry-run scheduler |
+| `router.backlog_job.skipped` | dry-run scheduler |
+
+### 19.2 Dispatcher behavior
+
+`AssistXEventDispatcher` reads pending/retry events and POSTs them to `AUTO_ROUTER_ASSISTX_EVENT_SINK_URL`.
+
+Rules:
+
+| Response | Result |
+|---|---|
+| `2xx` | delivered |
+| `409` | delivered/idempotent duplicate |
+| `408`, `425`, `429`, `500`, `502`, `503`, `504` | retry unless max attempts reached |
+| other non-2xx | dead-letter or retry based on status/max attempts |
+| network exception | retry |
+| sink not configured | report not configured; do not mutate outbox |
+| dry-run | report events; do not mutate outbox |
+
+## 20. Dashboard implementation
+
+Templates:
+
+| Template | Purpose |
+|---|---|
+| `templates/base.html` | Dark operator shell |
+| `templates/dashboard.html` | Hero/actions and HTMX summary loader |
+| `templates/fragments/dashboard_summary.html` | Main dashboard telemetry cards |
+
+Dashboard data sources:
+
+- quota snapshots;
+- context projection;
+- service registry/status;
 - provider health;
-- agent-worker availability;
-- monthly quota pace versus target.
+- agent worker config;
+- recent usage;
+- Cerebras flash usage heuristic;
+- node/provider service links.
 
-Policy example:
+Current dashboard controls:
 
-```text
-If Cloudflare daily neurons reset in < 4h and > 40% remains:
-  allow background summarization/classification jobs to consume surplus.
+- refresh dashboard;
+- refresh Cerebras live models;
+- scan local services.
 
-If Groq daily token budget has > 50% remaining after 18:00 local:
-  prefer Groq for interactive low-latency refine passes.
+Future controls should include:
 
-If Gemini CLI daily/free usage remains and repo review jobs are queued:
-  run repo analysis before daily reset, but do not modify files unless allow_write=true.
+- discover agent CLIs;
+- run backlog dry-run;
+- dispatch outbox dry-run;
+- live model inventory table;
+- outbox status card.
 
-If Codex monthly/middle-tier usage is below target pace:
-  allow Codex for repo_critical implementation/review tasks.
+## 21. Persistence and startup hydration
+
+Startup hydration performed by production route registration:
+
+| Store | Hydration behavior |
+|---|---|
+| service store | latest scan results populate service cache and context statuses |
+| model registry | latest provider snapshots populate live model cache |
+| event outbox | no hydration needed; read directly from SQLite |
+| usage ledger | read by admin/dashboard endpoints |
+
+## 22. Error handling
+
+| Area | Behavior |
+|---|---|
+| Provider dispatch error | record usage failure; release reservation when possible; try fallback candidate/stage |
+| Live model refresh error | cache and persist error snapshot with short TTL |
+| Service scan external URL | skipped unless `allow_external=true` |
+| Service scan failure | record offline/error result |
+| CLI missing | discovery result installed=false/runnable=false |
+| AssistX tasks URL missing | `/admin/backlog/dry-run?source=assistx` returns 400 |
+| AssistX event sink missing | dispatch reports not configured and does not mutate outbox |
+| Dispatcher transient error | mark retry |
+| Dispatcher max attempts | mark dead_letter |
+
+## 23. Security controls
+
+- Prompt logging disabled by default.
+- Admin endpoints should be private LAN/Tailscale only.
+- Service scanner skips external URLs by default.
+- CLI discovery only checks local PATH and version commands.
+- Backlog scheduler is dry-run/read-only.
+- Route events exclude prompts/responses/raw bodies.
+- Agent write/commit/push modes are not implemented.
+- Cloud routing must respect `local_only`, `allow_cloud=false`, and privacy metadata.
+
+## 24. Test coverage map
+
+Current tests cover:
+
+| Test file | Area |
+|---|---|
+| `test_live_models.py` | live model cache and provider model normalization |
+| `test_model_registry.py` | durable model registry |
+| `test_context_services.py` | service registry helpers |
+| `test_service_scanner.py` | service scanner safety behavior |
+| `test_service_store.py` | durable service scan store |
+| `test_service_routes.py` | service scan merge/outbox behavior |
+| `test_event_outbox.py` | outbox state and idempotency |
+| `test_event_dispatcher.py` | AssistX event dispatch behavior |
+| `test_cli_discovery.py` | CLI discovery outbox behavior |
+| `test_route_events.py` | route provenance payloads |
+| `test_route_event_patch.py` | live wrapper route-event patch |
+| `test_backlog_scheduler.py` | dry-run backlog selection |
+| `test_assistx_tasks.py` | AssistX task intake normalization |
+
+Run:
+
+```bash
+make smoke
+pytest -q
 ```
 
-## 10. Data persistence
+## 25. Implementation gaps
 
-SQLite is sufficient for bootstrap. Postgres can replace it without changing the domain model.
+Known remaining gaps:
 
-### 10.1 Tables
-
-```sql
-providers(
-  id text primary key,
-  name text,
-  type text,
-  base_url text,
-  enabled boolean,
-  priority integer,
-  created_at timestamp,
-  updated_at timestamp
-);
-
-models(
-  id text primary key,
-  provider_id text,
-  alias text,
-  provider_model text,
-  capabilities_json text,
-  context_window integer,
-  enabled boolean
-);
-
-agent_workers(
-  id text primary key,
-  name text,
-  worker_type text,
-  command text,
-  enabled boolean,
-  quota_policy_json text,
-  sandbox_policy_json text,
-  created_at timestamp,
-  updated_at timestamp
-);
-
-quota_limits(
-  id text primary key,
-  owner_type text,
-  owner_id text,
-  dimension text,
-  limit_value integer,
-  reset_policy_json text
-);
-
-usage_events(
-  id text primary key,
-  request_id text,
-  provider_id text,
-  model_id text,
-  route text,
-  priority text,
-  input_tokens integer,
-  output_tokens integer,
-  quota_units_json text,
-  status_code integer,
-  latency_ms integer,
-  error_type text,
-  created_at timestamp
-);
-
-agent_jobs(
-  id text primary key,
-  worker_id text,
-  repo_url text,
-  repo_path text,
-  branch text,
-  task_hash text,
-  priority text,
-  status text,
-  allow_write boolean,
-  allow_commit boolean,
-  summary text,
-  created_at timestamp,
-  started_at timestamp,
-  finished_at timestamp
-);
-
-agent_artifacts(
-  id text primary key,
-  job_id text,
-  artifact_type text,
-  path text,
-  sha256 text,
-  summary text,
-  created_at timestamp
-);
-
-execution_stages(
-  id text primary key,
-  request_id text,
-  stage text,
-  owner_type text,
-  owner_id text,
-  model_id text,
-  outcome text,
-  latency_ms integer,
-  created_at timestamp
-);
-
-circuit_breakers(
-  owner_type text,
-  owner_id text,
-  state text,
-  opened_until timestamp,
-  last_error text,
-  updated_at timestamp
-);
-```
-
-## 11. Dashboard implementation
-
-MVP dashboard is server-rendered HTML from FastAPI:
-
-- `/dashboard` returns a simple page;
-- page polls `/admin/quota`, `/health`, and `/admin/agent-workers`;
-- no frontend build chain required for phase 1.
-
-Dashboard cards:
-
-- provider health;
-- API quota remaining;
-- agent-worker quota remaining;
-- daily burn-down progress;
-- monthly usage pace;
-- queued/running agent jobs;
-- recent high-priority stage history;
-- LM Studio endpoint status;
-- circuit breakers.
-
-Later:
-
-- React or HTMX UI;
-- Prometheus/Grafana integration;
-- historical burn-down graphs;
-- manual provider/worker enable-disable controls;
-- job artifact browser.
-
-## 12. Local LM Studio discovery
-
-Static config first:
-
-```yaml
-local_fallbacks:
-  - name: lmstudio-r2d2
-    base_url: http://r2d2:1234/v1
-  - name: lmstudio-deathstar
-    base_url: http://deathstar-XPS-8920:1234/v1
-```
-
-Future discovery:
-
-- configured LAN/Tailscale CIDR scan;
-- `/v1/models` probing;
-- benchmark loop;
-- loaded-model inventory;
-- OpenCode config export;
-- endpoint health scoring.
-
-## 13. Sandbox and command execution
-
-Agent workers run in controlled directories.
-
-MVP policy:
-
-- clone/copy repo into an ephemeral worktree;
-- do not write to the canonical repo unless explicitly enabled;
-- allow only configured commands;
-- capture stdout/stderr;
-- store patch files before commit;
-- require explicit `allow_commit=true` before committing;
-- require explicit branch configuration before pushing.
-
-Recommended command allow-list examples:
-
-```yaml
-commands_allowlist:
-  - pytest
-  - ruff check
-  - mypy
-  - npm test
-  - npm run lint
-  - pnpm test
-  - docker compose config
-```
-
-## 14. Configuration files
-
-### 14.1 `providers.yaml`
-
-Defines API providers, models, capabilities, quota dimensions, and fallback priority.
-
-### 14.2 `agent_workers.yaml`
-
-Defines CLI agents.
-
-```yaml
-agent_workers:
-  - name: codex
-    type: codex
-    command: codex
-    enabled: true
-    quota:
-      dimension: premium_m
-      mode: manual_monthly
-    policy:
-      allowed_priorities: [repo_critical, critical]
-      allow_write_default: false
-
-  - name: gemini-cli
-    type: gemini_cli
-    command: gemini
-    enabled: true
-    quota:
-      dimension: jobs_d
-      mode: manual_daily
-    policy:
-      allowed_priorities: [repo_critical, critical, batch]
-
-  - name: opencode
-    type: opencode
-    command: opencode
-    enabled: true
-    policy:
-      allowed_priorities: [repo_critical, critical, batch, background]
-```
-
-### 14.3 `policies.yaml`
-
-Defines model aliases and multi-stage plans.
-
-## 15. Testing strategy
-
-### 15.1 Unit tests
-
-- Quota reservations.
-- Routing policy decisions.
-- Privacy classification.
-- Model alias resolution.
-- Agent worker selection.
-- Circuit breaker state transitions.
-
-### 15.2 Contract tests
-
-- OpenAI-compatible request/response envelopes.
-- Streaming SSE format.
-- Embedding response shape.
-- Error envelope compatibility.
-
-### 15.3 Integration tests
-
-- LM Studio with `OPENAI_BASE_URL=http://localhost:1234/v1`.
-- Mock external providers returning 429/5xx.
-- Mock CLI agent command producing patch artifacts.
-- Dashboard JSON endpoints.
-
-### 15.4 Acceptance criteria
-
-- A standard OpenAI-compatible client can use `/v1/chat/completions` without knowing a router is present.
-- A high-priority request can execute draft + refine stages.
-- A repo-critical job can queue an agent worker and capture artifacts.
-- Exhausted quota falls back cleanly.
-- Local-only requests never touch cloud or cloud-backed agent workers.
+1. AssistX task claim/approval flow.
+2. Remote node self-report endpoint for services and CLIs.
+3. Model registry write-back events.
+4. Dashboard widgets for live model registry, outbox, backlog dry-run, and CLI discovery.
+5. Background scan/refresh/dispatch cadence with allow-lists and jitter.
+6. Agent worktree sandbox and command allow-list enforcement.
+7. Route skipped-event provenance for quota/privacy/circuit skips.
+8. Prometheus metrics for service status, model registry, outbox backlog, and backlog selection.
