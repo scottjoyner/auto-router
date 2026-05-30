@@ -1,323 +1,594 @@
-# High-Level Design: auto-router
+# High-Level Design: auto-router Architecture
 
-## 1. Purpose
+## 1. Executive summary
 
-`auto-router` is a local containerized LLM routing layer that presents a standard OpenAI/LM Studio-compatible API while scheduling work across free cloud LLM quota, CLI-based agent tools, and local LM Studio endpoints.
+`auto-router` is a local-first LLM routing control plane. It exposes an OpenAI/LM Studio-compatible API while selecting between local LM Studio endpoints, free/hosted model providers, Cerebras flash-start planning, dry-run backlog scheduling, service discovery, model registry, agent CLI discovery, and AssistX/Neo4j provenance write-back.
 
-The primary optimization target is:
+The router is not just a proxy. It is an operations node that decides what can run, where it can run, which quota it may consume, what must stay local, and what provenance should be sent back to AssistX.
 
-> Maximize useful consumption of legitimate free daily/monthly LLM quota for high-priority deliverables while preserving quality, privacy, reliability, observability, and local fallback.
+Primary goals:
 
-The system should not just be a cheapest-provider proxy. It should be an orchestration layer that knows when to:
+1. Provide a standard local OpenAI-compatible endpoint for Sophia, AssistX, local tools, and LM-compatible clients.
+2. Use legitimate free API quota intentionally while protecting realtime/Sophia capacity.
+3. Keep local LM Studio endpoints as privacy-preserving fallback.
+4. Treat Cerebras as a flash-start planner node for fast decomposition and backlog triage.
+5. Discover services, provider models, and agent CLIs without confusing discovery with execution approval.
+6. Persist operational telemetry locally and emit durable events to AssistX/Neo4j.
+7. Keep backlog and agent execution dry-run/read-only until explicit claim/approval/sandbox flows exist.
 
-1. draft locally with inexpensive/local models;
-2. refine with stronger free-tier models;
-3. judge or repair high-value deliverables with a different model/provider;
-4. delegate repo-scoped implementation work to CLI agents;
-5. fall back to local LM Studio endpoints when external quota is depleted or unsafe to use.
+## 2. Current system boundary
 
-## 2. Key decisions
+### In scope
 
-### Decision 1: split the architecture into two execution planes
+- OpenAI-compatible API routing.
+- Policy/profile selection for logical aliases.
+- Quota estimation, reservation, usage accounting, and fallback.
+- Cerebras WSE-3 flash-start planning lane.
+- AssistX/Neo4j context projection consumption.
+- Service registry and private-network service scanning.
+- Durable provider model registry.
+- Host-local agent CLI discovery for Codex, Gemini CLI, and OpenCode.
+- Durable event outbox and operator-triggered AssistX dispatch.
+- Dry-run backlog selection from manual payloads or read-only AssistX backlog candidates.
+- Dashboard/operator console.
+- Production Docker Compose / bare-metal deployment support.
 
-`auto-router` will have two coordinated execution planes:
+### Out of scope for current implementation
 
-| Plane | Purpose | Examples |
-|---|---|---|
-| API routing plane | Synchronous OpenAI/LM Studio-compatible request routing | `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` routed to Gemini API, Groq, Cerebras, Mistral, OpenRouter, Cloudflare, Z.AI, LM Studio |
-| Agent worker plane | Repo/task automation using CLI-based coding agents | Codex CLI / Codex plan, Gemini CLI, GitHub Copilot Free/CLI/agent surfaces, OpenCode CLI |
+- Automatic AssistX task claiming.
+- Actual backlog task execution.
+- Agent worktree write/commit/push automation.
+- Remote node self-report endpoint.
+- Background schedulers for scans/model refresh/outbox dispatch.
+- Public internet exposure without auth/TLS.
+- Provider quota evasion or account/key rotation to bypass limits.
 
-The API routing plane remains the main path for chat, completions, embeddings, and structured-output calls. The agent worker plane is used for longer-running deliverables such as repo implementation, code review, test generation, documentation passes, refactors, and patch validation.
-
-### Decision 2: CLI agents are not treated as generic chat providers
-
-Codex, Gemini CLI, Copilot, and OpenCode are valuable, but they are not all clean drop-in OpenAI-compatible backends. The router will model them as `agent_workers` with job queues, repo sandboxes, prompt templates, budget metadata, and captured outputs instead of forcing them into the same synchronous `/v1/chat/completions` provider interface.
-
-### Decision 3: high-priority deliverables get multi-stage treatment
-
-High-priority deliverables should normally use a local draft plus a stronger free-tier refine or judge pass. This is the default pattern for architecture docs, implementation plans, code reviews, test plans, and repo-wide changes.
-
-### Decision 4: daily free quota should be intentionally consumed
-
-The router should preserve reserve during the day, then aggressively use surplus daily quota before reset on useful work. Surplus work can include code review passes, documentation improvement, test generation, summarization, and low-risk batch enrichment.
-
-### Decision 5: privacy defaults to local for sensitive workloads
-
-Requests tagged `local_only`, matching sensitive patterns, or carrying private files/repos must route only to LM Studio/local tools unless the operator explicitly permits cloud use for that task.
-
-### Decision 6: SQLite + Redis is the MVP persistence stack
-
-MVP uses Redis for atomic quota reservations and SQLite for durable usage/audit data. The schema must be Postgres-compatible so the stack can later move to Redis + Postgres without redesign.
-
-### Decision 7: dashboard is first-class
-
-A small dashboard is required from the first implementation phase. It should show quota remaining, projected burn-down, provider health, agent-worker usage, fallback events, and LM Studio status.
-
-### Decision 8: Neo4j is the context authority, not the router
-
-The router should not invent long-lived context or capability state from request payloads alone. AssistX owns the graph-backed context fabric and publishes the facts the router needs to make safe execution decisions. The router consumes those facts to decide:
-
-- whether a request must stay local;
-- whether a provider may spend legitimate free API credits;
-- which worker or provider lane is currently allowed;
-- what provenance to attach to the response or artifact.
-
-Static YAML remains useful for bootstrap and local development, but the design target is graph-synced context and lane metadata coming from AssistX. The router can point `AUTO_ROUTER_CONTEXT_CONFIG` at AssistX `/api/context/projection` to consume the live snapshot directly.
-
-## 3. Non-goals
-
-- No evasion of provider limits.
-- No account/key farming.
-- No automated attempts to bypass per-user, per-project, or per-plan quotas.
-- No unapproved cloud processing of sensitive data.
-- No dependency on a single remote provider.
-- No provider-specific client lock-in.
-- No assumption that a CLI agent has the same latency or semantics as a chat API.
-
-## 4. Core architecture
+## 3. High-level architecture
 
 ```text
-OpenAI-compatible clients / local tools / scripts
-  -> auto-router FastAPI service
-      -> request normalizer
-      -> privacy classifier
-      -> task + priority classifier
-      -> policy engine
-      -> execution planner
-          -> API routing plane
-              -> quota reservation
-              -> provider adapter dispatch
-              -> response normalizer
-          -> agent worker plane
-              -> job queue
-              -> repo sandbox / worktree
-              -> CLI invocation adapter
-              -> diff/test/output collector
-      -> usage ledger
-      -> quota manager
-      -> dashboard + metrics
-  -> free cloud APIs
-  -> CLI coding agents
-  -> local LM Studio endpoints
+Sophia / AssistX / OpenAI-compatible clients / operator dashboard
+        |
+        v
++---------------------------------------------------------------+
+| auto-router FastAPI service                                   |
+|                                                               |
+|  OpenAI-compatible API                                        |
+|    - /v1/models                                               |
+|    - /v1/chat/completions                                     |
+|    - /v1/responses                                            |
+|    - /v1/embeddings                                           |
+|    - /v1/completions                                          |
+|                                                               |
+|  Routing control plane                                        |
+|    - request normalization                                    |
+|    - policy/profile selection                                 |
+|    - privacy/local-only checks                                |
+|    - quota estimation/reservation                             |
+|    - provider candidate ranking                               |
+|    - response/error normalization                             |
+|                                                               |
+|  Operations plane                                             |
+|    - dashboard                                                |
+|    - service registry + scanner                               |
+|    - durable model registry                                   |
+|    - agent CLI discovery                                      |
+|    - dry-run backlog scheduler                                |
+|    - durable event outbox + AssistX dispatcher                 |
++---------------------------------------------------------------+
+        |                 |                    |
+        v                 v                    v
+ local LM Studio     free hosted APIs      AssistX/Neo4j
+ endpoints           Cerebras/Groq/etc.    context + event sink
+        |
+        v
+ future agent CLIs: Codex / Gemini CLI / OpenCode
 ```
 
-## 5. Execution planes
-
-### 5.1 API routing plane
-
-The API routing plane handles standard LLM calls. It should support the API surface commonly expected from LM Studio and OpenAI-compatible clients:
-
-- `GET /v1/models`
-- `POST /v1/chat/completions`
-- `POST /v1/responses`
-- `POST /v1/embeddings`
-- `POST /v1/completions` where feasible
-- streaming Server-Sent Events
-- tool/function calling pass-through where supported
-- JSON mode / structured-output pass-through where supported
-- compatible error envelopes
-
-Initial API providers:
-
-- LM Studio local endpoints
-- Groq
-- Cerebras
-- OpenRouter
-- Gemini API
-- Mistral API
-- Cloudflare Workers AI
-- GitHub Models
-- Z.AI / Zhipu
-
-### 5.2 Agent worker plane
-
-The agent worker plane handles longer-running software tasks. It does not need to respond inside a single OpenAI-compatible HTTP request unless the job is small and explicitly synchronous.
-
-Initial agent workers:
-
-| Worker | Primary use | Notes |
-|---|---|---|
-| Codex | implementation passes, repo questions, patch generation, test/debug loops | Treat as premium coding-agent capacity; use for important repo tasks rather than generic chat |
-| Gemini CLI | large-context codebase analysis, repo explanation, automated review, multimodal/code tasks | Useful free lane with terminal workflow and non-interactive scripting |
-| GitHub Copilot Free / CLI / agent surfaces | focused coding assistance, selected review, IDE/CLI assist | Track limited monthly free usage separately from API provider quota |
-| OpenCode CLI | local terminal agent orchestration over configured providers | Useful as a local agent shell and provider-agnostic coding workflow |
-
-Agent workers produce artifacts:
-
-- markdown analysis;
-- patch/diff;
-- commit hash or branch name;
-- test command output;
-- lint/typecheck output;
-- review notes;
-- confidence and failure metadata.
-
-## 6. Quality-optimized high-priority flow
-
-For high-priority deliverables, the router should support multi-stage execution:
+## 4. Deployment topology
 
 ```text
-Stage 1: local/cheap draft
-  -> LM Studio small model, local coding model, or low-cost free API lane
+Private LAN / Tailscale
 
-Stage 2: stronger free refine
-  -> Gemini / Mistral / Cerebras / Groq / Z.AI / GitHub Models / OpenRouter free model
-
-Stage 3: agent-worker pass when repo/file changes are needed
-  -> Codex / Gemini CLI / Copilot / OpenCode
-
-Stage 4: judge/repair when enabled
-  -> different provider/model if quota allows
-
-Stage 5: final response or artifact
-  -> return best accepted result with provenance metadata
+clients / Sophia / AssistX
+        |
+        v
+  auto-router :8088
+        |
+        +--> Redis :6379
+        |       - quota reservations
+        |       - transient counters
+        |
+        +--> SQLite ./data/router.sqlite3
+        |       - usage ledger
+        |       - service_scan_events
+        |       - model_registry_snapshots
+        |       - event_outbox
+        |
+        +--> local LM Studio nodes
+        |       - r2d2 / x1-370 / deathstar / other OpenAI-compatible endpoints
+        |
+        +--> hosted providers
+        |       - Cerebras
+        |       - Groq
+        |       - Gemini
+        |       - Mistral
+        |       - OpenRouter
+        |       - Cloudflare Workers AI
+        |       - GitHub Models
+        |       - Z.AI
+        |
+        +--> AssistX
+                - context projection
+                - read-only backlog candidates
+                - idempotent event sink
+                - Neo4j behind AssistX
 ```
 
-This lets cheap local models produce initial structure while scarce free cloud quota and coding-agent capacity are spent on the highest-leverage steps: refinement, critique, tests, implementation, and validation.
+Recommended production posture:
 
-## 7. User resource inventory
+- Run `auto_router.main_live:app`.
+- Keep admin endpoints private to LAN/Tailscale.
+- Keep prompt logging disabled.
+- Persist `./data/router.sqlite3` and Redis data.
+- Dispatch outbox manually until AssistX event ingestion is stable.
+- Keep agent and backlog execution dry-run until approval/sandboxing exists.
 
-The initial operator inventory includes:
+## 5. Main runtime modules
 
-| Resource | Architectural treatment |
+| Module | Responsibility |
 |---|---|
-| Free OpenCode CLI instance | Agent worker; useful for local repo tasks and provider-agnostic coding workflows |
-| GitHub Copilot Free | Agent/IDE/CLI assist lane; track limited monthly quota separately |
-| Gemini CLI Free | Agent worker; large-context repo analysis and code generation lane |
-| Codex middle-tier plan | Premium agent worker lane; reserve for high-priority repo implementation/review tasks |
-| Free API endpoints | Synchronous routing providers with quota burn-down |
-| LM Studio endpoints | Local privacy-preserving draft/fallback providers |
+| `main.py` | Base FastAPI router and OpenAI-compatible routes |
+| `main_live.py` | Enhanced production wrapper that registers live-model, service, CLI, backlog, and route-event extensions |
+| `models.py` | Shared request, provider, policy, quota, and routing models |
+| `policy.py` | Profile selection and route planning |
+| `quota.py` | Quota estimation, reservation, release, and snapshots |
+| `providers.py` | Provider adapters and OpenAI-compatible dispatch |
+| `context.py` | AssistX/Neo4j context projection models |
+| `service_scanner.py` | Local/private service reachability scanner |
+| `service_store.py` | Durable service scan history |
+| `model_registry.py` | Durable hosted provider model registry |
+| `live_models.py` | In-memory live model cache with TTL |
+| `cli_discovery.py` | Host-local Codex/Gemini/OpenCode discovery |
+| `assistx_tasks.py` | Read-only AssistX backlog candidate intake |
+| `backlog_scheduler.py` | Dry-run backlog selection and skip/selected provenance |
+| `event_outbox.py` | Durable event outbox table and lifecycle states |
+| `event_dispatcher.py` | Operator-triggered AssistX event sink dispatcher |
+| `route_events.py` | Route execution provenance event creation |
+| `route_event_patch.py` | Production wrapper patch around usage recording |
 
-## 8. Request priority classes
+## 6. Request routing flow
 
-| Class | Meaning | Routing behavior |
-|---|---|---|
-| `critical` | Important operator-facing deliverable | Use local draft, strongest allowed free refine, optional judge, optional agent worker |
-| `repo_critical` | Important repo implementation/review task | Use agent worker plan; prefer Codex/Gemini CLI/OpenCode depending on task and quota |
-| `interactive` | Normal chat/coding work | Use fast free quota when available, otherwise local |
-| `batch` | Offline summarization or enrichment | Schedule around quota burn-down windows and low-priority buckets |
-| `background` | Non-urgent maintenance | Run locally unless surplus quota would expire soon |
-| `local_only` | Sensitive/private | LM Studio/local tools only |
+```text
+Client request
+  -> OpenAI-compatible route
+  -> normalize into RouterRequest
+  -> classify priority / profile / local-only flags
+  -> policy engine builds staged plan
+  -> candidate providers/models are ranked
+  -> quota estimate is computed
+  -> quota is reserved when required
+  -> provider adapter dispatches request
+  -> response is normalized back to OpenAI-compatible shape
+  -> usage is recorded
+  -> route provenance event is queued into outbox
+  -> response returns to client
+```
 
-## 9. Provider classes
+Important behavior:
 
-### Free cloud API providers
+- Route events do not store prompt bodies or response bodies.
+- Provider failures release unused reservations where possible.
+- Local LM Studio fallback remains available when cloud quota is depleted, unhealthy, blocked, or disallowed.
+- `main_live` adds route-event provenance while the base app stays lean.
 
-- Gemini for multimodal, long-context, high-quality reasoning where allowed.
-- Groq for low-latency fast draft/refine passes.
-- Cerebras for fast larger-model inference with token bucket limits.
-- Mistral for chat, code, and structured outputs where configured.
-- GitHub Models for prototyping and model comparison.
-- Cloudflare Workers AI for small edge-style tasks and neuron-budget use.
-- Z.AI / Zhipu for GLM flash/free lanes.
-- OpenRouter as a comparison/fallback layer for `:free` models.
+## 7. Logical model aliases and policy profiles
 
-### Agent providers
-
-- Codex for premium software-engineering agent tasks.
-- Gemini CLI for terminal-first codebase analysis, automation, and large-context tasks.
-- GitHub Copilot for IDE/CLI assist and review where available.
-- OpenCode for local terminal-agent orchestration and provider-flexible repo work.
-
-### Local providers
-
-- LM Studio endpoints on homelab/Tailscale nodes.
-- Optional future vLLM/llama.cpp endpoints if they expose an OpenAI-compatible API.
-
-## 10. Quota as a scheduling resource
-
-The router tracks quota by dimension:
-
-- requests per minute
-- requests per day
-- tokens per minute
-- tokens per day
-- tokens per month
-- neurons per day
-- premium requests per month
-- CLI/agent request counts
-- concurrency
-- model-specific context and output caps
-
-Quota reservations happen before dispatch to prevent oversubscription under concurrency. Agent-worker quotas should be modeled separately from API-provider quotas because they may be subscription, monthly, seat-based, or tool-specific rather than token-based.
-
-## 11. Burn-down strategy
-
-The system should use three quota modes:
-
-| Mode | Behavior |
+| Alias | Primary profile / use |
 |---|---|
-| preserve | keep enough free quota for critical work during prime hours |
-| balanced | use free quota when it improves quality or latency |
-| aggressive_burn | near reset, spend surplus quota on useful queued work |
+| `auto/fast` | Normal interactive routing with fast/free/local candidates |
+| `auto/flash-start` | Cerebras flash-start planner for instant task decomposition |
+| `auto/high-quality` | Local draft plus stronger refine/judge lanes |
+| `auto/code` | Code-focused review/planning path |
+| `auto/sophia` | Low-latency realtime Sophia profile |
+| `auto/backlog-burn` | Controlled safe backlog burn-down selection |
+| `auto/local` | Local-only LM Studio routing |
+| `auto/private` | Local-only routing for sensitive/private workloads |
 
-Default day policy:
+The router treats model aliasing as a policy decision, not just a provider map. A request can become a multi-stage plan where stages have different provider classes, capabilities, and quota rules.
+
+## 8. Quota and burn-down architecture
+
+Quota is modeled as a scheduling resource.
+
+Tracked dimensions can include:
+
+- requests per minute;
+- requests per day;
+- tokens per minute;
+- tokens per day;
+- tokens per month;
+- neurons per day;
+- provider-specific limits;
+- future CLI/subscription capacity.
+
+Current persistence split:
+
+| Store | Purpose |
+|---|---|
+| Redis | Atomic reservations and transient counters |
+| SQLite usage ledger | Durable request/provider usage history |
+| SQLite event outbox | Provenance and integration events |
+
+Quota modes:
+
+| Mode | Purpose |
+|---|---|
+| `preserve` | Protect realtime/critical capacity |
+| `balanced` | Use free quota when it improves quality/latency |
+| `aggressive_burn` | Near reset, spend surplus on safe backlog work |
+
+The current backlog scheduler is dry-run only. It checks quota availability without reserving or spending it.
+
+## 9. Cerebras flash-start node
+
+Cerebras is modeled as a first-class flash planning lane, not just another provider row.
+
+Target role:
 
 ```text
-00:00-12:00  preserve critical reserve
-12:00-18:00  balanced interactive use
-18:00-21:00  release surplus to batch/refine jobs
-21:00-reset  aggressive burn-down while protecting final critical reserve
+vague request / Sophia command / AssistX task
+  -> Cerebras flash-start plan
+  -> local or stronger refine lane
+  -> optional judge / human review / future execution
 ```
 
-Monthly quotas such as Copilot-style or plan-based premium requests should be smoothed across the month instead of burned daily unless a manual override is set.
+Main uses:
 
-## 12. Dashboard overview
+- instant task decomposition;
+- repo/doc implementation planning;
+- backlog triage;
+- route selection scaffolding;
+- first-pass structured outputs.
 
-The dashboard should show:
+Guardrails:
 
-- remaining quota by provider/model/dimension;
-- remaining agent-worker monthly/free usage;
-- estimated time to reset;
-- today’s burn-down progress;
-- projected unused quota at reset;
-- high-priority deliverables that used draft/refine/judge/agent stages;
-- provider health and open circuit breakers;
-- CLI agent availability and last run status;
-- LM Studio fallback usage;
-- latency/error trends;
-- cloud-vs-local split.
+- no secrets;
+- no voice-auth or enrollment samples;
+- no private-memory raw data;
+- no local-only tasks;
+- no final authority for irreversible actions.
 
-## 13. Deployment model
+## 10. AssistX and Neo4j integration
 
-MVP deployment:
+AssistX is the canonical context owner. `auto-router` consumes and emits integration data but does not become the system of record for tasks or graph state.
+
+### Inbound from AssistX
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/router/context-projection` | Graph-backed context snapshot with nodes, providers, services, and policy facts |
+| `/api/router/backlog-candidates` | Read-only backlog candidate list for dry-run selection |
+
+### Outbound to AssistX
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/events` | Idempotent event sink for router outbox dispatch |
+
+### Context projection concepts
+
+- nodes;
+- providers;
+- services;
+- provider lanes;
+- local/free/blocked policy flags;
+- future agent CLI capabilities;
+- context revision/source metadata.
+
+### Neo4j concepts targeted by events
+
+- `RouterProvider`;
+- `RouterModel`;
+- `RouterDecision`;
+- `QuotaSnapshot`;
+- `Service`;
+- `AgentCli`;
+- `RouterContextProjection`;
+- future `BacklogSelection` / `AgentRun` / `Task` provenance links.
+
+## 11. Service discovery architecture
+
+Service discovery is split into registry and scanning.
 
 ```text
-llm-router  FastAPI app
-redis       atomic reservation counters
-sqlite      durable usage ledger
-worker      optional background worker process for agent jobs
+AssistX/Neo4j or YAML bootstrap registers services
+        -> dashboard renders launchpad URLs
+        -> optional scanner probes local/private URLs
+        -> scan result persists to SQLite
+        -> service snapshot event enters outbox
+        -> AssistX/Neo4j can merge status history
 ```
 
-Later deployment:
+### Service registry
+
+Known URLs and ownership. Services may be global, node-owned, or provider-owned.
+
+Examples:
+
+- auto-router dashboard;
+- auto-router OpenAI API;
+- AssistX UI;
+- Neo4j Browser/Bolt;
+- Redis;
+- LM Studio endpoints;
+- Paperclip control plane;
+- Cerebras/Groq/OpenRouter APIs.
+
+### Service scanner
+
+The scanner probes local/private URLs by default and skips hosted external APIs unless explicitly allowed.
+
+Supported probes:
+
+- HTTP/HTTPS GET;
+- TCP check for `bolt://`, `redis://`, and `tcp://`.
+
+Service scan results are stored in SQLite and reflected in the dashboard after refresh.
+
+## 12. Model registry architecture
+
+Hosted provider model inventories can drift. The model registry makes that visible and durable.
 
 ```text
-llm-router
-worker pool
-redis
-postgres
-prometheus
-grafana
-sandbox volume / ephemeral worktrees
-optional queue service
+operator refreshes provider /models
+        -> provider adapter normalizes model records
+        -> live model cache updates
+        -> durable model_registry_snapshots row is written
+        -> startup hydrates latest registry snapshot back into cache
 ```
 
-## 14. Trust boundaries
+Main benefits:
 
-- Secrets remain in `.env`, Docker secrets, or a future secret manager.
-- Sensitive prompts can be forced local.
-- Full prompt logging is disabled by default.
-- Usage metadata is logged, prompt bodies are redacted unless explicitly enabled.
-- CLI agent workers run in controlled worktrees/sandboxes.
-- Agent workers require explicit allow-lists for shell commands, network access, and repo write operations.
-- The router records what tool/model touched each deliverable.
+- survive restarts;
+- inspect provider drift;
+- catch missing/invalid API keys;
+- display last-known model inventory during outage;
+- later write model snapshots to AssistX/Neo4j.
 
-## 15. Success criteria
+## 13. Agent CLI discovery architecture
 
-- Clients can use `auto-router` exactly like an LM Studio endpoint for standard LLM calls.
-- Daily free quota is visibly consumed on meaningful work.
-- High-priority jobs receive higher-quality multi-stage treatment.
-- Repo tasks can be delegated to configured agent workers with tracked usage and captured outputs.
-- Exhausted/unhealthy providers do not break workflows.
-- Local LM Studio endpoints always remain available as fallback.
-- The dashboard makes quota, quality stages, and fallback behavior obvious.
+Agent CLIs are discoverable capabilities, not automatically executable workers.
+
+Supported local discovery:
+
+- `codex`;
+- `gemini`;
+- `opencode`.
+
+Discovery reports:
+
+- installed;
+- runnable;
+- command path;
+- version output;
+- node ID;
+- credit hint;
+- notes/error.
+
+Policy still decides execution state:
+
+```text
+missing               -> unavailable
+installed+runnable    -> candidate capability
+credits exhausted     -> blocked_by_quota
+local-only task       -> local node only
+write not approved    -> review_only
+approval present      -> future write mode
+```
+
+Current agent execution status:
+
+- discovery implemented;
+- dry-run scheduling implemented;
+- execution/write/commit/push not implemented.
+
+## 14. Dry-run backlog architecture
+
+The backlog scheduler is intentionally selection-only.
+
+```text
+manual tasks OR AssistX read-only backlog candidates
+        -> normalize into BacklogTaskCandidate
+        -> filter sensitive/local-only/non-backlog priorities
+        -> policy engine creates route plan
+        -> quota manager checks availability without reservation
+        -> selected/skipped decision created
+        -> decision event queued in outbox
+```
+
+It does not:
+
+- claim AssistX tasks;
+- mutate AssistX;
+- call model providers;
+- reserve/spend quota;
+- run agents;
+- modify files or repositories.
+
+Dry-run output supports future approval flows by producing structured selected/skipped decisions and idempotent outbox events.
+
+## 15. Event outbox and provenance architecture
+
+All external write-back is buffered through SQLite before network dispatch.
+
+```text
+service scan / CLI discovery / route execution / backlog dry-run
+        -> event_outbox pending event
+        -> operator-triggered dispatch
+        -> AssistX event sink
+        -> delivered / retry / dead_letter
+        -> future Neo4j merge
+```
+
+Implemented event types:
+
+| Event type | Source |
+|---|---|
+| `router.service_snapshot.recorded` | Service scanner |
+| `router.agent_cli.discovered` | CLI discovery |
+| `router.execution_stage.completed` | Route execution |
+| `router.execution_stage.failed` | Route execution |
+| `router.backlog_job.selected` | Dry-run backlog scheduler |
+| `router.backlog_job.skipped` | Dry-run backlog scheduler |
+
+Outbox states:
+
+- `pending`;
+- `retry`;
+- `delivered`;
+- `dead_letter`.
+
+The dispatcher treats `2xx` as delivered and `409` as an idempotent duplicate/delivered result.
+
+## 16. Dashboard architecture
+
+The dashboard is the operator console.
+
+Current dashboard responsibilities:
+
+- quota burn-down;
+- provider lanes and context alignment;
+- service launchpad;
+- service scan status counts;
+- Cerebras flash-start status;
+- node/provider service links;
+- recent route usage;
+- health and live model refresh controls;
+- local service scan control.
+
+Future dashboard additions:
+
+- live model inventory table;
+- outbox backlog widget;
+- backlog dry-run queue status;
+- circuit retry timers;
+- local-vs-cloud request split;
+- remote node capability view.
+
+## 17. Persistence architecture
+
+| Component | Store | Notes |
+|---|---|---|
+| Quota reservations | Redis | Atomic counters and TTLs |
+| Usage ledger | SQLite | Durable usage history |
+| Service scans | SQLite | `service_scan_events` |
+| Model registry | SQLite | `model_registry_snapshots` |
+| Event outbox | SQLite | Durable integration queue |
+| Config bootstrap | YAML | Providers, policies, agents, context |
+| Canonical context | AssistX/Neo4j | Long-lived graph state |
+
+SQLite is sufficient for this control-plane stage. The schema is intended to be portable to Postgres later if write volume or multi-instance deployment requires it.
+
+## 18. Security and privacy architecture
+
+Security assumptions:
+
+- private LAN/Tailscale deployment;
+- admin endpoints are not public;
+- provider keys live in `.env`, Docker secrets, or a future secret manager;
+- prompt logging is disabled by default;
+- route execution events exclude prompt and response bodies;
+- service scanning is local/private by default;
+- agent CLI discovery is local/node-trusted only;
+- backlog scheduling is dry-run/read-only;
+- cloud routing honors `local_only`, `allow_cloud=false`, and privacy metadata.
+
+High-risk categories that must remain local or skipped:
+
+- secrets and credentials;
+- voice authentication and enrollment samples;
+- private memory/transcripts;
+- sensitive files/repos unless explicitly approved;
+- irreversible external actions;
+- production deployment actions.
+
+## 19. Production operations architecture
+
+Recommended operations loop:
+
+1. Start `auto_router.main_live:app`.
+2. Verify `/health`, `/v1/models`, `/admin/context`, `/admin/services`, `/admin/outbox`.
+3. Refresh hosted model registry for selected providers.
+4. Scan local/private services.
+5. Discover host-local agent CLIs.
+6. Run dry-run backlog selection.
+7. Inspect pending outbox.
+8. Dry-run dispatch to AssistX.
+9. Dispatch events after AssistX sink is stable.
+10. Review dashboard and logs before enabling future background automation.
+
+Key production docs:
+
+- `docs/PRODUCTION_DEPLOYMENT.md`;
+- `docs/OPERATOR_RUNBOOK.md`;
+- `docs/SERVICE_DISCOVERY.md`;
+- `docs/AGENT_SKILLS.md`;
+- `docs/NEO4J_ASSISTX_INTEGRATION.md`.
+
+## 20. Future architecture phases
+
+### Phase 1: Current control plane
+
+Implemented:
+
+- OpenAI-compatible router;
+- quota-aware routing;
+- Cerebras flash-start lane;
+- service scanner;
+- durable model registry;
+- agent CLI discovery;
+- dry-run backlog selection;
+- event outbox and dispatcher;
+- production docs.
+
+### Phase 2: AssistX ownership loop
+
+Next:
+
+- AssistX task claim/approval flow;
+- route/backlog/service/model event ingestion into Neo4j;
+- remote node service/CLI self-report;
+- dashboard widgets for backlog/outbox/model registry.
+
+### Phase 3: Safe execution plane
+
+Later:
+
+- agent worktree sandbox;
+- command allow-list;
+- review-only and write-approved modes;
+- artifact capture;
+- test execution records;
+- operator approval before commit/push.
+
+### Phase 4: Autonomous scheduled optimization
+
+Later:
+
+- background service scans with allow-list and jitter;
+- background model refresh cadence;
+- quota reset-aware burn-down scheduler;
+- automatic AssistX event dispatch;
+- model/provider drift reports.
+
+## 21. Success criteria
+
+The architecture succeeds when:
+
+1. Clients can use `auto-router` like LM Studio/OpenAI without custom integration.
+2. Cloud quota is used intentionally and safely.
+3. Sensitive/local-only requests never leak to hosted providers.
+4. Local LM Studio fallback keeps workflows alive during provider failure or quota depletion.
+5. AssistX/Neo4j can see service status, CLI capabilities, model inventory, route decisions, and backlog selection events.
+6. The dashboard gives an operator immediate visibility into routing, quota, services, model inventory, and provenance.
+7. Future agent execution can be added behind explicit approval and sandbox controls without redesigning the control plane.
