@@ -10,7 +10,7 @@ Use the enhanced app wrapper by default:
 uvicorn auto_router.main_live:app --host 0.0.0.0 --port 8088
 ```
 
-`auto_router.main_live` includes the base OpenAI-compatible router plus live model discovery, service registry/scan routes, event outbox routes, and agent CLI discovery routes.
+`auto_router.main_live` includes the base OpenAI-compatible router plus live model discovery, service registry/scan routes, event outbox routes, AssistX event dispatch, and agent CLI discovery routes.
 
 ## 2. First boot
 
@@ -135,6 +135,18 @@ Inspect pending events:
 curl http://localhost:8088/admin/outbox | jq
 ```
 
+Dry-run dispatch without changing event state:
+
+```bash
+curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10' | jq
+```
+
+Dispatch pending events to AssistX when `AUTO_ROUTER_ASSISTX_EVENT_SINK_URL` is configured:
+
+```bash
+curl -X POST 'http://localhost:8088/admin/outbox/dispatch?limit=25' | jq
+```
+
 Mark delivered manually after external processing:
 
 ```bash
@@ -148,7 +160,7 @@ curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=manual-
 curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=terminal&retry=false' | jq
 ```
 
-## 9. AssistX context projection
+## 9. AssistX context projection and event sink
 
 When AssistX exposes the graph-backed projection endpoint, set:
 
@@ -156,12 +168,21 @@ When AssistX exposes the graph-backed projection endpoint, set:
 AUTO_ROUTER_CONTEXT_CONFIG=http://assistx:8000/api/router/context-projection
 ```
 
-The projection should include nodes, providers, services, and eventually agent CLI capabilities.
+When AssistX exposes an idempotent event sink, set:
+
+```bash
+AUTO_ROUTER_ASSISTX_EVENT_SINK_URL=http://assistx:8000/api/events
+AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_TIMEOUT_SECONDS=10
+AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_MAX_ATTEMPTS=5
+```
+
+The projection should include nodes, providers, services, and eventually agent CLI capabilities. The event sink should accept service snapshots, agent CLI discovery events, and later route execution events.
 
 ## 10. Safety rules
 
 - Keep `AUTO_ROUTER_LOG_PROMPTS=false` unless debugging non-sensitive local-only data.
 - Treat CLI discovery as a local-only/node-agent function.
 - Service scanning should remain private-network scoped unless explicitly allowed.
+- Keep event dispatch operator-triggered until the AssistX event sink is stable.
 - Do not enable agent write/commit/push by default.
 - Cloud routing must honor `local_only`, `allow_cloud=false`, voice-auth, enrollment, secrets, and private-memory labels.
