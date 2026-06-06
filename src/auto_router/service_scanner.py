@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import socket
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -75,6 +77,87 @@ def is_private_or_local_service(url: str) -> bool:
         return ip.is_private or ip.is_loopback or ip.is_link_local
     except ValueError:
         return False
+
+
+def is_lmstudio_service(service: ContextService) -> bool:
+    service_type = str(service.service_type or "").strip().lower()
+    tags = {str(tag).strip().lower() for tag in service.tags}
+    target_url = service.health_url or service.url
+    parsed = urlparse(target_url)
+    host = (parsed.hostname or "").lower()
+    port = parsed.port
+    return bool(
+        service_type in {"lmstudio", "openai_compatible_api", "openai_compatible"}
+        or "lmstudio" in tags
+        or "local_llm" in tags
+        or (port == 1234 and (is_private_or_local_service(target_url) or host))
+    )
+
+
+def discover_tailnet_lmstudio_services(port: int = 1234) -> list[ContextService]:
+    if str(_env_flag("AUTO_ROUTER_DISCOVER_TAILNET_LMSTUDIO", "1")).lower() in {"0", "false", "no", "off"}:
+        return []
+    try:
+        completed = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return []
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return []
+    try:
+        payload = json.loads(completed.stdout)
+    except Exception:
+        return []
+    peers = payload.get("Peer") if isinstance(payload, dict) else None
+    if not isinstance(peers, dict):
+        return []
+    discovered: list[ContextService] = []
+    for peer in peers.values():
+        if not isinstance(peer, dict):
+            continue
+        host = str(peer.get("HostName") or "").strip()
+        dns = str(peer.get("DNSName") or "").strip().rstrip(".")
+        ip_values = peer.get("TailscaleIPs") if isinstance(peer.get("TailscaleIPs"), list) else []
+        ip = str(ip_values[0]) if ip_values else ""
+        host_key = _slug(host or dns or ip)
+        url_host = dns or host or ip
+        if not url_host:
+            continue
+        service_id = f"tailnet.{host_key}.lmstudio"
+        base_url = f"http://{url_host}:{port}/v1"
+        discovered.append(
+            ContextService(
+                service_id=service_id,
+                name=f"{host or dns or ip} LMStudio",
+                url=base_url,
+                service_type="lmstudio",
+                node_id=host_key,
+                provider=f"lmstudio-{host_key}",
+                health_url=f"{base_url}/models",
+                tags={"tailnet", "lmstudio", "openai_compatible", "discovered"},
+                detail="tailnet-discovered LMStudio endpoint",
+                priority=90,
+            )
+        )
+    return discovered
+
+
+def _slug(text: str) -> str:
+    slug = "".join(char.lower() if char.isalnum() else "-" for char in text)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-") or "unknown"
+
+
+def _env_flag(name: str, default: str = "0") -> str:
+    import os
+
+    return os.getenv(name, default)
 
 
 async def probe_service(

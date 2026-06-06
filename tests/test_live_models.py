@@ -1,6 +1,12 @@
-import pytest
+import asyncio
 
+from types import SimpleNamespace
+
+from auto_router.config import ProviderRegistry
+from auto_router.context import ContextSnapshot
+from auto_router.live_model_routes import discovered_lmstudio_providers, probeable_providers, refresh_provider_models
 from auto_router.live_models import LiveModelCache
+from auto_router.model_registry import ModelRegistryStore
 from auto_router.models import ProviderConfig
 from auto_router.providers import normalize_model_record
 
@@ -16,8 +22,7 @@ def test_normalize_model_record_keeps_raw_payload() -> None:
     assert normalized["raw"] == payload
 
 
-@pytest.mark.asyncio
-async def test_live_model_cache_reuses_fresh_snapshot() -> None:
+def test_live_model_cache_reuses_fresh_snapshot() -> None:
     cache = LiveModelCache(ttl_seconds=60)
     provider = ProviderConfig(name="cerebras", type="openai_compatible", base_url="https://example.test/v1")
     calls = 0
@@ -27,23 +32,118 @@ async def test_live_model_cache_reuses_fresh_snapshot() -> None:
         calls += 1
         return [{"id": "gpt-oss-120b"}]
 
-    first = await cache.get_or_refresh(provider, fetcher)
-    second = await cache.get_or_refresh(provider, fetcher)
+    first = asyncio.run(cache.get_or_refresh(provider, fetcher))
+    second = asyncio.run(cache.get_or_refresh(provider, fetcher))
 
     assert first is second
     assert calls == 1
     assert cache.snapshot()[0]["model_count"] == 1
 
 
-@pytest.mark.asyncio
-async def test_live_model_cache_records_fetch_errors() -> None:
+def test_refresh_provider_models_probes_all_enabled_providers_and_projects_context(tmp_path) -> None:
+    providers = ProviderRegistry.model_validate(
+        {
+            "providers": [
+                {
+                    "name": "cerebras",
+                    "type": "openai_compatible",
+                    "enabled": True,
+                    "base_url": "https://cerebras.example/v1",
+                    "priority": 10,
+                },
+                {
+                    "name": "lmstudio-local",
+                    "type": "lmstudio",
+                    "enabled": True,
+                    "base_url": "http://localhost:1234/v1",
+                    "priority": 20,
+                },
+            ]
+        }
+    )
+    state = SimpleNamespace(
+        providers=providers,
+        context=ContextSnapshot(),
+        live_models=LiveModelCache(ttl_seconds=60),
+        model_registry=ModelRegistryStore(f"sqlite:///{tmp_path / 'router.sqlite3'}"),
+        policy_engine=SimpleNamespace(context=None),
+    )
+    calls: list[str] = []
+
+    async def fake_fetch(provider: ProviderConfig):
+        calls.append(provider.name)
+        if provider.name == "cerebras":
+            return [{"id": "gpt-oss-120b"}, {"id": "zai-glm-4.7"}]
+        return [{"id": "local-llama"}]
+
+    from auto_router import live_model_routes as routes
+
+    original_fetch = routes.fetch_provider_models
+    routes.fetch_provider_models = fake_fetch
+    try:
+        records = asyncio.run(refresh_provider_models(state, probeable_providers(state.providers.providers)))
+    finally:
+        routes.fetch_provider_models = original_fetch
+
+    assert calls == ["cerebras", "lmstudio-local"]
+    assert {record["provider"] for record in records} == {"cerebras", "lmstudio-local"}
+    assert records[0]["ok"] is True
+    assert records[0]["model_count"] == 2
+    assert records[0]["probe"]["drift"] is False
+    assert state.model_registry.summary()["providers"] == 2
+    assert state.context.model_for("gpt-oss-120b") is not None
+    assert state.context.model_for("local-llama") is not None
+    assert state.context.all_models()
+
+
+def test_discovered_lmstudio_providers_include_context_services(monkeypatch) -> None:
+    providers = ProviderRegistry.model_validate(
+        {
+            "providers": [
+                {
+                    "name": "cerebras",
+                    "type": "openai_compatible",
+                    "enabled": True,
+                    "base_url": "https://cerebras.example/v1",
+                    "priority": 10,
+                }
+            ]
+        }
+    )
+    context = ContextSnapshot.model_validate(
+        {
+            "services": [
+                {
+                    "service_id": "tailnet.r2d2.lmstudio",
+                    "name": "r2d2 LMStudio",
+                    "url": "http://r2d2.tailcb8954.ts.net:1234/v1",
+                    "health_url": "http://r2d2.tailcb8954.ts.net:1234/v1/models",
+                    "service_type": "lmstudio",
+                    "provider": "lmstudio-r2d2",
+                    "node_id": "r2d2",
+                }
+            ]
+        }
+    )
+    state = SimpleNamespace(providers=providers, context=context)
+    monkeypatch.setattr("auto_router.live_model_routes.discover_tailnet_lmstudio_services", lambda: [])
+
+    discovered = discovered_lmstudio_providers(state)
+
+    assert len(discovered) == 1
+    assert discovered[0].name == "lmstudio-r2d2"
+    assert discovered[0].base_url == "http://r2d2.tailcb8954.ts.net:1234/v1"
+    assert discovered[0].type == "lmstudio"
+
+
+def test_live_model_cache_records_fetch_errors() -> None:
     cache = LiveModelCache(ttl_seconds=60)
     provider = ProviderConfig(name="cerebras", type="openai_compatible", base_url="https://example.test/v1")
 
     async def fetcher(_: ProviderConfig):
         raise RuntimeError("boom")
 
-    snapshot = await cache.refresh_provider(provider, fetcher)
+    snapshot = asyncio.run(cache.refresh_provider(provider, fetcher))
 
     assert snapshot.ok is False
     assert "boom" in (snapshot.error or "")

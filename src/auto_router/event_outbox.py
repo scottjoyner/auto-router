@@ -34,7 +34,10 @@ class EventOutbox:
 
     def __init__(self, database_url: str):
         self.database_path = self._path_from_url(database_url)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._in_memory = database_url == "sqlite:///:memory:"
+        self._memory_connection: sqlite3.Connection | None = None
+        if not self._in_memory:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def enqueue(self, event: OutboxEvent) -> str:
@@ -151,32 +154,39 @@ class EventOutbox:
         }
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS event_outbox (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    event_type TEXT NOT NULL,
-                    source_service TEXT NOT NULL,
-                    idempotency_key TEXT NOT NULL UNIQUE,
-                    payload_json TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    attempts INTEGER DEFAULT 0,
-                    last_error TEXT,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                )
-                """
+        conn = self._connect()
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                event_type TEXT NOT NULL,
+                source_service TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER DEFAULT 0,
+                last_error TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_outbox_status ON event_outbox(status, created_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_event_outbox_type ON event_outbox(event_type)"
-            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_event_outbox_status ON event_outbox(status, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_event_outbox_type ON event_outbox(event_type)"
+        )
+        if not self._in_memory:
+            conn.close()
 
     def _connect(self) -> sqlite3.Connection:
+        if self._in_memory:
+            if self._memory_connection is None:
+                self._memory_connection = sqlite3.connect(":memory:")
+                self._memory_connection.row_factory = sqlite3.Row
+            return self._memory_connection
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
         return conn

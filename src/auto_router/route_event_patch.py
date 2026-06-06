@@ -29,6 +29,7 @@ def install_route_event_patch(main_module: Any) -> None:
         latency_ms: int,
         usage: dict[str, int] | None = None,
         error: Exception | None = None,
+        gateway_metadata: dict[str, Any] | None = None,
     ) -> None:
         original(
             request,
@@ -40,6 +41,7 @@ def install_route_event_patch(main_module: Any) -> None:
             latency_ms,
             usage,
             error,
+            gateway_metadata,
         )
         enqueue_route_execution_event(
             main_module.state,
@@ -52,6 +54,7 @@ def install_route_event_patch(main_module: Any) -> None:
             latency_ms=latency_ms,
             usage=usage,
             error=error,
+            gateway_metadata=gateway_metadata,
         )
 
     main_module._record_usage = patched_record_usage

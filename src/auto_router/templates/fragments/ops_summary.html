@@ -12,11 +12,31 @@
         </div>
     </div>
 
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <div class="rounded-3xl border {% if gateway.enabled %}border-emerald-300/20 bg-emerald-300/10{% else %}border-white/10 bg-white/5{% endif %} p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider {% if gateway.enabled %}text-emerald-200{% else %}text-router-muted{% endif %}">Agentgateway</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ 'on' if gateway.enabled else 'off' }}</div>
+            <div class="mt-1 text-xs {% if gateway.enabled %}text-emerald-100/70{% else %}text-router-muted{% endif %}">{{ gateway.mode or 'direct' }} · {{ gateway.detail or 'not configured' }}</div>
+        </div>
         <div class="rounded-3xl border border-cyan-300/20 bg-cyan-300/10 p-5">
             <div class="text-xs font-semibold uppercase tracking-wider text-cyan-200">Model registry</div>
             <div class="mt-2 text-3xl font-black text-white">{{ model_registry_summary.models or 0 }}</div>
             <div class="mt-1 text-xs text-cyan-100/70">{{ model_registry_summary.providers or 0 }} providers · {{ model_registry_summary.stale or 0 }} stale</div>
+        </div>
+        <div class="rounded-3xl border border-violet-300/20 bg-violet-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-violet-200">Model lanes</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ context_model_summary.total or 0 }}</div>
+            <div class="mt-1 text-xs text-violet-100/70">{{ context_model_summary.local_models or context_model_summary.local or 0 }} local · {{ context_model_summary.api_models or context_model_summary.free_api or 0 }} api · {{ context_model_summary.blocked_models or context_model_summary.blocked or 0 }} blocked</div>
+        </div>
+        <div class="rounded-3xl border border-sky-300/20 bg-sky-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-sky-200">Context graph</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ context_graph_summary.total or 0 }}</div>
+            <div class="mt-1 text-xs text-sky-100/70">{{ context_graph_summary.node or 0 }} nodes · {{ context_graph_summary.provider or 0 }} providers · {{ context_graph_summary.model or 0 }} models · {{ context_graph_summary.service or 0 }} services</div>
+        </div>
+        <div class="rounded-3xl border border-fuchsia-300/20 bg-fuchsia-300/10 p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider text-fuchsia-200">Provider taps</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ provider_tap_summary.providers or 0 }}</div>
+            <div class="mt-1 text-xs text-fuchsia-100/70">{{ provider_tap_summary.ok or 0 }} ok · {{ provider_tap_summary.error or 0 }} error · {{ provider_tap_summary.drift or 0 }} drift · {{ provider_tap_summary.models or 0 }} models</div>
         </div>
         <div class="rounded-3xl border border-amber-300/20 bg-amber-300/10 p-5">
             <div class="text-xs font-semibold uppercase tracking-wider text-amber-200">Outbox</div>
@@ -35,18 +55,108 @@
         </div>
     </div>
 
+    <section class="mt-5 rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Swarm memory map</p>
+                <h2 class="text-2xl font-black text-white">Machine → model memory and endpoint health</h2>
+                <p class="mt-1 text-sm text-router-muted">Unifies registered machines, providers, models, and endpoint health into one recency-aware view.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ swarm_summary.nodes or 0 }} nodes</span>
+                <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">{{ swarm_summary.models or 0 }} models</span>
+                <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">{{ swarm_summary.avg_provider_health_score or 0 }} avg health</span>
+                <span class="rounded-full bg-rose-400/15 px-3 py-1 font-bold text-rose-200">{{ swarm_summary.drift_providers or 0 }} drift</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {% for node in swarm_memory_map[:6] %}
+            <div class="rounded-2xl border border-router-line bg-black/20 p-4">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <div class="font-bold text-white">{{ node.display_name }}</div>
+                        <div class="mt-1 text-xs text-router-muted">{{ node.node_id }} · {{ node.lane }}{% if node.detail %} · {{ node.detail }}{% endif %}</div>
+                    </div>
+                    <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if node.endpoint_health.state == 'healthy' %}bg-emerald-400/15 text-emerald-200{% elif node.endpoint_health.state == 'mixed' %}bg-yellow-400/15 text-yellow-100{% elif node.endpoint_health.state == 'degraded' %}bg-rose-400/15 text-rose-200{% else %}bg-white/10 text-router-muted{% endif %}">{{ node.endpoint_health.state }}</span>
+                </div>
+                <div class="mt-2 text-xs text-router-muted">{{ node.model_count }} models · {{ node.provider_count }} providers · {{ node.service_count }} endpoints · score {{ node.endpoint_health.score }}</div>
+                {% if node.models %}
+                <div class="mt-3 flex flex-wrap gap-1.5 text-[10px]">
+                    {% for model in node.models[:5] %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model }}</span>
+                    {% endfor %}
+                    {% if node.models|length > 5 %}<span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ node.models|length - 5 }} more</span>{% endif %}
+                </div>
+                {% endif %}
+                {% if node.recent_history %}
+                <div class="mt-3 space-y-1 text-[10px] text-router-muted">
+                    {% for probe in node.recent_history[:3] %}
+                    <div class="flex items-center justify-between gap-2 rounded-xl bg-black/20 px-2 py-1">
+                        <span>{{ probe.provider }}</span>
+                        <span>{{ probe.age_seconds }}s · {{ probe.model_count }} models{% if probe.drift %} · drift{% endif %}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-router-line bg-black/20 p-4 text-sm text-router-muted">No swarm memory map available yet.</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <div class="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Provider health</h3>
+                    <p class="text-xs text-router-muted">Score, drift, age, and probe stability from durable probe history</p>
+                </div>
+                <div class="text-xs text-router-muted">{{ provider_health_summary|length }} tracked</div>
+            </div>
+            <div class="space-y-2">
+                {% for provider in provider_health_summary[:6] %}
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="font-bold text-white">{{ provider.provider }}</div>
+                        <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if provider.health_score >= 80 %}bg-emerald-400/15 text-emerald-200{% elif provider.health_score >= 60 %}bg-yellow-400/15 text-yellow-100{% else %}bg-rose-400/15 text-rose-200{% endif %}">score {{ provider.health_score }}</span>
+                    </div>
+                    <div class="mt-1 text-xs text-router-muted">{{ provider.model_count }} models · {{ provider.success_rate }} success · {{ provider.age_seconds }}s old{% if provider.drift %} · drift{% endif %}</div>
+                    {% if provider.error %}<div class="mt-1 line-clamp-2 text-xs text-rose-200">{{ provider.error }}</div>{% endif %}
+                </div>
+                {% else %}
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-sm text-router-muted">No durable provider health history yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Probe summary</h3>
+                    <p class="text-xs text-router-muted">Latest durable snapshot coverage across the provider swarm</p>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3"><div class="text-xs uppercase tracking-wider text-router-muted">providers</div><div class="mt-1 text-2xl font-black text-white">{{ provider_probe_summary.providers or 0 }}</div></div>
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3"><div class="text-xs uppercase tracking-wider text-router-muted">healthy</div><div class="mt-1 text-2xl font-black text-white">{{ provider_probe_summary.healthy or 0 }}</div></div>
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3"><div class="text-xs uppercase tracking-wider text-router-muted">drift</div><div class="mt-1 text-2xl font-black text-white">{{ provider_probe_summary.drift or 0 }}</div></div>
+                <div class="rounded-2xl border border-router-line bg-black/20 p-3"><div class="text-xs uppercase tracking-wider text-router-muted">avg latency</div><div class="mt-1 text-2xl font-black text-white">{{ provider_probe_summary.avg_latency_ms or 0 }}ms</div></div>
+            </div>
+        </div>
+    </div>
+
     <div class="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
             <div class="mb-3 flex items-center justify-between gap-3">
                 <div>
-                    <h3 class="font-black text-white">Live model inventory</h3>
-                    <p class="text-xs text-router-muted">Latest durable `/models` snapshots</p>
+                    <h3 class="font-black text-white">Provider tap test</h3>
+                    <p class="text-xs text-router-muted">Latest durable `/models` snapshots and live tap status</p>
                 </div>
                 <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100 hover:bg-cyan-300/20"
-                        hx-post="/admin/live-models/refresh"
+                        hx-post="/admin/providers/probe"
                         hx-target="#action-status"
                         hx-swap="innerHTML">
-                    refresh all
+                    probe all providers
                 </button>
             </div>
             <div class="space-y-2">

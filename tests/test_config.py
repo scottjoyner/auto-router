@@ -114,3 +114,52 @@ def test_context_provider_alias_lookup() -> None:
 
     assert snapshot.provider_for("lmstudio-r2d2").provider == "lm_studio"
     assert snapshot.provider_for("local/default").provider == "lm_studio"
+
+
+def test_project_live_models_merges_registry_snapshots_into_context(tmp_path: Path) -> None:
+    from auto_router.config import AgentWorkerRegistry, ProviderRegistry, _project_live_models, load_context_snapshot
+    from auto_router.live_models import LiveModelSnapshot
+    from auto_router.models import ModelConfig, ProviderConfig
+
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="cerebras",
+                type="openai_compatible",
+                base_url="https://api.cerebras.ai/v1",
+                quota_class="fast_free",
+                models=[
+                    ModelConfig(
+                        alias="cerebras/flash-reasoner",
+                        provider_model="gpt-oss-120b",
+                        capabilities={"chat", "streaming"},
+                    )
+                ],
+            )
+        ]
+    )
+    context = load_context_snapshot(tmp_path / "context.yaml", providers, AgentWorkerRegistry())
+    projected = _project_live_models(
+        context,
+        providers,
+        [
+            LiveModelSnapshot(
+                provider="cerebras",
+                ok=True,
+                fetched_at=100,
+                expires_at=200,
+                models=[
+                    {"id": "gpt-oss-120b", "owned_by": "cerebras"},
+                    {"id": "new-live-model", "owned_by": "cerebras"},
+                ],
+            )
+        ],
+    )
+
+    model = projected.model_for("gpt-oss-120b")
+    assert model is not None
+    assert "gpt-oss-120b" in model.aliases
+    assert projected.model_for("new-live-model") is not None
+    assert projected.models_for_provider("cerebras")
+    assert len(projected.models_for_provider("cerebras")) == 2
+    assert projected.providers[0].models and len(projected.providers[0].models) == 2

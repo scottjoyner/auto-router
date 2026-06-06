@@ -1,0 +1,47 @@
+# Agentgateway sidecar overlay for auto-router
+# Start with: docker compose -f docker-compose.yml -f docker-compose.agentgateway.yml up --build
+
+services:
+  agentgateway:
+    image: ghcr.io/agentgateway/agentgateway:latest
+    container_name: auto-router-agentgateway
+    restart: unless-stopped
+    command: ["-f", "/etc/agentgateway/config.yaml"]
+    volumes:
+      - ./config/agentgateway.local.example.yaml:/etc/agentgateway/config.yaml:ro
+    ports:
+      - "127.0.0.1:3000:3000"   # Gateway HTTP API
+      - "127.0.0.1:15020:15020" # Gateway metrics/admin
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - CEREBRAS_API_KEY=${CEREBRAS_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - AGENTGATEWAY_OTEL_ENDPOINT=${AGENTGATEWAY_OTEL_ENDPOINT:-http://otel-collector:4317}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - otel-collector
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: auto-router-jaeger
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16686:16686" # Jaeger UI
+      - "127.0.0.1:14268:14268" # Jaeger OTLP receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.146.0
+    container_name: auto-router-otel-collector
+    restart: unless-stopped
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP
+    depends_on:
+      - jaeger

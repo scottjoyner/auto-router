@@ -4,7 +4,7 @@ This guide covers the aligned deployment where AssistX is already running and `a
 
 ## Deployment model
 
-- AssistX remains the source of truth for Neo4j context, task authority, and the live context projection.
+- AssistX remains the source of truth for Neo4j-backed context objects, task authority, and the live graph projection.
 - `auto-router` runs as its own service on port `8088`.
 - `auto-router` reads `AUTO_ROUTER_CONTEXT_CONFIG` from AssistX `/api/context/projection` when the live projection is available.
 - The router keeps its own Redis-backed quota state and local SQLite usage data.
@@ -46,8 +46,8 @@ AssistX must already be reachable before the router starts if you want live cont
 Required facts from AssistX:
 
 - Neo4j is running and populated with node and model inventory.
-- `GET /api/context/projection` returns a JSON snapshot.
-- The projection includes node/provider lane facts and any free API credit hints the graph knows about.
+- `GET /api/context/projection` returns a JSON snapshot of graph objects, not a markdown export.
+- The projection includes node/provider lane facts, live endpoint facts, and any free API credit hints the graph knows about.
 
 If AssistX is temporarily unavailable, `auto-router` falls back to its local bootstrap context config and still starts.
 

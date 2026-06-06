@@ -1,0 +1,36 @@
+agent_workers:
+  - name: codex
+    type: codex
+    command: codex
+    enabled: false
+    quota:
+      dimension: premium_m
+      mode: manual_monthly
+    policy:
+      allowed_priorities: [repo_critical, critical]
+      allow_write_default: false
+      allow_commit_default: false
+
+  - name: gemini-cli
+    type: gemini_cli
+    command: gemini
+    enabled: false
+    quota:
+      dimension: jobs_d
+      mode: manual_daily
+    policy:
+      allowed_priorities: [repo_critical, critical, batch]
+      allow_write_default: false
+      allow_commit_default: false
+
+  - name: opencode
+    type: opencode
+    command: opencode
+    enabled: false
+    quota:
+      dimension: jobs_d
+      mode: manual_daily
+    policy:
+      allowed_priorities: [repo_critical, critical, batch, background]
+      allow_write_default: false
+      allow_commit_default: false

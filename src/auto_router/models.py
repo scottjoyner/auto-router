@@ -40,6 +40,7 @@ class ModelConfig(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    id: str = Field(default="")
     name: str
     type: str
     node_id: str | None = None
@@ -50,6 +51,8 @@ class ProviderConfig(BaseModel):
     quota_class: QuotaClass | str = QuotaClass.local
     headers: dict[str, str] = Field(default_factory=dict)
     models: list[ModelConfig] = Field(default_factory=list)
+    gateway_managed: bool = False  # Route through agentgateway when enabled
+    local_gateway_only: bool = False  # Only use gateway for local-only requests
 
 
 class PolicyStage(BaseModel):

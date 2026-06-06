@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+
+config:
+  tracing:
+    otlpEndpoint: "${AGENTGATEWAY_OTEL_ENDPOINT:-http://otel-collector:4317}"
+    randomSampling: true
+
+llm:
+  port: 3000
+
+  policies:
+    localRateLimit:
+      - maxTokens: 200000
+        tokensPerFill: 200000
+        fillInterval: 24h
+        type: tokens
+
+  models:
+    - name: "local/*"
+      provider: openAI
+      params:
+        hostOverride: "host.docker.internal:1234"
+
+    - name: "ollama/*"
+      provider: openAI
+      params:
+        hostOverride: "host.docker.internal:11434"
+
+    - name: "groq/*"
+      provider: openAI
+      params:
+        apiKey: "$GROQ_API_KEY"
+        hostOverride: "api.groq.com:443"
+        pathOverride: "/openai/v1/chat/completions"
+      backendTLS: {}
+
+    - name: "mistral/*"
+      provider: openAI
+      params:
+        apiKey: "$MISTRAL_API_KEY"
+        hostOverride: "api.mistral.ai:443"
+      backendTLS: {}
+
+    - name: "openrouter/*"
+      provider: openAI
+      params:
+        apiKey: "$OPENROUTER_API_KEY"
+        hostOverride: "openrouter.ai:443"
+        pathOverride: "/api/v1/chat/completions"
+      backendTLS: {}

@@ -27,8 +27,66 @@
         <div class="rounded-3xl border border-router-line bg-router-panel p-5"><div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Free API lane</div><div class="mt-2 text-3xl font-black text-cyan-200">{{ cloud.count }}</div><div class="mt-1 text-xs text-router-muted">cloud quota nodes</div></div>
         <div class="rounded-3xl border border-router-line bg-router-panel p-5"><div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Local backstop</div><div class="mt-2 text-3xl font-black text-emerald-200">{{ local.count }}</div><div class="mt-1 text-xs text-router-muted">LM Studio / local nodes</div></div>
         <div class="rounded-3xl border border-router-line bg-router-panel p-5"><div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Context</div><div class="mt-2 text-xl font-black text-white">{{ context.revision|truncate(18) }}</div><div class="mt-1 text-xs text-router-muted">{{ context.source }}</div></div>
+        <div class="rounded-3xl border border-sky-300/20 bg-sky-300/10 p-5"><div class="text-xs font-semibold uppercase tracking-wider text-sky-200">Graph objects</div><div class="mt-2 text-3xl font-black text-white">{{ context_graph_summary.total or 0 }}</div><div class="mt-1 text-xs text-sky-100/70">{{ context_graph_summary.provider or 0 }} providers · {{ context_graph_summary.model or 0 }} models · {{ context_graph_summary.service or 0 }} services</div></div>
         <div class="rounded-3xl border border-amber-300/30 bg-amber-300/10 p-5"><div class="text-xs font-semibold uppercase tracking-wider text-amber-200">Flash start</div><div class="mt-2 text-3xl font-black text-amber-100">{{ flash.requests }}</div><div class="mt-1 text-xs text-amber-100/70">{% if flash.latency_count > 0 %}avg {{ (flash.latency_total / flash.latency_count)|round|int }} ms{% else %}no recent usage{% endif %}</div></div>
     </div>
+
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Provider probe health</p>
+                <h2 class="text-2xl font-black text-white">Durable /models health and drift</h2>
+                <p class="mt-1 text-sm text-router-muted">Derived from the latest probe history and live context projection.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ provider_probe_summary.providers or provider_health_summary|length }} providers</span>
+                <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">{{ provider_probe_summary.healthy or 0 }} healthy</span>
+                <span class="rounded-full bg-rose-400/15 px-3 py-1 font-bold text-rose-200">{{ provider_probe_summary.drift or 0 }} drift</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {% for provider in provider_health_summary[:8] %}
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="font-bold text-white">{{ provider.provider }}</div>
+                    <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if provider.health_score >= 80 %}bg-emerald-400/15 text-emerald-200{% elif provider.health_score >= 60 %}bg-yellow-400/15 text-yellow-100{% else %}bg-rose-400/15 text-rose-200{% endif %}">score {{ provider.health_score }}</span>
+                </div>
+                <div class="mt-1 text-xs text-router-muted">{{ provider.model_count }} models · {{ provider.success_rate }} success · {{ provider.age_seconds }}s old{% if provider.drift %} · drift{% endif %}</div>
+                {% if provider.error %}<div class="mt-2 line-clamp-2 text-xs text-rose-200">{{ provider.error }}</div>{% endif %}
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4 text-sm text-router-muted">No durable provider health records yet.</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Gateway overlay</p>
+                <h2 class="text-2xl font-black text-white">Agentgateway sidecar</h2>
+                <p class="mt-1 text-sm text-router-muted">OpenAI-compatible overlay for provider proxying, route metadata, and observability.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full px-3 py-1 font-bold {% if gateway.enabled %}bg-emerald-400/15 text-emerald-200{% else %}bg-white/10 text-router-muted{% endif %}">{{ 'enabled' if gateway.enabled else 'disabled' }}</span>
+                <span class="rounded-full px-3 py-1 font-bold bg-white/10 text-router-muted">{{ gateway.mode or 'direct' }}</span>
+                <span class="rounded-full px-3 py-1 font-bold {% if gateway.ok %}bg-emerald-400/15 text-emerald-200{% else %}bg-rose-400/15 text-rose-200{% endif %}">{{ 'healthy' if gateway.ok else 'unhealthy' }}</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm">
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4"><div class="text-xs uppercase tracking-wider text-router-muted">Base URL</div><div class="mt-1 truncate font-mono text-cyan-100">{{ gateway.base_url or 'not set' }}</div></div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4"><div class="text-xs uppercase tracking-wider text-router-muted">OpenAI URL</div><div class="mt-1 truncate font-mono text-cyan-100">{{ gateway.openai_base_url or 'not set' }}</div></div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4"><div class="text-xs uppercase tracking-wider text-router-muted">Metrics URL</div><div class="mt-1 truncate font-mono text-cyan-100">{{ gateway.metrics_url or 'not set' }}</div></div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4"><div class="text-xs uppercase tracking-wider text-router-muted">Detail</div><div class="mt-1 text-router-muted">{{ gateway.detail or 'not configured' }}</div></div>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2 text-xs">
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 text-router-muted">fail-open {{ 'on' if gateway.fail_open_to_direct else 'off' }}</span>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 text-router-muted">fail-closed {{ 'on' if gateway.fail_closed_for_private else 'off' }}</span>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 text-router-muted">headers {{ 'on' if gateway.emit_headers else 'off' }}</span>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 text-router-muted">body metadata {{ 'on' if gateway.pass_metadata_in_body else 'off' }}</span>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 text-router-muted">usage reconcile {{ 'on' if gateway.reconcile_usage else 'off' }}</span>
+        </div>
+    </section>
 
     <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
         <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -63,12 +121,133 @@
         </section>
 
         <section class="rounded-[2rem] border border-router-line bg-router-panel p-6 xl:col-span-2">
-            <div class="mb-4 flex items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Provider lanes</p><h2 class="text-2xl font-black text-white">Context alignment</h2></div><span class="text-xs text-router-muted">{{ context.providers|length }} providers</span></div>
+            <div class="mb-4 flex items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Provider lanes</p><h2 class="text-2xl font-black text-white">Context alignment</h2></div><span class="text-xs text-router-muted">{{ context.providers|length }} providers · {{ context.all_models()|length }} models</span></div>
             <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-                {% for p in context.providers %}<div class="rounded-2xl border {% if p.blocked %}border-rose-400/30 bg-rose-400/10{% elif p.lane == 'local' %}border-emerald-400/20 bg-emerald-400/10{% elif p.lane == 'free_api' %}border-cyan-400/20 bg-cyan-400/10{% else %}border-router-line bg-router-panel2{% endif %} p-4"><div class="flex items-start justify-between gap-3"><div><div class="font-bold text-white">{{ p.provider }}</div><div class="mt-1 text-xs text-router-muted">{{ p.detail or 'no detail' }}</div></div><div class="rounded-full border border-white/10 px-2 py-1 text-xs text-router-text">{{ p.lane }}</div></div><div class="mt-3 flex flex-wrap gap-2 text-xs"><span class="rounded-full bg-black/20 px-2 py-1">{{ 'blocked' if p.blocked else 'ready' }}</span><span class="rounded-full bg-black/20 px-2 py-1">free api: {{ p.can_use_free_api }}</span>{% if p.free_api_credits is not none %}<span class="rounded-full bg-black/20 px-2 py-1">credits {{ p.free_api_credits }}</span>{% endif %}</div>{% if p.services %}<div class="mt-3 flex flex-wrap gap-2">{% for service in p.services %}<a href="{{ service.url }}" target="_blank" rel="noreferrer" class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-xs text-cyan-100 hover:border-cyan-300/50">{{ service.name }} · {{ service.status }}</a>{% endfor %}</div>{% endif %}</div>{% endfor %}
+                {% for p in context.providers %}<div class="rounded-2xl border {% if p.blocked %}border-rose-400/30 bg-rose-400/10{% elif p.lane == 'local' %}border-emerald-400/20 bg-emerald-400/10{% elif p.lane == 'free_api' %}border-cyan-400/20 bg-cyan-400/10{% else %}border-router-line bg-router-panel2{% endif %} p-4"><div class="flex items-start justify-between gap-3"><div><div class="font-bold text-white">{{ p.provider }}</div><div class="mt-1 text-xs text-router-muted">{{ p.detail or 'no detail' }}</div></div><div class="rounded-full border border-white/10 px-2 py-1 text-xs text-router-text">{{ p.lane }}</div></div><div class="mt-3 flex flex-wrap gap-2 text-xs"><span class="rounded-full bg-black/20 px-2 py-1">{{ 'blocked' if p.blocked else 'ready' }}</span><span class="rounded-full bg-black/20 px-2 py-1">free api: {{ p.can_use_free_api }}</span>{% if p.free_api_credits is not none %}<span class="rounded-full bg-black/20 px-2 py-1">credits {{ p.free_api_credits }}</span>{% endif %}</div>{% if p.services %}<div class="mt-3 flex flex-wrap gap-2">{% for service in p.services %}<a href="{{ service.url }}" target="_blank" rel="noreferrer" class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-xs text-cyan-100 hover:border-cyan-300/50">{{ service.name }} · {{ service.status }}</a>{% endfor %}</div>{% endif %}{% if p.models %}<div class="mt-3 flex flex-wrap gap-2 text-[10px]">{% for model in p.models[:6] %}<span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model.name }}{% if model.provider_model %} · {{ model.provider_model }}{% endif %}</span>{% endfor %}{% if p.models|length > 6 %}<span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ p.models|length - 6 }} more</span>{% endif %}</div>{% endif %}</div>{% endfor %}
             </div>
         </section>
     </div>
+
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Swarm memory map</p>
+                <h2 class="text-2xl font-black text-white">Machine → model memory and endpoint health</h2>
+                <p class="mt-1 text-sm text-router-muted">Node-level model memory, provider recency, and endpoint health stitched together from context and durable probe history.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ swarm_summary.nodes|default(0) }} nodes</span>
+                <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">{{ swarm_summary.models|default(0) }} models</span>
+                <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">{{ swarm_summary.avg_endpoint_health_score|default(0) }} avg endpoint</span>
+                <span class="rounded-full bg-rose-400/15 px-3 py-1 font-bold text-rose-200">{{ swarm_summary.drift_providers|default(0) }} drift</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {% for node in swarm_memory_map|default([])[:6] %}
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <div class="font-bold text-white">{{ node.display_name }}</div>
+                        <div class="mt-1 text-xs text-router-muted">{{ node.node_id }} · {{ node.lane }}{% if node.detail %} · {{ node.detail }}{% endif %}</div>
+                    </div>
+                    <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if node.endpoint_health.state == 'healthy' %}bg-emerald-400/15 text-emerald-200{% elif node.endpoint_health.state == 'mixed' %}bg-yellow-400/15 text-yellow-100{% elif node.endpoint_health.state == 'degraded' %}bg-rose-400/15 text-rose-200{% else %}bg-white/10 text-router-muted{% endif %}">{{ node.endpoint_health.state }}</span>
+                </div>
+                <div class="mt-2 text-xs text-router-muted">{{ node.model_count }} models · {{ node.provider_count }} providers · {{ node.service_count }} endpoints · score {{ node.endpoint_health.score }}</div>
+                {% if node.models %}
+                <div class="mt-3 flex flex-wrap gap-1.5 text-[10px]">
+                    {% for model in node.models[:5] %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model }}</span>
+                    {% endfor %}
+                    {% if node.models|length > 5 %}<span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ node.models|length - 5 }} more</span>{% endif %}
+                </div>
+                {% endif %}
+                {% if node.recent_history %}
+                <div class="mt-3 space-y-1 text-[10px] text-router-muted">
+                    {% for probe in node.recent_history[:3] %}
+                    <div class="flex items-center justify-between gap-2 rounded-xl bg-black/20 px-2 py-1">
+                        <span>{{ probe.provider }}</span>
+                        <span>{{ probe.age_seconds }}s · {{ probe.model_count }} models{% if probe.drift %} · drift{% endif %}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4 text-sm text-router-muted">No swarm memory map available yet.</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Model lanes</p>
+                <h2 class="text-2xl font-black text-white">Local models vs API models</h2>
+                <p class="mt-1 text-sm text-router-muted">Local lanes are the fast backstop for instant chat, documentation summarization, and lightweight triage. API lanes are the higher-budget space for deeper reasoning and focused implementation progression.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">{{ context.local_models()|length }} local</span>
+                <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">{{ context.free_api_models()|length }} api</span>
+                <span class="rounded-full bg-rose-400/15 px-3 py-1 font-bold text-rose-200">{{ context.blocked_models()|length }} blocked</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div class="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Local models</div>
+                        <div class="mt-1 text-3xl font-black text-white">{{ context.local_models()|length }}</div>
+                    </div>
+                    <span class="rounded-full bg-black/20 px-2 py-1 text-[10px] font-bold uppercase text-emerald-100">fast backstop</span>
+                </div>
+                <div class="mt-2 text-xs text-emerald-100/70">Instant chat, docs summarization, quick routing, and local-only tasks.</div>
+                <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                    {% for model in context.local_models()[:6] %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model.name }}{% if model.provider_model %} · {{ model.provider_model }}{% endif %}</span>
+                    {% endfor %}
+                    {% if context.local_models()|length > 6 %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ context.local_models()|length - 6 }} more</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wider text-cyan-200">API models</div>
+                        <div class="mt-1 text-3xl font-black text-white">{{ context.free_api_models()|length }}</div>
+                    </div>
+                    <span class="rounded-full bg-black/20 px-2 py-1 text-[10px] font-bold uppercase text-cyan-100">reasoning lane</span>
+                </div>
+                <div class="mt-2 text-xs text-cyan-100/70">Higher-token reasoning, code progression, and non-urgent focused implementation steps.</div>
+                <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                    {% for model in context.free_api_models()[:6] %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model.name }}{% if model.provider_model %} · {{ model.provider_model }}{% endif %}</span>
+                    {% endfor %}
+                    {% if context.free_api_models()|length > 6 %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ context.free_api_models()|length - 6 }} more</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wider text-rose-200">Blocked models</div>
+                        <div class="mt-1 text-3xl font-black text-white">{{ context.blocked_models()|length }}</div>
+                    </div>
+                    <span class="rounded-full bg-black/20 px-2 py-1 text-[10px] font-bold uppercase text-rose-100">held back</span>
+                </div>
+                <div class="mt-2 text-xs text-rose-100/70">Models currently excluded from routing or waiting on policy/context alignment.</div>
+                <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                    {% for model in context.blocked_models()[:6] %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model.name }}{% if model.provider_model %} · {{ model.provider_model }}{% endif %}</span>
+                    {% endfor %}
+                    {% if context.blocked_models()|length > 6 %}
+                    <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ context.blocked_models()|length - 6 }} more</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
 
     <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <section class="rounded-[2rem] border border-router-line bg-router-panel p-6"><div class="mb-4"><p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Quota burn-down</p><h2 class="text-2xl font-black text-white">Daily capacity</h2></div><div class="space-y-3">{% for snapshot in snapshots %}{% for dimension, values in snapshot.dimensions.items() %}{% if values.limit is not none and values.limit > 0 %}{% set pct = ((values.used / values.limit) * 100) if values.used is not none else 0 %}{% else %}{% set pct = 0 %}{% endif %}<div class="rounded-2xl border {% if snapshot.provider == 'cerebras' %}border-amber-300/25 bg-amber-300/10{% else %}border-router-line bg-router-panel2{% endif %} p-4"><div class="flex items-center justify-between gap-3 text-sm"><div><span class="font-bold text-white">{{ snapshot.provider }}</span> <span class="text-router-muted">/ {{ snapshot.model }} / {{ dimension }}</span></div><div class="text-router-muted">{{ values.remaining if values.remaining is not none else '∞' }} left</div></div><div class="mt-3 h-2 overflow-hidden rounded-full bg-black/30"><div class="h-full rounded-full {% if snapshot.provider == 'cerebras' %}bg-amber-300{% else %}bg-cyan-300{% endif %}" style="width: {{ pct if pct < 100 else 100 }}%"></div></div><div class="mt-2 text-xs text-router-muted">used {{ values.used if values.used is not none else 0 }} / {{ values.limit if values.limit is not none else 'unlimited' }}</div></div>{% endfor %}{% endfor %}</div></section>

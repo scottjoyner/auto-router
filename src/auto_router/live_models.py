@@ -15,6 +15,11 @@ class LiveModelSnapshot:
     expires_at: int
     models: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    latency_ms: int | None = None
+    drift: bool = False
+    signature: str | None = None
+    previous_signature: str | None = None
+    changed_models: list[str] = field(default_factory=list)
 
     @property
     def stale(self) -> bool:
@@ -30,6 +35,11 @@ class LiveModelSnapshot:
             "models": self.models,
             "model_count": len(self.models),
             "error": self.error,
+            "latency_ms": self.latency_ms,
+            "drift": self.drift,
+            "signature": self.signature,
+            "previous_signature": self.previous_signature,
+            "changed_models": self.changed_models,
         }
 
 

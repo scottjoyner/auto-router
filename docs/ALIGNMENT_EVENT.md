@@ -4,7 +4,7 @@
 
 This repo should route work using the same graph-backed context that AssistX owns.
 
-Neo4j is the shared context fabric. auto-router consumes the facts AssistX publishes and uses them to decide whether a request should run locally, spend legitimate free API credits, or stay on the Paperclip/cutover path.
+Neo4j is the shared context fabric. The router should think in terms of graph objects—providers, models, services, nodes, capabilities, and provenance—not markdown vault fragments. Markdown is acceptable only as a derived cache/export, never as the coordination language.
 
 ## Shared contract
 
@@ -13,6 +13,7 @@ Neo4j is the shared context fabric. auto-router consumes the facts AssistX publi
 - Local-only routing is always explicit.
 - Free API credit usage is explicit and only happens when the registry says the lane is available.
 - Providers and workers should be selected from graph-backed capability and locality facts, not from guesswork in request payloads.
+- Shared markdown mounts and rsync-cached copies are not the source of truth for routing decisions.
 
 ## Context facts the router needs
 
@@ -42,8 +43,8 @@ The router should return provenance that answers:
 
 ## Next steps
 
-1. Add a graph-backed context registry import from AssistX or its projection API.
-2. Point `AUTO_ROUTER_CONTEXT_CONFIG` at AssistX `/api/context/projection` for live sync when available.
-3. Replace the router's static YAML assumptions with graph-synced lane and capability data where practical.
-4. Expose lane, locality, and free-credit state in `/health`, `/dashboard`, and admin endpoints.
+1. Keep the graph projection in sync with AssistX/Neo4j so providers, models, services, and nodes remain first-class objects.
+2. Point `AUTO_ROUTER_CONTEXT_CONFIG` at AssistX `/api/context/projection` for live sync when available, but treat that projection as a graph export rather than a markdown export.
+3. Replace any remaining static YAML assumptions with graph-synced lane and capability data where practical.
+4. Expose lane, locality, free-credit state, and graph object counts in `/health`, `/dashboard`, and admin endpoints.
 5. Keep local-only requests and privacy-restricted requests from ever touching free cloud lanes.

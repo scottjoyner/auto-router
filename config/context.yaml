@@ -1,0 +1,260 @@
+revision: assistx-bootstrap
+source: assistx:projection
+metadata:
+  note: Example projection consumed by auto-router before Neo4j sync is wired in.
+  flash_start_node: cerebras-wse3
+  service_registry_source: bootstrap; later should be emitted by AssistX/Neo4j from Service nodes and optional node probes.
+services:
+  - service_id: auto-router.dashboard
+    name: Auto Router Dashboard
+    url: http://localhost:8088/dashboard
+    health_url: http://localhost:8088/health
+    service_type: router_ui
+    status: online
+    tags: [router, dashboard, operations]
+    detail: Local operator console for routing, quota, context, and services
+    priority: 1
+  - service_id: auto-router.api
+    name: Auto Router OpenAI API
+    url: http://localhost:8088/v1
+    health_url: http://localhost:8088/health
+    service_type: openai_compatible_api
+    status: online
+    tags: [router, openai, api]
+    detail: Local OpenAI-compatible router endpoint
+    priority: 2
+  - service_id: assistx.ui
+    name: AssistX UI
+    url: http://172.20.0.5:8000
+    health_url: http://172.20.0.5:8000/health
+    service_type: assistx_ui
+    status: unknown
+    tags: [assistx, tasks, sophia]
+    detail: AssistX task and orchestration UI; source of graph-backed router context
+    priority: 10
+  - service_id: assistx.context
+    name: AssistX Router Context Projection
+    url: http://172.20.0.5:8000/api/router/context-projection
+    health_url: http://172.20.0.5:8000/health
+    service_type: context_projection
+    status: unknown
+    tags: [assistx, neo4j, context]
+    detail: Future graph-backed projection endpoint for providers, nodes, services, and policies
+    priority: 11
+  - service_id: neo4j.browser
+    name: Neo4j Browser
+    url: http://localhost:7474
+    health_url: http://localhost:7474
+    service_type: graph_ui
+    status: unknown
+    tags: [neo4j, graph, browser]
+    detail: Browser for AssistX and legacy graph databases
+    priority: 20
+  - service_id: neo4j.bolt
+    name: Neo4j Bolt
+    url: bolt://localhost:7687
+    service_type: graph_database
+    status: unknown
+    tags: [neo4j, bolt]
+    detail: Bolt connection endpoint for graph-backed context and provenance
+    priority: 21
+  - service_id: redis.local
+    name: Redis Queue and Quota Store
+    url: redis://localhost:6379/0
+    service_type: cache_queue
+    status: unknown
+    tags: [redis, quota, queue]
+    detail: Redis-backed quota reservation and job queue store
+    priority: 30
+nodes:
+  - node_id: x1-370
+    display_name: Network Orchestrator (X1-370)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [large_models, long_context, agent_host]
+    detail: 96GB RAM, weak GPU
+    services:
+      - service_id: x1-370.lmstudio
+        name: X1-370 LM Studio
+        url: http://x1-370.lan:1234/v1
+        health_url: http://x1-370.lan:1234/v1/models
+        service_type: lmstudio
+        node_id: x1-370
+        status: unknown
+        tags: [local_llm, lmstudio, openai_compatible]
+        detail: Local OpenAI-compatible model endpoint
+        priority: 40
+  - node_id: macbook-air
+    display_name: Mobile Speed Demon (MacBook Air)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [fast_draft, low_latency]
+    detail: Gemma-3 powerhouse
+  - node_id: deathstar
+    display_name: GPU Specialist (Deathstar)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [gpu_accelerated, fast_inference]
+    detail: RX 480 8GB
+    services:
+      - service_id: deathstar.lmstudio
+        name: Deathstar LM Studio
+        url: http://deathstar-XPS-8920:1234/v1
+        health_url: http://deathstar-XPS-8920:1234/v1/models
+        service_type: lmstudio
+        node_id: deathstar
+        status: unknown
+        tags: [local_llm, lmstudio, openai_compatible]
+        detail: Deathstar local GPU model endpoint
+        priority: 41
+      - service_id: deathstar.neo4j.browser
+        name: Deathstar Neo4j Browser
+        url: http://deathstar-XPS-8920:7474
+        health_url: http://deathstar-XPS-8920:7474
+        service_type: graph_ui
+        node_id: deathstar
+        status: unknown
+        tags: [neo4j, graph, browser]
+        detail: Graph browser on the legacy/ingest host
+        priority: 42
+  - node_id: paperclip-control
+    display_name: Paperclip control plane
+    lane: paperclip
+    local: false
+    can_use_free_api: false
+    running: true
+    detail: AssistX release path
+    services:
+      - service_id: paperclip.control
+        name: Paperclip Control Plane
+        url: http://localhost:9000
+        service_type: agent_control
+        node_id: paperclip-control
+        status: unknown
+        tags: [paperclip, agents]
+        detail: Current approved release path for non-realtime agent dispatch
+        priority: 50
+  - node_id: cerebras-wse3
+    display_name: Cerebras WSE-3 Flash Planning Node
+    lane: free_api
+    local: false
+    can_use_free_api: true
+    running: true
+    capabilities: [flash_planning, low_latency, reasoning, code, json, tool_use]
+    detail: OpenAI-compatible Cerebras inference lane for instant draft/planning starts
+    services:
+      - service_id: cerebras.api
+        name: Cerebras Inference API
+        url: https://api.cerebras.ai/v1
+        health_url: https://api.cerebras.ai/v1/models
+        service_type: inference_api
+        node_id: cerebras-wse3
+        provider: cerebras
+        status: unknown
+        tags: [free_api, cerebras, flash_start, openai_compatible]
+        detail: WSE-3 backed OpenAI-compatible API endpoint
+        priority: 5
+providers:
+  - provider: lmstudio-r2d2
+    node_id: x1-370
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    detail: local model endpoint
+    services:
+      - service_id: provider.lmstudio-r2d2.api
+        name: LM Studio R2D2 API
+        url: http://r2d2:1234/v1
+        health_url: http://r2d2:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: x1-370
+        provider: lmstudio-r2d2
+        status: unknown
+        tags: [lmstudio, local_llm]
+        detail: Provider URL used by auto-router
+        priority: 40
+  - provider: lmstudio-deathstar
+    node_id: deathstar
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    detail: local GPU endpoint
+    services:
+      - service_id: provider.lmstudio-deathstar.api
+        name: LM Studio Deathstar API
+        url: http://deathstar-XPS-8920:1234/v1
+        health_url: http://deathstar-XPS-8920:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: deathstar
+        provider: lmstudio-deathstar
+        status: unknown
+        tags: [lmstudio, local_llm]
+        detail: Provider URL used by auto-router
+        priority: 41
+  - provider: groq
+    lane: free_api
+    local: false
+    can_use_free_api: true
+    free_api_credits: null
+    blocked: false
+    detail: free cloud lane
+    services:
+      - service_id: groq.api
+        name: Groq API
+        url: https://api.groq.com/openai/v1
+        health_url: https://api.groq.com/openai/v1/models
+        service_type: inference_api
+        provider: groq
+        status: unknown
+        tags: [free_api, openai_compatible]
+        detail: Hosted fast-free inference endpoint
+        priority: 12
+  - provider: cerebras
+    node_id: cerebras-wse3
+    lane: free_api
+    local: false
+    can_use_free_api: true
+    free_api_credits: 1000000
+    blocked: false
+    aliases: [cerebras/flash-reasoner, cerebras/glm-4.7-preview, auto/flash-start]
+    capabilities: [chat, streaming, json, code, reasoning, low_latency, flash_planning, tool_use]
+    detail: WSE-3 backed free API lane for flash-start planning, first-pass decomposition, and instant backlog triage
+    services:
+      - service_id: provider.cerebras.api
+        name: Cerebras Provider API
+        url: https://api.cerebras.ai/v1
+        health_url: https://api.cerebras.ai/v1/models
+        service_type: inference_api
+        node_id: cerebras-wse3
+        provider: cerebras
+        status: unknown
+        tags: [free_api, cerebras, flash_start]
+        detail: Provider URL used by auto-router
+        priority: 5
+  - provider: openrouter
+    lane: blocked
+    local: false
+    can_use_free_api: false
+    free_api_credits: 0
+    blocked: true
+    detail: disabled pending context sync
+    services:
+      - service_id: openrouter.api
+        name: OpenRouter API
+        url: https://openrouter.ai/api/v1
+        service_type: inference_api
+        provider: openrouter
+        status: blocked
+        tags: [brokered_free, openai_compatible]
+        detail: Disabled pending context sync
+        priority: 90

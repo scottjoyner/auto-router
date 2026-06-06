@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+
+config:
+  tracing:
+    otlpEndpoint: "${AGENTGATEWAY_OTEL_ENDPOINT:-http://otel-collector:4317}"
+    randomSampling: true
+
+llm:
+  port: 3000
+  models:
+    - name: "*"
+      provider: openAI
+      params:
+        hostOverride: "host.docker.internal:1234"

@@ -73,3 +73,26 @@ def test_model_registry_recent_snapshots(tmp_path) -> None:
 
     assert len(recent) == 1
     assert recent[0]["provider"] == "b"
+
+
+def test_model_registry_records_probe_history_and_health_scores(tmp_path) -> None:
+    store = ModelRegistryStore(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    previous = LiveModelSnapshot(provider="cerebras", ok=True, fetched_at=1, expires_at=100, models=[{"id": "model-a"}])
+    current = LiveModelSnapshot(provider="cerebras", ok=True, fetched_at=2, expires_at=200, models=[{"id": "model-b"}])
+
+    store.save_snapshot(previous)
+    store.save_snapshot(current)
+    store.save_probe(current, latency_ms=123, previous_snapshot=previous)
+
+    latest_probe = store.latest_probe_for_provider("cerebras")
+    health_reports = store.provider_health_reports()
+    probe_summary = store.probe_summary()
+
+    assert latest_probe is not None
+    assert latest_probe.drift is True
+    assert latest_probe.signature is not None
+    assert probe_summary["providers"] == 1
+    assert probe_summary["drift"] == 1
+    assert probe_summary["healthy"] == 0
+    assert health_reports[0]["provider"] == "cerebras"
+    assert 0 <= int(health_reports[0]["health_score"]) <= 100

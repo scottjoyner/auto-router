@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://agentgateway.dev/schema/config
+
+# Route-specific configuration for agentgateway.
+# This file defines route splits based on headers and body metadata.
+
+binds:
+  - port: 3000
+    listeners:
+      # High-priority routes (auto/code, auto/high-quality)
+      - matches:
+          - path:
+              pathPrefix: "/"
+            headers:
+              - name: "x-auto-router-priority"
+                value:
+                  exact: "high"
+                caseSensitive: false
+              - name: "x-auto-router-profile"
+                value:
+                  regex: "^auto/(code|high-quality)$"
+        routes:
+          - backends:
+              - ai:
+                  name: high-priority-backend
+                  provider:
+                    openAI:
+                      model: gpt-4o  # or appropriate high-tier model
+            policies:
+              transformations:
+                request:
+                  set:
+                    x-auto-router-priority: 'request.headers["x-auto-router-priority"]'
+
+      # Backlog burn routes (auto/backlog-burn)
+      - matches:
+          - path:
+              pathPrefix: "/"
+            headers:
+              - name: "x-auto-router-profile"
+                value:
+                  exact: "auto/backlog-burn"
+        routes:
+          - backends:
+              - ai:
+                  name: backlog-backend
+                  provider:
+                    openAI:
+                      model: gpt-4o-mini  # cost-effective for batch
+
+      # Default route (all other traffic)
+      - matches:
+          - path:
+              pathPrefix: "/"
+        routes:
+          - backends:
+              - ai:
+                  name: default-backend
+                  provider:
+                    openAI:
+                      model: gpt-4o-mini

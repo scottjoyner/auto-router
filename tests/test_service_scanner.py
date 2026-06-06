@@ -1,7 +1,8 @@
-import pytest
+import asyncio
+import json
 
 from auto_router.context import ContextService, ServiceStatus
-from auto_router.service_scanner import is_private_or_local_service, probe_service
+from auto_router.service_scanner import discover_tailnet_lmstudio_services, is_private_or_local_service, probe_service
 
 
 def test_private_or_local_service_detection() -> None:
@@ -12,8 +13,7 @@ def test_private_or_local_service_detection() -> None:
     assert is_private_or_local_service("https://api.cerebras.ai/v1/models") is False
 
 
-@pytest.mark.asyncio
-async def test_external_service_probe_is_skipped_by_default() -> None:
+def test_external_service_probe_is_skipped_by_default() -> None:
     service = ContextService(
         service_id="cerebras.api",
         name="Cerebras API",
@@ -21,15 +21,14 @@ async def test_external_service_probe_is_skipped_by_default() -> None:
         health_url="https://api.cerebras.ai/v1/models",
     )
 
-    result = await probe_service(service, allow_external=False)
+    result = asyncio.run(probe_service(service, allow_external=False))
 
     assert result.skipped is True
     assert result.status == ServiceStatus.unknown
     assert result.reason == "external probing disabled"
 
 
-@pytest.mark.asyncio
-async def test_blocked_service_probe_is_skipped() -> None:
+def test_blocked_service_probe_is_skipped() -> None:
     service = ContextService(
         service_id="openrouter.api",
         name="OpenRouter API",
@@ -37,8 +36,33 @@ async def test_blocked_service_probe_is_skipped() -> None:
         status="blocked",
     )
 
-    result = await probe_service(service, allow_external=True)
+    result = asyncio.run(probe_service(service, allow_external=True))
 
     assert result.skipped is True
     assert result.status == ServiceStatus.blocked
     assert result.reason == "service is blocked in context"
+
+
+def test_discover_tailnet_lmstudio_services_from_tailscale(monkeypatch) -> None:
+    payload = {
+        "Peer": {
+            "peer1": {
+                "HostName": "r2d2",
+                "DNSName": "r2d2.tailcb8954.ts.net.",
+                "TailscaleIPs": ["100.105.87.118"],
+            }
+        }
+    }
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps(payload)
+
+    monkeypatch.setattr("auto_router.service_scanner.subprocess.run", lambda *args, **kwargs: Result())
+
+    services = discover_tailnet_lmstudio_services()
+
+    assert len(services) == 1
+    assert services[0].service_id == "tailnet.r2d2.lmstudio"
+    assert services[0].provider == "lmstudio-r2d2"
+    assert services[0].url == "http://r2d2.tailcb8954.ts.net:1234/v1"

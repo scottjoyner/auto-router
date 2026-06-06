@@ -4,6 +4,7 @@ import asyncio
 import time
 import uuid
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import uvicorn
@@ -22,12 +23,18 @@ from auto_router.config import (
     load_context_snapshot_async,
     load_policy_registry,
     load_provider_registry,
+    _project_live_models,
 )
 from auto_router.ledger import UsageEvent, UsageLedger
+from auto_router.model_registry import ModelRegistryStore
 from auto_router.models import Priority, ProviderCandidate, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
-from auto_router.providers import ProviderError, ProviderStreamResponse, build_provider
+from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
+from auto_router.gateway import build_agentgateway_status
+from auto_router.ops_dashboard_routes import build_swarm_state_summary
 from auto_router.quota import build_quota_manager
+from auto_router.route_event_patch import install_route_event_patch
+from auto_router.route_events import enqueue_route_decision_event
 from auto_router.settings import get_settings
 
 templates = Jinja2Templates(directory="src/auto_router/templates")
@@ -42,6 +49,7 @@ class AppState:
     quota: Any
     quota_backend: str
     ledger: UsageLedger
+    model_registry: Any
     circuits: CircuitBreakerManager
     agent_jobs: AgentJobManager
 
@@ -55,10 +63,12 @@ async def load_state() -> None:
     state.policies = load_policy_registry(settings.policy_config)
     state.agents = load_agent_worker_registry(settings.agent_config)
     state.context = await load_context_snapshot_async(settings.context_config, state.providers, state.agents)
+    state.ledger = UsageLedger(settings.database_url)
+    state.model_registry = ModelRegistryStore(settings.database_url)
+    state.context = _project_live_models(state.context, state.providers, state.model_registry.latest_inventory())
     state.policy_engine = PolicyEngine(state.providers, state.policies, settings.default_profile, state.context)
     state.quota = build_quota_manager(settings.redis_url)
     state.quota_backend = state.quota.__class__.__name__
-    state.ledger = UsageLedger(settings.database_url)
     state.circuits = CircuitBreakerManager()
     state.agent_jobs = AgentJobManager(state.agents.agent_workers)
 
@@ -71,6 +81,7 @@ async def refresh_context_task() -> None:
             source = str(settings.context_config)
             if source.startswith(("http://", "https://")):
                 state.context = await load_context_snapshot_async(source, state.providers, state.agents)
+                state.context = _project_live_models(state.context, state.providers, state.model_registry.latest_inventory())
                 state.policy_engine.context = state.context
         except Exception as exc:  # pragma: no cover
             print(f"Error refreshing context: {exc}")
@@ -101,6 +112,8 @@ app = FastAPI(
 @app.get("/health")
 async def health() -> dict[str, Any]:
     open_circuits = [circuit for circuit in state.circuits.snapshot() if circuit["open"]]
+    gateway_status = await build_agentgateway_status()
+    
     return {
         "ok": True,
         "service": "auto-router",
@@ -115,6 +128,8 @@ async def health() -> dict[str, Any]:
         "agent_workers_configured": len(state.agents.agent_workers),
         "open_circuits": len(open_circuits),
         "time": int(time.time()),
+        # Gateway status (optional)
+        "gateway": gateway_status,
     }
 
 
@@ -163,11 +178,16 @@ async def dashboard_summary(request: Request) -> Any:
         context={
             "snapshots": state.quota.snapshots(state.providers.enabled()),
             "provider_health": await _provider_health_reports(),
+            "provider_probe_summary": state.model_registry.probe_summary() if hasattr(state, "model_registry") else {},
+            "provider_health_summary": state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else [],
             "agents": state.agents.agent_workers,
             "jobs": list(state.agent_jobs.jobs.values()),
             "recent_usage": state.ledger.recent_events(limit=20),
             "context": state.context,
+            "context_graph_summary": state.context.graph_object_summary() if hasattr(state.context, "graph_object_summary") else {},
             "circuits": state.circuits.snapshot(),
+            "gateway": await build_agentgateway_status(),
+            **build_swarm_state_summary(state),
         },
     )
 
@@ -185,6 +205,16 @@ async def admin_provider_health() -> dict[str, Any]:
 @app.get("/admin/context")
 async def admin_context() -> dict[str, Any]:
     return state.context.model_dump()
+
+
+@app.get("/admin/context/graph")
+async def admin_context_graph() -> dict[str, Any]:
+    return {
+        "revision": state.context.revision,
+        "source": state.context.source,
+        "summary": state.context.graph_object_summary(),
+        "objects": state.context.graph_objects(),
+    }
 
 
 @app.get("/admin/providers")
@@ -303,24 +333,51 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     for stage in plan.stages:
         if not stage.candidates and stage.optional:
             continue
+        stage_rejections: list[str] = []
         for candidate in stage.candidates:
             owner = _owner(candidate)
             if not _candidate_allowed(router_request, candidate, state.context):
+                rejection = f"not allowed for {owner}"
+                stage_rejections.append(rejection)
                 continue
             if not state.circuits.allowed(owner):
-                errors.append(f"circuit open for {owner}")
+                rejection = f"circuit open for {owner}"
+                stage_rejections.append(rejection)
+                errors.append(rejection)
                 continue
             estimate = state.quota.estimate(candidate.model, router_request.raw_body)
             if not state.quota.reserve(candidate.provider, candidate.model, estimate):
-                errors.append(f"quota unavailable for {candidate.provider.name}/{candidate.model.alias}")
+                rejection = f"quota unavailable for {candidate.provider.name}/{candidate.model.alias}"
+                stage_rejections.append(rejection)
+                errors.append(rejection)
                 continue
+            enqueue_route_decision_event(
+                state,
+                request=router_request,
+                profile_name=plan.profile_name,
+                stage=stage.purpose.value,
+                chosen_candidate=candidate,
+                candidates=stage.candidates,
+                rejections=stage_rejections,
+            )
             provider = build_provider(candidate.provider, timeout_seconds=get_settings().request_timeout_seconds)
             started = time.perf_counter()
             try:
                 if router_request.stream and router_request.route in {"chat_completions", "responses", "completions"}:
-                    stream_response = await _dispatch_stream(provider, candidate, router_request)
+                    gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
+                    stream_response = await _dispatch_stream(provider, candidate, router_request, route_plan=gateway_context)
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     state.circuits.record_success(owner)
+                    gateway_metadata = None
+                    if stream_response.provider.startswith("agentgateway"):
+                        gateway_metadata = {
+                            "provider": stream_response.provider,
+                            "profile": gateway_context.profile,
+                            "stage": gateway_context.stage,
+                            "privacy": gateway_context.privacy,
+                            "quota_mode": gateway_context.quota_mode,
+                            "latency_ms": latency_ms,
+                        }
                     _record_usage(
                         router_request,
                         stream_response.provider,
@@ -329,6 +386,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                         estimate,
                         stream_response.status_code,
                         latency_ms,
+                        gateway_metadata=gateway_metadata,
                     )
                     return StreamingResponse(
                         stream_response.body,
@@ -341,9 +399,11 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                             "x-auto-router-profile": plan.profile_name,
                         },
                     )
-                response = await _dispatch(provider, candidate, router_request)
+                gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
+                response = await _dispatch(provider, candidate, router_request, route_plan=gateway_context)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 state.circuits.record_success(owner)
+                gateway_metadata = response.data.get("_gateway_metadata") if isinstance(response.data, dict) else None
                 _record_usage(
                     router_request,
                     response.provider,
@@ -353,6 +413,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                     response.status_code,
                     latency_ms,
                     response.usage,
+                    gateway_metadata=gateway_metadata,
                 )
                 payload = _normalize_response_payload(response, stage.purpose.value, plan.profile_name)
                 payload["auto_router"]["latency_ms"] = latency_ms
@@ -371,6 +432,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                     latency_ms,
                     error=exc,
                 )
+                stage_rejections.append(str(exc))
                 errors.append(str(exc))
             except Exception as exc:
                 latency_ms = int((time.perf_counter() - started) * 1000)
@@ -386,30 +448,61 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                     latency_ms,
                     error=exc,
                 )
+                stage_rejections.append(f"unexpected provider error: {exc}")
                 errors.append(f"unexpected provider error: {exc}")
     raise HTTPException(status_code=503, detail={"error": "all providers failed", "details": errors})
 
 
-async def _dispatch(provider: Any, candidate: ProviderCandidate, request: RouterRequest) -> ProviderResponse:
+def _gateway_route_context(profile_name: str, stage: str, request: RouterRequest) -> SimpleNamespace:
+    privacy = request.metadata.get("privacy") if isinstance(request.metadata, dict) else None
+    if request.local_only or request.priority == Priority.local_only or request.allow_cloud is False:
+        privacy = "local_only"
+    elif not isinstance(privacy, str) or not privacy.strip():
+        privacy = "cloud_allowed"
+    quota_mode = request.metadata.get("quota_mode") if isinstance(request.metadata, dict) else None
+    if not isinstance(quota_mode, str) or not quota_mode.strip():
+        quota_mode = "balanced"
+    return SimpleNamespace(
+        profile=profile_name,
+        stage=stage,
+        privacy=privacy,
+        quota_mode=quota_mode,
+        priority=request.priority.value,
+    )
+
+
+async def _dispatch(provider: Any, candidate: ProviderCandidate, request: RouterRequest, route_plan: Any | None = None) -> ProviderResponse:
     provider_model = candidate.model.provider_model
     if request.route == "chat_completions":
+        if isinstance(provider, AgentGatewayProviderAdapter):
+            return await provider.chat_completions(request, provider_model, route_plan=route_plan)
         return await provider.chat_completions(request, provider_model)
     if request.route == "responses":
+        if isinstance(provider, AgentGatewayProviderAdapter):
+            return await provider.responses(request, provider_model)
         return await provider.responses(request, provider_model)
     if request.route == "embeddings":
         return await provider.embeddings(request, provider_model)
     if request.route == "completions":
+        if isinstance(provider, AgentGatewayProviderAdapter):
+            return await provider.completions(request, provider_model)
         return await provider.completions(request, provider_model)
     raise ProviderError(f"unsupported route {request.route}", retryable=False)
 
 
-async def _dispatch_stream(provider: Any, candidate: ProviderCandidate, request: RouterRequest) -> ProviderStreamResponse:
+async def _dispatch_stream(provider: Any, candidate: ProviderCandidate, request: RouterRequest, route_plan: Any | None = None) -> ProviderStreamResponse:
     provider_model = candidate.model.provider_model
     if request.route == "chat_completions":
+        if isinstance(provider, AgentGatewayProviderAdapter):
+            return await provider.stream_chat_completions(request, provider_model, route_plan=route_plan)
         return await provider.stream_chat_completions(request, provider_model)
     if request.route == "responses":
+        if isinstance(provider, AgentGatewayProviderAdapter):
+            return await provider.stream_responses(request, provider_model)
         return await provider.stream_responses(request, provider_model)
     if request.route == "completions":
+        if isinstance(provider, AgentGatewayProviderAdapter):
+            return await provider.stream_completions(request, provider_model)
         return await provider.stream_completions(request, provider_model)
     raise ProviderError(f"unsupported stream route {request.route}", retryable=False)
 
@@ -480,6 +573,7 @@ def _record_usage(
     latency_ms: int,
     usage: dict[str, int] | None = None,
     error: Exception | None = None,
+    gateway_metadata: dict[str, Any] | None = None,
 ) -> None:
     usage = usage or {}
     state.ledger.record(

@@ -1,18 +1,4 @@
 providers:
-  # Agentgateway sidecar (optional first-class gateway)
-  - id: agentgateway-sidecar
-    name: agentgateway sidecar
-    type: openai_compatible
-    enabled: true
-    base_url: ${AUTO_ROUTER_AGENTGATEWAY_OPENAI_BASE_URL:-http://agentgateway:3000/v1}
-    api_key_env: AUTO_ROUTER_AGENTGATEWAY_API_KEY
-    priority: 50
-    quota_class: brokered_free
-    headers: {}
-    gateway_managed: true  # Route through agentgateway when enabled
-    local_gateway_only: false  # Can route to cloud providers via gateway
-    models: []
-
   - name: groq
     type: openai_compatible
     enabled: true

@@ -16,10 +16,10 @@
         <div class="flex max-w-xl flex-col gap-3">
             <div class="flex flex-wrap gap-3">
                 <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20"
-                        hx-post="/admin/live-models/refresh?provider=cerebras"
+                        hx-post="/admin/providers/probe"
                         hx-target="#action-status"
                         hx-swap="innerHTML">
-                    Refresh Cerebras models
+                    Probe providers /models
                 </button>
                 <button class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-300/20"
                         hx-post="/admin/services/scan"
