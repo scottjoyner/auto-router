@@ -82,6 +82,19 @@ providers:
         capabilities: [chat, streaming, json, low_latency, local_only, moe]
         context_window: 32768
 
+  - name: lmstudio-xwing
+    type: lmstudio
+    node_id: xwing
+    enabled: true
+    base_url: ${LMSTUDIO_XWING_BASE_URL:-http://100.108.99.47:1234/v1}
+    priority: 90
+    quota_class: local
+    models:
+      - alias: local/gemma-4-12b
+        provider_model: google/gemma-4-12b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+        context_window: 32768
+
   - name: lmstudio-deathstar
     type: lmstudio
     node_id: deathstar-XPS-8920

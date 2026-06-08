@@ -146,3 +146,45 @@ class AgentWorkerConfig(BaseModel):
     enabled: bool = False
     quota: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Orchestration plan route request / route decision models (Section 4.2)
+# ---------------------------------------------------------------------------
+
+class RouteIntent(BaseModel):
+    type: str = "voice_command"
+    text: str = ""
+    priority: str = "normal"
+
+
+class ContextRequirements(BaseModel):
+    needs_repo: bool = False
+    needs_voice_auth: bool = False
+    needs_external_web: bool = False
+    needs_local_files: bool = False
+
+
+class RouteRequest(BaseModel):
+    correlation_id: str
+    dispatch_id: str | None = None
+    task_id: str | None = None
+    intent: RouteIntent = Field(default_factory=RouteIntent)
+    context_requirements: ContextRequirements = Field(default_factory=ContextRequirements)
+    eligible_lanes: list[str] = Field(default_factory=lambda: ["local", "free_api", "paid_api", "heavy_reasoning"])
+    blocked_lanes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RouteDecision(BaseModel):
+    event_type: str = "route.selected"
+    correlation_id: str
+    route_id: str
+    task_id: str | None = None
+    lane: str
+    provider: str
+    model: str
+    target_service: str | None = None
+    target_node_id: str | None = None
+    rationale: str = ""
+    confidence: float = 0.0

@@ -67,6 +67,25 @@ services:
     detail: Redis-backed quota reservation and job queue store
     priority: 30
 nodes:
+  - node_id: xwing
+    display_name: Hermes Worker (Xwing)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [hermes_worker, terminal, file, fast_draft, local_only]
+    detail: Fresh Ubuntu node, first active Hermes worker candidate; LM Studio on 100.108.99.47:1234 with google/gemma-4-12b
+    services:
+      - service_id: xwing.lmstudio
+        name: Xwing LM Studio
+        url: http://100.108.99.47:1234/v1
+        health_url: http://100.108.99.47:1234/v1/models
+        service_type: lmstudio
+        node_id: xwing
+        status: online
+        tags: [local_llm, lmstudio, openai_compatible, hermes_worker]
+        detail: Primary local model endpoint on xwing for direct worker dispatch
+        priority: 35
   - node_id: x1-370
     display_name: Network Orchestrator (X1-370)
     lane: local
@@ -169,6 +188,28 @@ nodes:
         detail: WSE-3 backed OpenAI-compatible API endpoint
         priority: 5
 providers:
+  - provider: lmstudio-xwing
+    node_id: xwing
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/gemma-4-12b, auto/fast, auto/local]
+    capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+    detail: First active Hermes worker candidate on xwing; google/gemma-4-12b baseline model
+    services:
+      - service_id: provider.lmstudio-xwing.api
+        name: LM Studio Xwing API
+        url: http://100.108.99.47:1234/v1
+        health_url: http://100.108.99.47:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: xwing
+        provider: lmstudio-xwing
+        status: online
+        tags: [lmstudio, local_llm, hermes_worker, primary_worker]
+        detail: Primary local model endpoint for direct worker dispatch
+        priority: 35
   - provider: lmstudio-x1-370
     node_id: x1-370
     lane: local
