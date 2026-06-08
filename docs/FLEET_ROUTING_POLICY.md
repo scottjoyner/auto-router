@@ -26,6 +26,7 @@ Hard rule: personal content and internal data stay behind local agents. Public A
 |---|---|---|---|---|
 | x1-370 | strongest local reasoning node; large context possible because of 96 GB RAM; main AssistX/Neo4j/LM Studio services | shared services node, so do not overload; decoding/generation can bottleneck if KV cache is poorly managed | complex reasoning, large-context local/private tasks, privacy-sensitive planning, final local review | long speculative jobs that starve AssistX/Neo4j/Sophia; too many concurrent loaded dense models |
 | deathstar-XPS-8920 | old auto-ingest and Neo4j origin; RX480 8 GB with good Vulkan behavior when model fits VRAM | slow if inference spills to system RAM; older rig | VRAM-fit inference, auto-ingest/Neo4j-local work, fast local generation with small/quantized models | models exceeding 8 GB VRAM; long memory-offloaded generation |
+| xwing | fresh Ubuntu replacement node; clean Sophia/auto-assist/auto-router/auto-assign repos; Hermes gateway/CLI running; LM Studio exposed on `100.108.99.47:1234` | new worker path still needs assignment lease/sandbox/approval enforcement; x1-370 endpoint was not reachable from xwing during the 2026-06-08 probe | default local development worker, repo-local code edits/tests/docs, direct-worker bootstrap, gemma-4-12b baseline tasks | mutation without auto-assign claim/lease/approval; tasks requiring unavailable x1-370 endpoint until reverified |
 | Demo / falcon@Demo | Windows Strix Halo AMD AI 9 495; 8 GB VRAM plus 32 GB shared RAM; Hermes under WSL2 | Windows/WSL2 boundary can affect service paths, drivers, and startup behavior | flexible mid/high local node, Windows-side tasks, models that benefit from shared-memory headroom | Linux-only assumptions without WSL path/driver checks |
 | MacBook Air M2 | fast for short prompts, quick prefill/generation, iterative small-model work; useful Sophia response node when online | severe 8 GB RAM limit; not a heavy reasoning host | quick drafts, prompt prep, structure/ideas, low-latency Sophia responses, iterative refinement loops | long context, large local models, memory-heavy jobs |
 
@@ -39,7 +40,7 @@ Model choice should follow the task, not a single global default.
 | fast local generation where model fits GPU | MoE or smaller quantized models | deathstar, Demo, x1-370 if idle | prefer VRAM-fit paths; avoid RAM spill on deathstar |
 | quick ideation / outlines / structure | LFM2.5-class fast generators or small instruct models | MacBook Air, deathstar, Demo | good for cheap iterations; not trusted as sole reasoner |
 | Sophia realtime response | low-latency local model | MacBook Air if online, x1-370 fallback, Demo/deathstar as available | must respect voice/privacy wall |
-| code/tool execution with non-sensitive context | best available via auto-router policy | auto-router overlay | public APIs may plan/execute if data is public or redacted |
+| code/tool execution with non-sensitive context | xwing default local worker or best available via auto-router policy | xwing first, then auto-router overlay | public APIs may plan/execute only if data is public or redacted; xwing uses `google/gemma-4-12b` baseline |
 | sensitive code or credentials-adjacent debugging | local-only model | x1-370, Demo, deathstar | no raw secrets to public APIs |
 
 ## 4. Routing Decision Tree
@@ -141,7 +142,7 @@ Default behavior by task:
 |---|---|
 | personal/Sophia/Signal/raw knowledge graph | auto/private -> local node by latency/model fit |
 | internal repo with secrets or proprietary context | auto/local -> x1-370/Demo/deathstar as appropriate |
-| public coding task | auto/code -> public/local overlay |
+| public coding task | xwing local worker first for repo-local edits; auto/code -> public/local overlay for redacted/generic planning |
 | public planning/research | auto/flash-start or auto/fast |
 | heavy private reasoning | x1-370 local, moderate concurrency |
 | quick draft/structure | MacBook Air if online, then deathstar/Demo, then x1-370 |

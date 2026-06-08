@@ -187,6 +187,8 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 - [`docs/QUOTA_STRATEGY.md`](docs/QUOTA_STRATEGY.md) — quota burn-down and reservation model
 - [`docs/PROVIDER_MATRIX.md`](docs/PROVIDER_MATRIX.md) — provider notes and volatile limits
 - [`docs/SECURITY_PRIVACY.md`](docs/SECURITY_PRIVACY.md) — privacy and key-handling constraints
+- [`docs/FLEET_ROUTING_POLICY.md`](docs/FLEET_ROUTING_POLICY.md) — fleet routing policy, privacy classes, and node/model selection guardrails
+- [`docs/plans/2026-06-08-xwing-agent-development-handoff.md`](docs/plans/2026-06-08-xwing-agent-development-handoff.md) — verified xwing-first worker readiness and agent kickoff sequence
 
 ## Next implementation priorities
 
