@@ -19,6 +19,7 @@ Local-first OpenAI-compatible router for model requests, free-quota burn-down, s
 - Reads AssistX backlog candidates for dry-run scheduling without claiming, mutating, or executing tasks.
 - Queues service, model, agent discovery, backlog dry-run, and route execution provenance into a durable SQLite outbox for AssistX/Neo4j write-back.
 - Dispatches pending outbox events to a configured AssistX event sink with retry/dead-letter handling.
+- Accepts AssistX route requests and returns lane/model/provider decisions via `POST /api/routes/request`.
 
 ## Design principles
 
@@ -40,6 +41,10 @@ OpenAI-compatible:
 - `POST /v1/responses`
 - `POST /v1/embeddings`
 - `POST /v1/completions`
+
+AssistX route integration:
+
+- `POST /api/routes/request` — Accept a route request from AssistX and return a lane/model/provider decision
 
 Operations:
 
@@ -192,8 +197,9 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 
 ## Next implementation priorities
 
-1. Add AssistX task claim/approval flow after dry-run selection.
-2. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
-3. Add model registry write-back events to AssistX/Neo4j.
-4. Add local-vs-cloud dashboard split, circuit retry timers, and backlog queue status.
-5. Add background scan/refresh cadence with strict allow-lists and jitter.
+1. Wire outbox dispatcher to POST `route.selected` events back to AssistX `/api/events` after route decisions.
+2. Add AssistX task claim/approval flow after dry-run selection.
+3. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
+4. Add model registry write-back events to AssistX/Neo4j.
+5. Add local-vs-cloud dashboard split, circuit retry timers, and backlog queue status.
+6. Add background scan/refresh cadence with strict allow-lists and jitter.

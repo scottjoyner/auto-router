@@ -275,6 +275,25 @@ AssistX is the canonical context owner. `auto-router` consumes and emits integra
 |---|---|
 | `/api/events` | Idempotent event sink for router outbox dispatch |
 
+### AssistX route request (2026-06-08)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/routes/request` | Accept route requests from AssistX, return lane/model/provider decisions |
+
+The route request endpoint accepts a `RouteRequest` with `correlation_id`, `dispatch_id`, `task_id`, `intent`, `context_requirements`, `eligible_lanes`, and `blocked_lanes`. It returns a `RouteDecision` with `lane`, `provider`, `model`, `target_node_id`, `rationale`, and `confidence`.
+
+Lane selection logic:
+- `local` lane: selected when task is `local_only` or `sensitive`, or when local provider is available and preferred.
+- `free_api` lane: selected when free quota is available and task permits cloud routing.
+- `heavy_reasoning` lane: selected when task requires complex reasoning and paid/heavy providers are available.
+- `blocked`: returned when no eligible lane matches the request constraints.
+
+Provider selection within a lane:
+- Uses the context projection from AssistX to find available providers.
+- Prefers providers with higher priority (lower number) in `config/providers.yaml`.
+- Falls back to local LM Studio when no free API provider is available.
+
 ### Context projection concepts
 
 - nodes;
@@ -553,8 +572,15 @@ Implemented:
 
 ### Phase 2: AssistX ownership loop
 
+Implemented (2026-06-08):
+
+- `POST /api/routes/request` endpoint with lane/provider selection and correlation_id passthrough.
+- `RouteRequest`, `RouteDecision`, `RouteIntent`, `ContextRequirements` models.
+- xwing node and `lmstudio-xwing` provider configuration.
+
 Next:
 
+- Wire outbox dispatcher to POST `route.selected` events back to AssistX `/api/events`.
 - AssistX task claim/approval flow;
 - route/backlog/service/model event ingestion into Neo4j;
 - remote node service/CLI self-report;
