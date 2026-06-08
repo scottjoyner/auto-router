@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from auto_router.route_events import enqueue_route_execution_event
+from auto_router.signal_registry import route_execution_signals, signal_snapshot
 
 
 def install_route_event_patch(main_module: Any) -> None:
@@ -30,6 +31,13 @@ def install_route_event_patch(main_module: Any) -> None:
         usage: dict[str, int] | None = None,
         error: Exception | None = None,
         gateway_metadata: dict[str, Any] | None = None,
+        started_at_ms: int | None = None,
+        ended_at_ms: int | None = None,
+        queue_wait_ms: int | None = None,
+        load_time_ms: int | None = None,
+        tokens_per_second: float | None = None,
+        value_units: int | None = None,
+        value_per_second: float | None = None,
     ) -> None:
         original(
             request,
@@ -42,7 +50,25 @@ def install_route_event_patch(main_module: Any) -> None:
             usage,
             error,
             gateway_metadata,
+            started_at_ms,
+            ended_at_ms,
         )
+        runtime = None
+        if hasattr(main_module, "_build_runtime_sample"):
+            runtime = main_module._build_runtime_sample(
+                request=request,
+                provider=provider,
+                model=model,
+                stage=stage,
+                estimate=estimate,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                usage=usage or {},
+                error=error,
+                gateway_metadata=gateway_metadata,
+                started_at_ms=started_at_ms,
+                ended_at_ms=ended_at_ms,
+            )
         enqueue_route_execution_event(
             main_module.state,
             request=request,
@@ -55,7 +81,54 @@ def install_route_event_patch(main_module: Any) -> None:
             usage=usage,
             error=error,
             gateway_metadata=gateway_metadata,
+            started_at_ms=runtime.started_at_ms if runtime is not None else started_at_ms,
+            ended_at_ms=runtime.ended_at_ms if runtime is not None else ended_at_ms,
+            queue_wait_ms=runtime.queue_wait_ms if runtime is not None else queue_wait_ms,
+            load_time_ms=runtime.load_time_ms if runtime is not None else load_time_ms,
+            tokens_per_second=runtime.tokens_per_second if runtime is not None else tokens_per_second,
+            value_units=runtime.value_units if runtime is not None else value_units,
+            value_per_second=runtime.value_per_second if runtime is not None else value_per_second,
         )
+        if hasattr(main_module, "state") and hasattr(main_module.state, "signal_registry"):
+            node_id = _provider_node_id(main_module.state, provider)
+            signals = route_execution_signals(
+                request=request,
+                provider=provider,
+                model=model,
+                stage=stage,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                error=error,
+                usage=usage,
+                tokens_per_second=runtime.tokens_per_second if runtime is not None else tokens_per_second,
+                value_units=runtime.value_units if runtime is not None else value_units,
+                value_per_second=runtime.value_per_second if runtime is not None else value_per_second,
+                node_id=node_id,
+                gateway_metadata=gateway_metadata,
+            )
+            if signals:
+                main_module.state.signal_registry.save_snapshot(
+                    signal_snapshot(signals, revision=f"route-execution:{request.request_id}:{stage}", source="route_execution")
+                )
+                main_module.state.context = main_module.state.signal_registry.hydrate_context(main_module.state.context)
+                if hasattr(main_module.state, "policy_engine"):
+                    main_module.state.policy_engine.context = main_module.state.context
 
     main_module._record_usage = patched_record_usage
     main_module._route_event_patch_installed = True
+
+
+def _provider_node_id(state: Any, provider_name: str | None) -> str | None:
+    if not provider_name or not hasattr(state, "providers"):
+        return None
+    context = getattr(state, "context", None)
+    canonical = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name)
+    if context is not None and hasattr(context, "provider_for"):
+        provider = context.provider_for(canonical)
+        if provider is not None:
+            return provider.node_id
+    for provider in state.providers.enabled():
+        provider_name_value = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name)
+        if provider_name_value == canonical:
+            return provider.node_id
+    return None

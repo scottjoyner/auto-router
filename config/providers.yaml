@@ -65,6 +65,62 @@ providers:
           rpm: 20
           rpd: 50
 
+  - name: lmstudio-x1-370
+    type: lmstudio
+    node_id: x1-370
+    enabled: true
+    base_url: ${LMSTUDIO_X1_370_BASE_URL:-http://host.docker.internal:1234/v1}
+    priority: 100
+    quota_class: local
+    models:
+      - alias: local/reasoning-large
+        provider_model: local/reasoning-large
+        capabilities: [chat, streaming, code, json, reasoning, tool_use, local_only, large_context]
+        context_window: 65536
+      - alias: local/moe-fast
+        provider_model: local/moe-fast
+        capabilities: [chat, streaming, json, low_latency, local_only, moe]
+        context_window: 32768
+
+  - name: lmstudio-deathstar
+    type: lmstudio
+    node_id: deathstar-XPS-8920
+    enabled: true
+    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-XPS-8920:1234/v1}
+    priority: 180
+    quota_class: local
+    models:
+      - alias: local/vram-fit
+        provider_model: local/vram-fit
+        capabilities: [chat, streaming, code, json, low_latency, local_only, vram_fit]
+        context_window: 16384
+
+  - name: lmstudio-demo
+    type: lmstudio
+    node_id: falcon@Demo
+    enabled: true
+    base_url: ${LMSTUDIO_DEMO_BASE_URL:-http://demo-1:1234/v1}
+    priority: 220
+    quota_class: local
+    models:
+      - alias: local/demo-flex
+        provider_model: local/demo-flex
+        capabilities: [chat, streaming, code, json, local_only, shared_memory]
+        context_window: 32768
+
+  - name: lmstudio-macbook-air
+    type: lmstudio
+    node_id: macbook-air-m2
+    enabled: true
+    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://macbook-air:1234/v1}
+    priority: 260
+    quota_class: local
+    models:
+      - alias: local/quick-iterate
+        provider_model: local/quick-iterate
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+        context_window: 8192
+
   - name: lmstudio-r2d2
     type: lmstudio
     enabled: true
@@ -74,17 +130,5 @@ providers:
     models:
       - alias: local/default
         provider_model: local/default
-        capabilities: [chat, streaming, code, json, local_only]
-        context_window: 32768
-
-  - name: lmstudio-deathstar
-    type: lmstudio
-    enabled: true
-    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-XPS-8920:1234/v1}
-    priority: 910
-    quota_class: local
-    models:
-      - alias: local/batch
-        provider_model: local/batch
         capabilities: [chat, streaming, code, json, local_only]
         context_window: 32768

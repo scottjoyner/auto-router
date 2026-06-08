@@ -100,6 +100,9 @@ class RouterRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     response_format: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    task_id: str | None = None
+    agent_run_id: str | None = None
+    node_id: str | None = None
     required_capabilities: set[str] = Field(default_factory=set)
     priority: Priority = Priority.interactive
     local_only: bool = False

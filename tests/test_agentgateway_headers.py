@@ -141,6 +141,9 @@ class TestBodyMetadata:
             privacy="cloud_allowed",
             quota_mode="balanced",
             context_revision="assistx:2026-06-05T12:00:00Z",
+            task_id="assistx-task-456",
+            agent_run_id="agent-run-789",
+            node_id="deathstar-XPS-8920",
             fallback_allowed=True,
         )
         
@@ -148,6 +151,9 @@ class TestBodyMetadata:
         assert updated["auto_router"]["request_id"] == "req-123"
         assert updated["auto_router"]["profile"] == "auto/code"
         assert updated["auto_router"]["privacy"] == "cloud_allowed"
+        assert updated["auto_router"]["task_id"] == "assistx-task-456"
+        assert updated["auto_router"]["agent_run_id"] == "agent-run-789"
+        assert updated["auto_router"]["node_id"] == "deathstar-XPS-8920"
     
     def test_strip_metadata(self):
         """Test stripping gateway metadata from payload."""

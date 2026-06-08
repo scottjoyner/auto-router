@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -10,6 +11,143 @@ from auto_router.event_outbox import EventOutbox, OutboxEvent
 from auto_router.service_scanner import ServiceProbeResult, ServiceStatusCache, scan_services
 from auto_router.service_store import ServiceStatusStore
 from auto_router.settings import get_settings
+
+
+async def dispatch_outbox_batch(state: Any, limit: int = 25, dry_run: bool = False) -> dict[str, Any]:
+    settings = get_settings()
+    dispatcher = AssistXEventDispatcher(
+        outbox=state.event_outbox,
+        sink_url=settings.assistx_event_sink_url,
+        timeout_seconds=settings.assistx_event_dispatch_timeout_seconds,
+        max_attempts=settings.assistx_event_dispatch_max_attempts,
+    )
+    lock = getattr(state, "outbox_dispatch_lock", None)
+    if lock is not None:
+        async with lock:
+            results = await dispatcher.dispatch_pending(limit=limit, dry_run=dry_run)
+    else:
+        results = await dispatcher.dispatch_pending(limit=limit, dry_run=dry_run)
+    return {
+        "configured": dispatcher.configured,
+        "dry_run": dry_run,
+        "results": [result.to_dict() for result in results],
+        "summary": state.event_outbox.summary(),
+    }
+
+
+def ensure_outbox_dispatch_status(state: Any) -> dict[str, Any]:
+    settings = get_settings()
+    status = getattr(state, "outbox_dispatch_status", None)
+    if not isinstance(status, dict):
+        status = {}
+        state.outbox_dispatch_status = status
+    status.setdefault("configured", bool(settings.assistx_event_sink_url))
+    status.setdefault("enabled", bool(settings.assistx_event_sink_url))
+    status.setdefault("running", False)
+    status.setdefault("status", "idle")
+    status.setdefault("last_outcome", None)
+    status.setdefault("last_reason", None)
+    status.setdefault("last_started_at", None)
+    status.setdefault("last_completed_at", None)
+    status.setdefault("last_duration_ms", None)
+    status.setdefault("last_error", None)
+    status.setdefault("last_dry_run", False)
+    status.setdefault("last_result_count", 0)
+    status.setdefault("last_summary", {})
+    status.setdefault("interval_seconds", float(settings.assistx_event_dispatch_interval_seconds))
+    status.setdefault("timeout_seconds", float(settings.assistx_event_dispatch_timeout_seconds))
+    status.setdefault("max_attempts", int(settings.assistx_event_dispatch_max_attempts))
+    status.setdefault("next_run_at", None)
+    return status
+
+
+def build_outbox_dispatch_status(state: Any) -> dict[str, Any]:
+    settings = get_settings()
+    status = dict(ensure_outbox_dispatch_status(state))
+    outbox_summary = state.event_outbox.summary() if hasattr(state, "event_outbox") else {}
+    now = time.time()
+    last_started_at = status.get("last_started_at")
+    last_completed_at = status.get("last_completed_at")
+    interval_seconds = float(status.get("interval_seconds") or settings.assistx_event_dispatch_interval_seconds)
+    next_run_at = status.get("next_run_at")
+    if next_run_at is None and last_completed_at is not None:
+        next_run_at = float(last_completed_at) + interval_seconds
+    next_run_in_seconds = None
+    if next_run_at is not None:
+        next_run_in_seconds = max(int(float(next_run_at) - now), 0)
+    return {
+        **status,
+        "configured": bool(status.get("configured") if status.get("configured") is not None else settings.assistx_event_sink_url),
+        "enabled": bool(status.get("enabled") if status.get("enabled") is not None else settings.assistx_event_sink_url),
+        "running": bool(status.get("running")),
+        "lock_locked": bool(getattr(getattr(state, "outbox_dispatch_lock", None), "locked", lambda: False)()),
+        "pending": int(outbox_summary.get("pending") or 0),
+        "retry": int(outbox_summary.get("retry") or 0),
+        "delivered": int(outbox_summary.get("delivered") or 0),
+        "dead_letter": int(outbox_summary.get("dead_letter") or 0),
+        "total": int(outbox_summary.get("total") or 0),
+        "last_started_age_seconds": max(int(now - float(last_started_at)), 0) if last_started_at is not None else None,
+        "last_completed_age_seconds": max(int(now - float(last_completed_at)), 0) if last_completed_at is not None else None,
+        "next_run_at": next_run_at,
+        "next_run_in_seconds": next_run_in_seconds,
+    }
+
+
+async def dispatch_outbox_cycle(state: Any, limit: int = 25, dry_run: bool = False, reason: str = "scheduled") -> dict[str, Any]:
+    status = ensure_outbox_dispatch_status(state)
+    settings = get_settings()
+    started_at = time.time()
+    status.update(
+        {
+            "configured": bool(settings.assistx_event_sink_url),
+            "enabled": bool(settings.assistx_event_sink_url),
+            "running": True,
+            "status": "running",
+            "last_outcome": "running",
+            "last_reason": reason,
+            "last_started_at": started_at,
+            "last_error": None,
+            "last_dry_run": dry_run,
+            "interval_seconds": float(settings.assistx_event_dispatch_interval_seconds),
+            "timeout_seconds": float(settings.assistx_event_dispatch_timeout_seconds),
+            "max_attempts": int(settings.assistx_event_dispatch_max_attempts),
+        }
+    )
+    try:
+        result = await dispatch_outbox_batch(state, limit=limit, dry_run=dry_run)
+    except Exception as exc:
+        finished_at = time.time()
+        status.update(
+            {
+                "running": False,
+                "status": "error",
+                "last_outcome": "error",
+                "last_completed_at": finished_at,
+                "last_duration_ms": int((finished_at - started_at) * 1000),
+                "last_error": str(exc),
+                "last_result_count": 0,
+                "last_summary": state.event_outbox.summary() if hasattr(state, "event_outbox") else {},
+                "next_run_at": finished_at + float(settings.assistx_event_dispatch_interval_seconds),
+            }
+        )
+        raise
+
+    finished_at = time.time()
+    summary = result.get("summary", state.event_outbox.summary() if hasattr(state, "event_outbox") else {})
+    status.update(
+        {
+            "running": False,
+            "status": "idle",
+            "last_outcome": "success",
+            "last_completed_at": finished_at,
+            "last_duration_ms": int((finished_at - started_at) * 1000),
+            "last_error": None,
+            "last_result_count": len(result.get("results", [])),
+            "last_summary": summary,
+            "next_run_at": finished_at + float(settings.assistx_event_dispatch_interval_seconds),
+        }
+    )
+    return result
 
 
 def register_service_routes(app: FastAPI, state: Any) -> None:
@@ -72,20 +210,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
 
     @app.post("/admin/outbox/dispatch")
     async def dispatch_outbox(limit: int = 25, dry_run: bool = False) -> dict[str, Any]:
-        settings = get_settings()
-        dispatcher = AssistXEventDispatcher(
-            outbox=state.event_outbox,
-            sink_url=settings.assistx_event_sink_url,
-            timeout_seconds=settings.assistx_event_dispatch_timeout_seconds,
-            max_attempts=settings.assistx_event_dispatch_max_attempts,
-        )
-        results = await dispatcher.dispatch_pending(limit=limit, dry_run=dry_run)
-        return {
-            "configured": dispatcher.configured,
-            "dry_run": dry_run,
-            "results": [result.to_dict() for result in results],
-            "summary": state.event_outbox.summary(),
-        }
+        return await dispatch_outbox_cycle(state, limit=limit, dry_run=dry_run, reason="manual")
 
     @app.post("/admin/outbox/{event_id}/delivered")
     async def mark_outbox_delivered(event_id: str) -> dict[str, Any]:

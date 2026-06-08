@@ -33,6 +33,12 @@
             <div class="mt-2 text-3xl font-black text-white">{{ context_graph_summary.total or 0 }}</div>
             <div class="mt-1 text-xs text-sky-100/70">{{ context_graph_summary.node or 0 }} nodes · {{ context_graph_summary.provider or 0 }} providers · {{ context_graph_summary.model or 0 }} models · {{ context_graph_summary.service or 0 }} services</div>
         </div>
+        <div class="rounded-3xl border {% if context_projection.degraded %}border-rose-300/20 bg-rose-300/10{% else %}border-emerald-300/20 bg-emerald-300/10{% endif %} p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider {% if context_projection.degraded %}text-rose-200{% else %}text-emerald-200{% endif %}">AssistX projection</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ context_projection.status or 'unknown' }}</div>
+            <div class="mt-1 truncate text-xs {% if context_projection.degraded %}text-rose-100/70{% else %}text-emerald-100/70{% endif %}">{{ context_projection.source or 'no source' }}</div>
+            {% if context_projection.error %}<div class="mt-1 line-clamp-2 text-xs text-rose-100/80">{{ context_projection.error }}</div>{% endif %}
+        </div>
         <div class="rounded-3xl border border-fuchsia-300/20 bg-fuchsia-300/10 p-5">
             <div class="text-xs font-semibold uppercase tracking-wider text-fuchsia-200">Provider taps</div>
             <div class="mt-2 text-3xl font-black text-white">{{ provider_tap_summary.providers or 0 }}</div>
@@ -47,6 +53,13 @@
             <div class="text-xs font-semibold uppercase tracking-wider text-emerald-200">Agent CLIs</div>
             <div class="mt-2 text-3xl font-black text-white">{{ cli_summary.runnable or 0 }}</div>
             <div class="mt-1 text-xs text-emerald-100/70">runnable · {{ cli_summary.installed or 0 }} installed · {{ cli_summary.missing or 0 }} missing</div>
+        </div>
+        <div class="rounded-3xl border {% if outbox_dispatch_summary.running %}border-cyan-300/20 bg-cyan-300/10{% elif outbox_dispatch_summary.last_outcome == 'error' %}border-rose-300/20 bg-rose-300/10{% else %}border-emerald-300/20 bg-emerald-300/10{% endif %} p-5">
+            <div class="text-xs font-semibold uppercase tracking-wider {% if outbox_dispatch_summary.running %}text-cyan-200{% elif outbox_dispatch_summary.last_outcome == 'error' %}text-rose-200{% else %}text-emerald-200{% endif %}">Outbox dispatch</div>
+            <div class="mt-2 text-3xl font-black text-white">{{ outbox_dispatch_summary.status or ('running' if outbox_dispatch_summary.running else 'idle') }}</div>
+            <div class="mt-1 text-xs {% if outbox_dispatch_summary.running %}text-cyan-100/70{% elif outbox_dispatch_summary.last_outcome == 'error' %}text-rose-100/70{% else %}text-emerald-100/70{% endif %}">every {{ outbox_dispatch_summary.interval_seconds|int if outbox_dispatch_summary.interval_seconds is not none else 0 }}s · next {{ outbox_dispatch_summary.next_run_in_seconds if outbox_dispatch_summary.next_run_in_seconds is not none else 'n/a' }}s</div>
+            <div class="mt-1 text-xs text-router-muted">last {{ outbox_dispatch_summary.last_outcome or 'never' }} · {{ outbox_dispatch_summary.last_reason or 'unspecified' }}{% if outbox_dispatch_summary.last_completed_age_seconds is not none %} · {{ outbox_dispatch_summary.last_completed_age_seconds }}s ago{% endif %}</div>
+            {% if outbox_dispatch_summary.last_error %}<div class="mt-1 line-clamp-2 text-xs text-rose-100/80">{{ outbox_dispatch_summary.last_error }}</div>{% endif %}
         </div>
         <div class="rounded-3xl border {% if assistx_tasks_configured %}border-emerald-300/20 bg-emerald-300/10{% else %}border-rose-300/20 bg-rose-300/10{% endif %} p-5">
             <div class="text-xs font-semibold uppercase tracking-wider {% if assistx_tasks_configured %}text-emerald-200{% else %}text-rose-200{% endif %}">AssistX backlog</div>
@@ -65,6 +78,7 @@
             <div class="flex flex-wrap gap-2 text-xs">
                 <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ swarm_summary.nodes or 0 }} nodes</span>
                 <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">{{ swarm_summary.models or 0 }} models</span>
+                <span class="rounded-full bg-violet-400/15 px-3 py-1 font-bold text-violet-100">{{ swarm_summary.signals or 0 }} signals</span>
                 <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">{{ swarm_summary.avg_provider_health_score or 0 }} avg health</span>
                 <span class="rounded-full bg-rose-400/15 px-3 py-1 font-bold text-rose-200">{{ swarm_summary.drift_providers or 0 }} drift</span>
             </div>
@@ -118,7 +132,7 @@
                 {% for provider in provider_health_summary[:6] %}
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3">
                     <div class="flex items-center justify-between gap-3">
-                        <div class="font-bold text-white">{{ provider.provider }}</div>
+                        <div class="font-bold text-white">{{ provider.provider_id if provider.provider_id is defined else provider.provider }}</div>
                         <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if provider.health_score >= 80 %}bg-emerald-400/15 text-emerald-200{% elif provider.health_score >= 60 %}bg-yellow-400/15 text-yellow-100{% else %}bg-rose-400/15 text-rose-200{% endif %}">score {{ provider.health_score }}</span>
                     </div>
                     <div class="mt-1 text-xs text-router-muted">{{ provider.model_count }} models · {{ provider.success_rate }} success · {{ provider.age_seconds }}s old{% if provider.drift %} · drift{% endif %}</div>
@@ -163,7 +177,7 @@
                 {% for snapshot in live_models[:6] %}
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3">
                     <div class="flex items-center justify-between gap-3">
-                        <div class="font-bold text-white">{{ snapshot.provider }}</div>
+                        <div class="font-bold text-white">{{ snapshot.provider_id if snapshot.provider_id is defined else snapshot.provider }}</div>
                         <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if snapshot.ok %}bg-emerald-400/15 text-emerald-200{% else %}bg-rose-400/15 text-rose-200{% endif %}">{{ 'ok' if snapshot.ok else 'error' }}</span>
                     </div>
                     <div class="mt-1 text-xs text-router-muted">{{ snapshot.model_count }} models · {{ 'stale' if snapshot.stale else 'fresh' }}</div>

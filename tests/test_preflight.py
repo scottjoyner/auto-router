@@ -110,3 +110,24 @@ def test_preflight_warns_on_no_local_provider_and_dead_letter() -> None:
     outbox_check = next(check for check in report["checks"] if check["name"] == "outbox")
     assert provider_check["status"] == "warn"
     assert outbox_check["status"] == "warn"
+
+
+def test_preflight_warns_when_assistx_projection_falls_back() -> None:
+    state = _state()
+    state.context.metadata["projection_status"] = "bootstrap_fallback"
+    state.context.metadata["projection_error"] = "projection unavailable"
+
+    report = build_preflight_report(
+        state,
+        Settings(
+            log_prompts=False,
+            context_config="http://assistx:8000/api/router/context-projection",
+            assistx_tasks_url="http://assistx:8000/api/router/backlog-candidates",
+            assistx_event_sink_url="http://assistx:8000/api/events",
+        ),
+    )
+
+    context_check = next(check for check in report["checks"] if check["name"] == "context")
+    assert context_check["status"] == "warn"
+    assert context_check["details"]["projection_status"] == "bootstrap_fallback"
+    assert context_check["details"]["projection_degraded"] is True

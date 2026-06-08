@@ -9,7 +9,7 @@ This guide covers the aligned deployment where AssistX is already running and `a
 - `auto-router` reads `AUTO_ROUTER_CONTEXT_CONFIG` from AssistX `/api/context/projection` when the live projection is available.
 - The router keeps its own Redis-backed quota state and local SQLite usage data.
 - Clients point to the router, not AssistX, for OpenAI-compatible LLM traffic.
-
+- Deployment verification should confirm canonical provider/model IDs are flowing through `/v1/models`, the dashboard, and the ops summaries.
 ## Recommended topology
 
 ### Option A: shared Docker network
@@ -149,11 +149,15 @@ If you use a shared network with AssistX, replace the `AUTO_ROUTER_CONTEXT_CONFI
 - If provider keys are missing, health checks should show the affected provider as unhealthy without taking the router down.
 - If Redis is unavailable, the router should fall back to in-memory quota state only for local development; production should not rely on that fallback.
 
-## Deployment order summary
+## Startup order summary
 
-- AssistX first.
-- Router second.
-- Clients last.
+1. Run the full test suite locally: `pytest -q`.
+2. Start AssistX first and verify `/api/context/projection` returns JSON.
+3. Start Redis for the router.
+4. Start `auto-router` with Docker Compose (`docker compose up -d --build`) or the local app wrapper.
+5. Check `GET /health` on the router.
+6. Check `GET /admin/ops/summary`, `GET /dashboard`, and `GET /v1/models` for canonical provider/model identity.
+7. Point OpenAI-compatible clients at `http://<router-host>:8088/v1`.
 
 ## Related docs
 

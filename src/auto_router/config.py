@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 
 import httpx
@@ -10,7 +11,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from auto_router.context import ContextModel, ContextNode, ContextProvider, ContextService, ContextSnapshot, ExecutionLane, ServiceStatus
+from auto_router.context import ContextModel, ContextNode, ContextProvider, ContextService, ContextSnapshot, ContextSignal, ExecutionLane, ServiceStatus
 from auto_router.live_models import LiveModelSnapshot
 from auto_router.models import AgentWorkerConfig, ModelConfig, PolicyProfile, ProviderConfig
 
@@ -48,6 +49,27 @@ def _load_json_source(source: str) -> Any:
     return response.json()
 
 
+def _context_projection_metadata(source: str, loaded: Any, error: Exception | None = None) -> dict[str, Any]:
+    is_http = str(source).startswith(("http://", "https://"))
+    if error is not None:
+        return {
+            "projection_source": source,
+            "projection_transport": "http" if is_http else "file",
+            "projection_status": "bootstrap_fallback" if is_http else "bootstrap",
+            "projection_error": str(error),
+            "projection_reachable": False,
+            "projection_loaded": bool(loaded),
+        }
+    return {
+        "projection_source": source,
+        "projection_transport": "http" if is_http else "file",
+        "projection_status": "active" if is_http and loaded is not None else ("bootstrap" if not is_http else "bootstrap_fallback"),
+        "projection_error": "",
+        "projection_reachable": is_http and loaded is not None,
+        "projection_loaded": bool(loaded),
+    }
+
+
 def _extract_graph_objects(loaded: Any) -> list[dict[str, Any]]:
     if isinstance(loaded, dict):
         raw = loaded.get("graph_objects") or loaded.get("objects") or loaded.get("graph")
@@ -82,6 +104,27 @@ def _graph_object_identifier(item: dict[str, Any], *keys: str) -> str:
         if text:
             return text
     return ""
+
+
+def _provider_scoped_model_id(provider: str, provider_model: str, fallback: str = "") -> str:
+    provider_name = str(provider or "").strip().lower()
+    model_name = str(provider_model or "").strip().lower()
+    if provider_name and model_name:
+        return f"{provider_name}.{model_name}"
+    if provider_name and fallback:
+        return f"{provider_name}.{str(fallback).strip().lower()}"
+    return str(fallback or provider_model or "").strip().lower()
+
+
+def _match_context_provider_key(provider: ContextProvider, candidates: dict[str, ContextProvider]) -> str | None:
+    target = provider.provider.strip().lower()
+    for key, candidate in candidates.items():
+        if key.strip().lower() == target:
+            return key
+        aliases = {candidate.provider.lower(), *(alias.lower() for alias in candidate.aliases)}
+        if target in aliases:
+            return key
+    return None
 
 
 class ProviderRegistry(BaseModel):
@@ -191,7 +234,7 @@ def _graph_model_context(item: dict[str, Any]) -> ContextModel | None:
     except (TypeError, ValueError):
         priority_int = 100
     return ContextModel(
-        model_id=model_id,
+        model_id=_provider_scoped_model_id(provider or "", provider_model, model_id),
         name=str(properties.get("name") or properties.get("alias") or model_id),
         provider=provider,
         provider_model=provider_model,
@@ -237,6 +280,63 @@ def _graph_service_context(item: dict[str, Any]) -> ContextService | None:
     )
 
 
+def _graph_signal_context(item: dict[str, Any]) -> ContextSignal | None:
+    properties = _graph_object_properties(item)
+    target_type = str(properties.get("target_type") or properties.get("scope") or properties.get("entity_type") or "").strip().lower()
+    target_id = str(
+        properties.get("target_id")
+        or properties.get("provider")
+        or properties.get("model")
+        or properties.get("node_id")
+        or properties.get("service_id")
+        or ""
+    ).strip()
+    signal_type = str(properties.get("signal_type") or properties.get("kind") or properties.get("type") or "signal").strip().lower()
+    signal_id = _graph_object_identifier(item, "signal_id", "id")
+    if not signal_id:
+        signal_id = f"{target_type or 'target'}:{target_id or 'unknown'}:{signal_type}:{str(properties.get('source') or item.get('source') or 'assistx').strip()}"
+    if not target_type or not target_id:
+        return None
+    strength = properties.get("strength", properties.get("weight", properties.get("score", 0.0)))
+    try:
+        strength_value = float(strength) if strength is not None else 0.0
+    except (TypeError, ValueError):
+        strength_value = 0.0
+    priority = properties.get("priority")
+    try:
+        priority_value = int(priority) if priority is not None else 100
+    except (TypeError, ValueError):
+        priority_value = 100
+    observed_at = properties.get("observed_at", properties.get("created_at", properties.get("fetched_at", int(time.time()))))
+    try:
+        observed_at_value = int(observed_at)
+    except (TypeError, ValueError):
+        observed_at_value = int(time.time())
+    expires_at = properties.get("expires_at")
+    try:
+        expires_at_value = int(expires_at) if expires_at is not None else None
+    except (TypeError, ValueError):
+        expires_at_value = None
+    tags_value = properties.get("tags") or []
+    tags_raw = tags_value if isinstance(tags_value, list) else []
+    metadata = dict(properties)
+    return ContextSignal(
+        signal_id=signal_id,
+        target_type=target_type,
+        target_id=target_id,
+        signal_type=signal_type,
+        source=str(properties.get("source") or item.get("source") or "assistx"),
+        strength=strength_value,
+        active=bool(properties.get("active", True)),
+        observed_at=observed_at_value,
+        expires_at=expires_at_value,
+        priority=priority_value,
+        detail=str(properties.get("detail") or properties.get("description") or ""),
+        tags={str(tag) for tag in tags_raw if tag},
+        metadata=metadata,
+    )
+
+
 def _project_graph_objects(snapshot: ContextSnapshot, loaded: Any) -> ContextSnapshot:
     objects = _extract_graph_objects(loaded)
     if not objects:
@@ -246,6 +346,7 @@ def _project_graph_objects(snapshot: ContextSnapshot, loaded: Any) -> ContextSna
     graph_providers: list[ContextProvider] = []
     graph_models: list[ContextModel] = []
     graph_services: list[ContextService] = []
+    graph_signals: list[ContextSignal] = []
 
     for item in objects:
         kind = _graph_object_kind(item)
@@ -265,15 +366,16 @@ def _project_graph_objects(snapshot: ContextSnapshot, loaded: Any) -> ContextSna
             service = _graph_service_context(item)
             if service is not None:
                 graph_services.append(service)
+        elif kind == "signal":
+            signal = _graph_signal_context(item)
+            if signal is not None:
+                graph_signals.append(signal)
 
-    if graph_nodes:
-        snapshot.nodes = [*graph_nodes, *snapshot.nodes]
-    if graph_providers:
-        snapshot.providers = _merge_context_providers({provider.provider: provider for provider in graph_providers}, list(snapshot.providers))
-    if graph_models:
-        snapshot.models = _merge_models({model.model_id: model for model in graph_models}, list(snapshot.models))
-    if graph_services:
-        snapshot.services = _merge_services(graph_services, list(snapshot.services))
+    snapshot.nodes = _merge_nodes(list(snapshot.nodes), graph_nodes)
+    snapshot.providers = _merge_context_providers({provider.provider: provider for provider in snapshot.providers}, graph_providers)
+    snapshot.models = _merge_models({model.model_id: model for model in snapshot.models}, graph_models)
+    snapshot.services = _merge_services(list(snapshot.services), graph_services)
+    snapshot.signals = _merge_signals(list(snapshot.signals), graph_signals)
 
     if snapshot.providers:
         provider_models: dict[str, list[ContextModel]] = {}
@@ -313,16 +415,17 @@ def _lane_from_provider(provider: ProviderConfig) -> ExecutionLane:
 
 def _model_context(provider: ProviderConfig, model: ModelConfig) -> ContextModel:
     lane = _lane_from_provider(provider)
-    aliases = [model.alias, provider.name, provider.type, model.provider_model]
+    provider_key = provider.id or provider.name
+    aliases = [model.alias, provider_key, provider.name, provider.type, model.provider_model]
     context_detail = f"{provider.type} model {model.provider_model}"
     if model.context_window:
         context_detail += f" · ctx {model.context_window}"
     if model.capabilities:
         context_detail += f" · {len(model.capabilities)} capability(s)"
     return ContextModel(
-        model_id=f"{provider.name}.{model.alias}",
+        model_id=_provider_scoped_model_id(provider_key, model.provider_model, model.alias),
         name=model.alias,
-        provider=provider.name,
+        provider=provider_key,
         provider_model=model.provider_model,
         lane=lane,
         local=lane == ExecutionLane.local,
@@ -372,10 +475,11 @@ def _live_model_context(
     model_record: dict[str, Any],
     context_provider: ContextProvider | None = None,
 ) -> ContextModel:
+    provider_key = provider.id or provider.name
     raw_id = str(model_record.get("id") or model_record.get("name") or model_record.get("model") or "").strip()
-    safe_id = raw_id or f"live-{provider.name}"
+    safe_id = raw_id or f"live-{provider_key}"
     lane = _lane_from_provider(provider)
-    aliases = [safe_id, provider.name, provider.type, str(model_record.get("owned_by") or "")]
+    aliases = [safe_id, provider_key, provider.name, provider.type, str(model_record.get("owned_by") or "")]
     detail = f"live /models snapshot from {provider.type}"
     owned_by = str(model_record.get("owned_by") or "").strip()
     if owned_by:
@@ -383,9 +487,9 @@ def _live_model_context(
     if context_provider and context_provider.detail:
         detail += f" · {context_provider.detail}"
     return ContextModel(
-        model_id=f"{provider.name}.{safe_id}",
+        model_id=_provider_scoped_model_id(provider_key, safe_id, safe_id),
         name=safe_id,
-        provider=provider.name,
+        provider=provider_key,
         provider_model=safe_id,
         lane=lane,
         local=lane == ExecutionLane.local,
@@ -404,7 +508,7 @@ def _project_live_models(
     providers: ProviderRegistry,
     live_snapshots: list[LiveModelSnapshot],
 ) -> ContextSnapshot:
-    provider_map = {provider.name: provider for provider in providers.providers}
+    provider_map = {provider.id or provider.name: provider for provider in providers.providers}
     live_model_map = {model.model_id: model for model in snapshot.models}
     for live_snapshot in live_snapshots:
         provider_config = provider_map.get(live_snapshot.provider)
@@ -426,7 +530,7 @@ def _project_live_models(
 
 def _provider_context(provider: ProviderConfig) -> ContextProvider:
     lane = _lane_from_provider(provider)
-    aliases = [provider.name, provider.type]
+    aliases = [provider.id or provider.name, provider.name, provider.type]
     model_aliases = [model.alias for model in provider.models if model.alias]
     aliases.extend(sorted(set(model_aliases)))
     model_detail = ""
@@ -466,12 +570,12 @@ def _provider_service(provider: ProviderConfig) -> ContextService:
     if provider.local_gateway_only:
         tags.add("local_gateway_only")
     return ContextService(
-        service_id=f"provider.{provider.name}.api",
+        service_id=f"provider.{provider.id or provider.name}.api",
         name=f"{provider.name} API",
         url=provider.base_url,
         service_type="lmstudio" if provider.type == "lmstudio" else "openai_compatible_api",
         node_id=provider.node_id,
-        provider=provider.name,
+        provider=provider.id or provider.name,
         health_url=health_url,
         status=ServiceStatus.unknown,
         tags=tags,
@@ -497,6 +601,37 @@ def _merge_services(*groups: list[ContextService]) -> list[ContextService]:
         for service in group:
             merged[service.service_id] = service
     return list(merged.values())
+
+
+def _merge_nodes(*groups: list[ContextNode]) -> list[ContextNode]:
+    merged: dict[str, ContextNode] = {}
+    for group in groups:
+        for node in group:
+            existing = merged.get(node.node_id)
+            if existing is None:
+                merged[node.node_id] = node
+                continue
+            node.services = _merge_services(list(node.services), list(existing.services))
+            node.capabilities = set(node.capabilities) | set(existing.capabilities)
+            if not node.display_name:
+                node.display_name = existing.display_name
+            if not node.detail:
+                node.detail = existing.detail
+            node.running = node.running or existing.running
+            node.local = node.local or existing.local
+            node.can_use_free_api = node.can_use_free_api or existing.can_use_free_api
+            merged[node.node_id] = node
+    return list(merged.values())
+
+
+def _merge_signals(*groups: list[ContextSignal]) -> list[ContextSignal]:
+    merged: dict[str, ContextSignal] = {}
+    for group in groups:
+        for signal in group:
+            existing = merged.get(signal.signal_id)
+            if existing is None or signal.observed_at >= existing.observed_at:
+                merged[signal.signal_id] = signal
+    return sorted(merged.values(), key=lambda item: (item.priority, item.source, item.target_type, item.target_id, item.signal_type))
 
 
 def _merge_models(
@@ -536,10 +671,20 @@ def _merge_context_providers(
 ) -> list[ContextProvider]:
     merged: dict[str, ContextProvider] = dict(bootstrap_providers)
     for provider in snapshot_providers:
-        bootstrap_provider = merged.get(provider.provider)
+        provider_key = _match_context_provider_key(provider, merged)
+        bootstrap_provider = merged.get(provider_key) if provider_key is not None else None
         if bootstrap_provider is None:
             merged[provider.provider] = provider
             continue
+        canonical_provider = bootstrap_provider.provider
+        if provider.provider != canonical_provider:
+            provider = provider.model_copy(
+                update={
+                    "provider": canonical_provider,
+                    "models": [model.model_copy(update={"provider": canonical_provider}) for model in provider.models],
+                    "services": [service.model_copy(update={"provider": canonical_provider}) for service in provider.services],
+                }
+            )
         provider.aliases = _unique_list([*provider.aliases, *bootstrap_provider.aliases])
         provider.capabilities = set(provider.capabilities) | set(bootstrap_provider.capabilities)
         provider.services = _merge_services(list(provider.services), list(bootstrap_provider.services))
@@ -550,12 +695,12 @@ def _merge_context_providers(
             provider.node_id = bootstrap_provider.node_id
         if provider.free_api_credits is None:
             provider.free_api_credits = bootstrap_provider.free_api_credits
-        merged[provider.provider] = provider
+        merged[canonical_provider] = provider
     return list(merged.values())
 
 
 def _bootstrap_context(snapshot: ContextSnapshot, providers: ProviderRegistry, agents: AgentWorkerRegistry) -> ContextSnapshot:
-    bootstrap_provider_map = {provider.name: _provider_context(provider) for provider in providers.providers}
+    bootstrap_provider_map = {provider.id or provider.name: _provider_context(provider) for provider in providers.providers}
     bootstrap_services = [_provider_service(provider) for provider in providers.providers]
     bootstrap_models = {
         model.model_id: model
@@ -619,10 +764,12 @@ def load_context_snapshot(
 ) -> ContextSnapshot:
     source = str(path)
     loaded = None
+    projection_error: Exception | None = None
     if source.startswith(("http://", "https://")):
         try:
             loaded = _load_json_source(source)
-        except Exception:
+        except Exception as exc:
+            projection_error = exc
             loaded = None
     else:
         loaded = load_yaml(path, None)
@@ -634,6 +781,7 @@ def load_context_snapshot(
 
     snapshot = _project_graph_objects(snapshot, loaded)
     snapshot = _bootstrap_context(snapshot, providers, agents)
+    snapshot.metadata = {**dict(snapshot.metadata or {}), **_context_projection_metadata(source, loaded, projection_error)}
 
     if not snapshot.source:
         snapshot.source = source
@@ -656,10 +804,12 @@ async def load_context_snapshot_async(
 ) -> ContextSnapshot:
     source = str(path)
     loaded = None
+    projection_error: Exception | None = None
     if source.startswith(("http://", "https://")):
         try:
             loaded = await _load_json_source_async(source)
-        except Exception:
+        except Exception as exc:
+            projection_error = exc
             loaded = None
     else:
         loaded = load_yaml(path, None)
@@ -671,6 +821,7 @@ async def load_context_snapshot_async(
 
     snapshot = _project_graph_objects(snapshot, loaded)
     snapshot = _bootstrap_context(snapshot, providers, agents)
+    snapshot.metadata = {**dict(snapshot.metadata or {}), **_context_projection_metadata(source, loaded, projection_error)}
 
     if not snapshot.source:
         snapshot.source = source

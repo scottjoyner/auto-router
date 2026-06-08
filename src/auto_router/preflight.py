@@ -113,21 +113,32 @@ def _check_context_projection(state: Any, settings: Settings) -> PreflightCheck:
     provider_count = len(getattr(context, "providers", []) or [])
     node_count = len(getattr(context, "nodes", []) or [])
     is_http = str(settings.context_config).startswith(("http://", "https://"))
-    status = "pass" if is_http else "warn"
-    message = "Context projection is loaded from AssistX/HTTP." if is_http else "Context is loaded from local/bootstrap config, not AssistX HTTP projection."
-    return PreflightCheck(
-        "context",
-        status,
-        message,
-        "warning" if status == "warn" else "info",
-        {
-            "source": getattr(context, "source", "unknown"),
-            "revision": getattr(context, "revision", "unknown"),
-            "providers": provider_count,
-            "nodes": node_count,
-            "context_config": settings.context_config,
-        },
-    )
+    projection_status = getattr(context, "projection_status", lambda: "bootstrap")()
+    projection_error = getattr(context, "projection_error", lambda: "")()
+    projection_degraded = getattr(context, "is_projection_degraded", lambda: False)()
+    if is_http and projection_status != "active":
+        message = "AssistX projection URL is configured, but the router fell back to bootstrap."
+        severity = "critical" if projection_status == "bootstrap_fallback" else "warning"
+        status = "warn"
+    elif is_http:
+        message = "Context projection is loaded from AssistX/HTTP."
+        severity = "info"
+        status = "pass"
+    else:
+        message = "Context is loaded from local/bootstrap config, not AssistX HTTP projection."
+        severity = "warning"
+        status = "warn"
+    details = {
+        "source": getattr(context, "source", "unknown"),
+        "revision": getattr(context, "revision", "unknown"),
+        "providers": provider_count,
+        "nodes": node_count,
+        "context_config": settings.context_config,
+        "projection_status": projection_status,
+        "projection_error": projection_error,
+        "projection_degraded": projection_degraded,
+    }
+    return PreflightCheck("context", status, message, severity, details)
 
 
 def _check_service_registry(state: Any) -> PreflightCheck:

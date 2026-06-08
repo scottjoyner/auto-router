@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from auto_router.config import PolicyRegistry, ProviderRegistry
-from auto_router.context import ContextProvider, ContextSnapshot, ExecutionLane
+from auto_router.context import ContextProvider, ContextSnapshot, ExecutionLane, ContextSignal
 from auto_router.models import (
     ExecutionPlan,
     ExecutionStage,
@@ -30,11 +30,22 @@ class PolicyEngine:
         self.context = context or ContextSnapshot()
 
     def classify_profile(self, request: RouterRequest) -> str:
-        if request.local_only or request.priority == Priority.local_only:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        requested_model = request.model or ""
+        if self._request_requires_local_execution(request) and requested_model.startswith("auto/sophia") and "sophia_realtime" in self.policies.profiles:
+            return "sophia_realtime"
+        if self._request_requires_local_execution(request):
             return "local_only"
-        metadata_profile = request.metadata.get("profile")
+        metadata_profile = metadata.get("profile")
         if isinstance(metadata_profile, str) and metadata_profile in self.policies.profiles:
             return metadata_profile
+        if (
+            isinstance(metadata.get("task_id"), str)
+            or bool(metadata.get("assistx_source"))
+            or isinstance(request.task_id, str)
+            or bool(request.agent_run_id)
+        ) and "backlog_burn" in self.policies.profiles:
+            return "backlog_burn"
         if request.priority == Priority.critical:
             return "high_priority_deliverable"
         if request.priority == Priority.repo_critical:
@@ -121,21 +132,102 @@ class PolicyEngine:
             optional=policy_stage.optional,
         )
 
+    def _request_requires_local_execution(self, request: RouterRequest) -> bool:
+        """Return True when the fleet privacy wall forbids cloud/public routes.
+
+        Personal, voice/Sophia, explicit private, internal, sensitive, or
+        local-only markers stay on local providers. Public APIs should receive
+        only public or already-redacted payloads.
+        """
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        model = request.model or ""
+        if request.local_only or request.priority == Priority.local_only or request.allow_cloud is False:
+            return True
+        if model.startswith("auto/private") or model.startswith("auto/local") or model.startswith("auto/sophia"):
+            return True
+        privacy = str(metadata.get("privacy") or metadata.get("data_class") or "").strip().lower()
+        if privacy in {"private", "personal", "internal", "secret", "sensitive", "local_only"}:
+            return True
+        if bool(metadata.get("sensitive")) or bool(metadata.get("private_data")):
+            return True
+        markers = metadata.get("markers") or metadata.get("tags") or []
+        if isinstance(markers, str):
+            markers = [markers]
+        if isinstance(markers, list):
+            normalized = {str(item).strip().lower() for item in markers if str(item).strip()}
+            if normalized & {
+                "private",
+                "personal",
+                "internal",
+                "local_only",
+                "private_data",
+                "internal_docs",
+                "personal_docs",
+                "voice_auth",
+                "enrollment_sample",
+                "signal",
+                "credentials",
+                "secret",
+            }:
+                return True
+        return False
+
     def _provider_is_eligible(self, provider: ProviderConfig, request: RouterRequest) -> bool:
-        context_provider = self.context.provider_for(provider.name)
+        canonical_provider = self.context.canonical_provider_name(provider.name)
+        context_provider = self.context.provider_for(canonical_provider)
         lane = self._provider_lane(provider, context_provider)
         if context_provider and context_provider.is_blocked:
             return False
-        if request.local_only or request.priority == Priority.local_only or request.allow_cloud is False:
+        if self._request_requires_local_execution(request):
             return lane == ExecutionLane.local
         return True
 
     def _model_matches(self, model: ModelConfig, required: set[str]) -> bool:
         return not required or required.issubset(model.capabilities)
 
+    def _context_signals(self, provider: ProviderConfig, model: ModelConfig) -> list[ContextSignal]:
+        signals: list[ContextSignal] = []
+        canonical_provider = self.context.canonical_provider_name(provider.name)
+        context_provider = self.context.provider_for(canonical_provider)
+        signals.extend(self.context.signals_for_provider(canonical_provider))
+        if context_provider is not None and context_provider.node_id:
+            signals.extend(self.context.signals_for_node(context_provider.node_id))
+        canonical_model = self.context.canonical_model_id(f"{provider.name}.{model.provider_model}")
+        signals.extend(self.context.signals_for_model(canonical_model))
+        if model.provider_model and model.provider_model != model.alias:
+            signals.extend(self.context.signals_for_model(model.provider_model))
+        merged: dict[str, ContextSignal] = {}
+        for signal in signals:
+            merged[signal.signal_id] = signal
+        return list(merged.values())
+
+    def _signal_score_adjustment(self, signals: list[ContextSignal], stage: PolicyStage) -> float:
+        adjustment = 0.0
+        for signal in signals:
+            if not signal.is_active:
+                continue
+            weight = signal.strength if signal.strength else 1.0
+            kind = signal.signal_type
+            if signal.is_blocking:
+                adjustment += 500.0
+                continue
+            if kind in {"preferred", "boost", "favour", "favor", "primary"}:
+                adjustment -= 25.0 * weight
+            elif kind in {"realtime", "low_latency", "latency_sensitive"}:
+                adjustment -= 10.0 * weight
+            elif kind in {"planning", "flash_planning"} and stage.purpose == StagePurpose.draft:
+                adjustment -= 20.0 * weight
+            elif kind in {"avoid", "deprioritized", "slow", "expensive"}:
+                adjustment += 20.0 * weight
+        return adjustment
+
+    def _provider_signal_blocked(self, provider: ProviderConfig, model: ModelConfig) -> bool:
+        return any(signal.is_blocking for signal in self._context_signals(provider, model))
+
     def _score(self, provider: ProviderConfig, model: ModelConfig, stage: PolicyStage) -> float:
         score = float(provider.priority)
-        context_provider = self.context.provider_for(provider.name)
+        canonical_provider = self.context.canonical_provider_name(provider.name)
+        context_provider = self.context.provider_for(canonical_provider)
         lane = self._provider_lane(provider, context_provider)
         if lane == ExecutionLane.local:
             score -= 25
@@ -155,7 +247,26 @@ class PolicyEngine:
             node = self.context.node_for(context_provider.node_id)
             if node and "gpu_accelerated" in node.capabilities:
                 score -= 10
+            if node is not None:
+                score += self._node_preference_adjustment(node.capabilities, model.capabilities, stage)
+        score += self._signal_score_adjustment(self._context_signals(provider, model), stage)
+        if self._provider_signal_blocked(provider, model):
+            score += 500
         return score
+
+    def _node_preference_adjustment(self, node_capabilities: set[str], model_capabilities: set[str], stage: PolicyStage) -> float:
+        adjustment = 0.0
+        node_caps = {cap.strip().lower() for cap in node_capabilities}
+        model_caps = {cap.strip().lower() for cap in model_capabilities}
+        if stage.purpose in {StagePurpose.refine, StagePurpose.judge, StagePurpose.final}:
+            if node_caps & {"long_context", "large_models"} and model_caps & {"reasoning", "large_context"}:
+                adjustment -= 20.0
+        if stage.purpose == StagePurpose.draft:
+            if node_caps & {"fast_draft", "low_latency"} and model_caps & {"quick_iteration", "low_latency"}:
+                adjustment -= 15.0
+            if node_caps & {"gpu_accelerated", "fast_inference"} and model_caps & {"vram_fit", "low_latency", "moe"}:
+                adjustment -= 12.0
+        return adjustment
 
     def _provider_lane(self, provider: ProviderConfig, context_provider: ContextProvider | None) -> ExecutionLane:
         if context_provider is not None:

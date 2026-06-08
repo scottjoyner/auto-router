@@ -48,18 +48,23 @@ class LiveModelCache:
         self.ttl_seconds = max(int(ttl_seconds), 60)
         self._snapshots: dict[str, LiveModelSnapshot] = {}
 
+    def _provider_key(self, provider: ProviderConfig | str) -> str:
+        if isinstance(provider, ProviderConfig):
+            return (provider.id or provider.name).strip().lower()
+        return str(provider).strip().lower()
+
     def snapshot(self) -> list[dict[str, Any]]:
         records = sorted(self._snapshots.values(), key=lambda item: item.provider)
         return [record.to_dict() for record in records]
 
     def get(self, provider_name: str) -> LiveModelSnapshot | None:
-        return self._snapshots.get(provider_name)
+        return self._snapshots.get(self._provider_key(provider_name))
 
     def put(self, snapshot: LiveModelSnapshot) -> None:
-        self._snapshots[snapshot.provider] = snapshot
+        self._snapshots[self._provider_key(snapshot.provider)] = snapshot
 
     async def get_or_refresh(self, provider: ProviderConfig, fetcher: Any, force: bool = False) -> LiveModelSnapshot:
-        current = self._snapshots.get(provider.name)
+        current = self._snapshots.get(self._provider_key(provider))
         if current is not None and not force and not current.stale:
             return current
         return await self.refresh_provider(provider, fetcher)
@@ -69,7 +74,7 @@ class LiveModelCache:
         try:
             result = await fetcher(provider)
             snapshot = LiveModelSnapshot(
-                provider=provider.name,
+                provider=self._provider_key(provider),
                 ok=True,
                 fetched_at=now,
                 expires_at=now + self.ttl_seconds,
@@ -77,7 +82,7 @@ class LiveModelCache:
             )
         except Exception as exc:
             snapshot = LiveModelSnapshot(
-                provider=provider.name,
+                provider=self._provider_key(provider),
                 ok=False,
                 fetched_at=now,
                 expires_at=now + min(self.ttl_seconds, 300),

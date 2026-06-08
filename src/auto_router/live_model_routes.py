@@ -13,6 +13,7 @@ from auto_router.models import ProviderConfig
 from auto_router.providers import build_provider
 from auto_router.service_scanner import discover_tailnet_lmstudio_services, is_lmstudio_service
 from auto_router.settings import get_settings
+from auto_router.signal_registry import live_model_signals, signal_snapshot
 
 
 def register_live_model_routes(app: FastAPI, state: Any) -> None:
@@ -69,6 +70,8 @@ def hydrate_live_models_from_registry(state: Any) -> None:
         state.live_models.put(snapshot)
     if hasattr(state, "context") and hasattr(state, "providers"):
         state.context = _project_live_models(state.context, state.providers, state.model_registry.latest_inventory())
+        if hasattr(state, "signal_registry"):
+            state.context = state.signal_registry.hydrate_context(state.context)
         if hasattr(state, "policy_engine"):
             state.policy_engine.context = state.context
 
@@ -87,6 +90,9 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
         latency_ms = int((time.perf_counter() - started) * 1000)
         state.model_registry.save_snapshot(snapshot)
         probe = state.model_registry.save_probe(snapshot, latency_ms=latency_ms, previous_snapshot=previous)
+        if hasattr(state, "signal_registry"):
+            signals = live_model_signals(snapshot, node_id=item.node_id)
+            state.signal_registry.save_snapshot(signal_snapshot(signals, revision=f"live-model:{item.name}", source="live_models"))
         records.append(snapshot.to_dict() | {"probe": probe})
     hydrate_live_models_from_registry(state)
     return records
@@ -101,15 +107,22 @@ def discovered_lmstudio_providers(state: Any, provider_name: str | None = None) 
 
     providers_attr = getattr(state, "providers", None)
     enabled_known = providers_attr.enabled() if providers_attr and hasattr(providers_attr, "enabled") else []
-    known = {provider.name for provider in getattr(providers_attr, "providers", []) or []}
-    known.update(provider.name for provider in enabled_known)
+    known = {provider.name.strip().lower() for provider in getattr(providers_attr, "providers", []) or []}
+    known.update(provider.name.strip().lower() for provider in enabled_known)
+    known.update(getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name) for provider in getattr(context, "providers", []) or [])
+
+    target_provider = None
+    if provider_name:
+        target_provider = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name)
 
     providers: list[ProviderConfig] = []
     for service in candidates:
         config = _provider_from_service(service)
-        if provider_name and config.name != provider_name and service.service_id != provider_name:
+        config_name = config.name.strip().lower()
+        service_name = service.service_id.strip().lower()
+        if target_provider and config_name != target_provider and service_name != target_provider:
             continue
-        if config.name in known:
+        if config_name in known:
             continue
         providers.append(config)
     return providers
@@ -152,30 +165,36 @@ def _service_base_url(service: ContextService) -> str:
 
 def selected_refresh_providers(state: Any, provider_name: str | None = None) -> list[ProviderConfig]:
     configured = getattr(state.providers, "enabled", lambda: [])()
+    context = getattr(state, "context", None)
+    target = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name) if provider_name else None
     if provider_name is None:
         return [provider for provider in configured if provider.type != "lmstudio"]
-    return [provider for provider in configured if provider.name == provider_name]
+    return [provider for provider in configured if getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name) == target]
 
 
 def selected_probe_providers(state: Any, provider_name: str | None = None) -> list[ProviderConfig]:
     configured = getattr(state.providers, "enabled", lambda: [])()
+    context = getattr(state, "context", None)
+    target = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name) if provider_name else None
     if provider_name is None:
         return list(configured)
-    return [provider for provider in configured if provider.name == provider_name]
+    return [provider for provider in configured if getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name) == target]
 
 
 def refreshable_providers(providers: list[ProviderConfig], provider_name: str | None = None) -> list[ProviderConfig]:
     items = [provider for provider in providers if provider.enabled and provider.type != "lmstudio"]
     if provider_name is None:
         return items
-    return [provider for provider in items if provider.name == provider_name]
+    target = str(provider_name).strip().lower()
+    return [provider for provider in items if provider.name.strip().lower() == target]
 
 
 def probeable_providers(providers: list[ProviderConfig], provider_name: str | None = None) -> list[ProviderConfig]:
     items = [provider for provider in providers if provider.enabled]
     if provider_name is None:
         return items
-    return [provider for provider in items if provider.name == provider_name]
+    target = str(provider_name).strip().lower()
+    return [provider for provider in items if provider.name.strip().lower() == target]
 
 
 def _tap_summary(records: list[dict[str, Any]]) -> dict[str, int]:

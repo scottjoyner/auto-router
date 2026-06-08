@@ -10,7 +10,7 @@ services:
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.example.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.example.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.example.yaml
-      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://172.20.0.5:8000/api/router/context-projection}
+      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://assistx:8000/api/router/context-projection}
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
       AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS: ${AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS:-120}

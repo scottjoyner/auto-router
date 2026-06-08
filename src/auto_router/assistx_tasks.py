@@ -37,7 +37,8 @@ class AssistXTaskClient:
                 self.base_url,
                 params={"limit": limit, "queue": queue, "dry_run": str(dry_run).lower()},
             )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            response.raise_for_status()
         payload = response.json()
         raw_tasks = _extract_tasks(payload)
         return [normalize_assistx_task(item) for item in raw_tasks[:limit]]

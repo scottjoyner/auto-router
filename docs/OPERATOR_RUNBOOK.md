@@ -33,13 +33,16 @@ http://localhost:8088/dashboard
 ## 3. Docker boot
 
 ```bash
-docker compose up --build
+pytest -q
+docker compose up -d --build
 ```
 
 Health check:
 
 ```bash
-curl http://localhost:8088/health
+curl http://localhost:8088/health | jq
+curl http://localhost:8088/admin/ops/summary | jq
+curl http://localhost:8088/v1/models | jq
 ```
 
 OpenAI-compatible client configuration:

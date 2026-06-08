@@ -380,6 +380,10 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         stage = str(getattr(route_plan, "stage", "refine") if route_plan else "refine")
         priority = str(getattr(route_plan, "priority", "normal") if route_plan else "normal")
         quota_mode = str(getattr(route_plan, "quota_mode", "balanced") if route_plan else "balanced")
+        task_id = str(getattr(route_plan, "task_id", None) or getattr(request, "task_id", None) or "") or None
+        agent_run_id = str(getattr(route_plan, "agent_run_id", None) or getattr(request, "agent_run_id", None) or "") or None
+        node_id = str(getattr(route_plan, "node_id", None) or getattr(request, "node_id", None) or "") or None
+        context_revision = getattr(route_plan, "context_revision", None)
         
         headers = build_gateway_headers(
             request_id=request_id,
@@ -390,7 +394,10 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             quota_mode=quota_mode,
             provider_plan=self.config.id or "agentgateway-sidecar",
             model_plan=provider_model,
-            context_revision=None,  # TODO: extract from AssistX context
+            context_revision=context_revision,
+            task_id=task_id,
+            agent_run_id=agent_run_id,
+            node_id=node_id,
             fallback_allowed=gateway_config.fail_open_to_direct,
         )
         
@@ -407,6 +414,9 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
                 priority=priority,
                 privacy=privacy,
                 quota_mode=quota_mode,
+                task_id=task_id,
+                agent_run_id=agent_run_id,
+                node_id=node_id,
                 fallback_allowed=gateway_config.fail_open_to_direct,
             )
         
@@ -482,6 +492,10 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         stage = str(getattr(route_plan, "stage", "refine") if route_plan else "refine")
         priority = str(getattr(route_plan, "priority", "normal") if route_plan else "normal")
         quota_mode = str(getattr(route_plan, "quota_mode", "balanced") if route_plan else "balanced")
+        task_id = str(getattr(route_plan, "task_id", None) or getattr(request, "task_id", None) or "") or None
+        agent_run_id = str(getattr(route_plan, "agent_run_id", None) or getattr(request, "agent_run_id", None) or "") or None
+        node_id = str(getattr(route_plan, "node_id", None) or getattr(request, "node_id", None) or "") or None
+        context_revision = getattr(route_plan, "context_revision", None)
         
         headers = build_gateway_headers(
             request_id=request_id,
@@ -492,7 +506,10 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             quota_mode=quota_mode,
             provider_plan=self.config.id or "agentgateway-sidecar",
             model_plan=provider_model,
-            context_revision=None,
+            context_revision=context_revision,
+            task_id=task_id,
+            agent_run_id=agent_run_id,
+            node_id=node_id,
             fallback_allowed=gateway_config.fail_open_to_direct,
         )
         

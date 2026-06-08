@@ -133,7 +133,7 @@ http://localhost:8088/dashboard
 Or use Docker:
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 Point LM Studio/OpenAI-compatible clients at:

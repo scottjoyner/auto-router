@@ -7,8 +7,9 @@ from auto_router.context import ContextSnapshot
 from auto_router.live_model_routes import discovered_lmstudio_providers, probeable_providers, refresh_provider_models
 from auto_router.live_models import LiveModelCache
 from auto_router.model_registry import ModelRegistryStore
-from auto_router.models import ProviderConfig
+from auto_router.models import ProviderConfig, ProviderHealth
 from auto_router.providers import normalize_model_record
+from auto_router.signal_registry import ContextSignalStore
 
 
 def test_normalize_model_record_keeps_raw_payload() -> None:
@@ -40,6 +41,40 @@ def test_live_model_cache_reuses_fresh_snapshot() -> None:
     assert cache.snapshot()[0]["model_count"] == 1
 
 
+def test_list_models_returns_canonical_ids(monkeypatch) -> None:
+    providers = ProviderRegistry.model_validate(
+        {
+            "providers": [
+                {
+                    "name": "Cerebras API",
+                    "type": "openai_compatible",
+                    "enabled": True,
+                    "base_url": "https://cerebras.example/v1",
+                    "priority": 10,
+                    "models": [
+                        {
+                            "alias": "cerebras/flash-reasoner",
+                            "provider_model": "gpt-oss-120b",
+                            "capabilities": ["chat", "low_latency"],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    state = SimpleNamespace(providers=providers, context=ContextSnapshot())
+
+    from auto_router import main as main_module
+
+    monkeypatch.setattr(main_module, "state", state)
+    payload = asyncio.run(main_module.list_models())
+
+    assert payload["object"] == "list"
+    assert payload["data"][0]["id"] == "cerebras api.gpt-oss-120b"
+    assert payload["data"][0]["owned_by"] == "cerebras api"
+    assert payload["data"][0]["provider_model"] == "gpt-oss-120b"
+
+
 def test_refresh_provider_models_probes_all_enabled_providers_and_projects_context(tmp_path) -> None:
     providers = ProviderRegistry.model_validate(
         {
@@ -66,6 +101,7 @@ def test_refresh_provider_models_probes_all_enabled_providers_and_projects_conte
         context=ContextSnapshot(),
         live_models=LiveModelCache(ttl_seconds=60),
         model_registry=ModelRegistryStore(f"sqlite:///{tmp_path / 'router.sqlite3'}"),
+        signal_registry=ContextSignalStore(f"sqlite:///{tmp_path / 'signals.sqlite3'}"),
         policy_engine=SimpleNamespace(context=None),
     )
     calls: list[str] = []
@@ -94,6 +130,9 @@ def test_refresh_provider_models_probes_all_enabled_providers_and_projects_conte
     assert state.context.model_for("gpt-oss-120b") is not None
     assert state.context.model_for("local-llama") is not None
     assert state.context.all_models()
+    assert state.context.signal_summary()["total"] == 3
+    assert state.context.signal_summary()["model"] == 3
+    assert state.signal_registry.summary()["signals"] == 3
 
 
 def test_discovered_lmstudio_providers_include_context_services(monkeypatch) -> None:
@@ -148,3 +187,45 @@ def test_live_model_cache_records_fetch_errors() -> None:
     assert snapshot.ok is False
     assert "boom" in (snapshot.error or "")
     assert cache.snapshot()[0]["ok"] is False
+
+
+def test_provider_health_reports_emit_provider_signals(tmp_path, monkeypatch) -> None:
+    providers = ProviderRegistry.model_validate(
+        {
+            "providers": [
+                {
+                    "name": "cerebras",
+                    "type": "openai_compatible",
+                    "enabled": True,
+                    "base_url": "https://cerebras.example/v1",
+                    "priority": 10,
+                    "node_id": "r2d2",
+                }
+            ]
+        }
+    )
+    state = SimpleNamespace(
+        providers=providers,
+        circuits=SimpleNamespace(snapshot=lambda: []),
+        context=ContextSnapshot(),
+        signal_registry=ContextSignalStore(f"sqlite:///{tmp_path / 'signals.sqlite3'}"),
+        policy_engine=SimpleNamespace(context=None),
+    )
+
+    class FakeAdapter:
+        async def health(self) -> ProviderHealth:
+            return ProviderHealth(provider="cerebras", ok=True, detail="HTTP 200")
+
+    monkeypatch.setattr("auto_router.main.build_provider", lambda provider, timeout_seconds: FakeAdapter())
+
+    from auto_router import main as main_module
+    from auto_router.main import _provider_health_reports
+
+    monkeypatch.setattr(main_module, "state", state)
+    reports = asyncio.run(_provider_health_reports())
+
+    assert reports[0]["ok"] is True
+    assert state.context.signal_summary()["provider"] == 1
+    assert state.context.signal_summary()["node"] == 1
+    assert state.signal_registry.summary()["provider"] == 1
+    assert state.signal_registry.summary()["node"] == 1

@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from auto_router.preflight import build_preflight_report
 from auto_router.gateway import build_agentgateway_status
+from auto_router.service_routes import build_outbox_dispatch_status
 from auto_router.settings import get_settings
 
 
@@ -43,29 +44,43 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
 def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = get_settings()
     outbox_summary = state.event_outbox.summary() if hasattr(state, "event_outbox") else {}
+    outbox_dispatch_summary = build_outbox_dispatch_status(state)
     model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     live_models = state.live_models.snapshot() if hasattr(state, "live_models") else []
+    runtime_summary = state.ledger.runtime_summary() if hasattr(state, "ledger") and hasattr(state.ledger, "runtime_summary") else {}
+    recent_runtime_samples = state.ledger.recent_runtime_samples(limit=12) if hasattr(state, "ledger") and hasattr(state.ledger, "recent_runtime_samples") else []
     cli_discovery = state.cli_discovery if hasattr(state, "cli_discovery") else []
     cli_summary = _cli_summary(cli_discovery)
     service_summary = _service_summary(state)
     context_model_summary = _context_model_summary(state)
     context_model_lane_summary = _context_model_lane_summary(state)
     context_graph_summary = _context_graph_summary(state)
-    provider_tap_summary = state.model_registry.probe_summary() if hasattr(state, "model_registry") else _provider_tap_summary(live_models)
+    context_signal_summary = _context_signal_summary(state)
+    context_route_signal_summary = _context_route_signal_summary(state)
+    provider_probe_summary = state.model_registry.probe_summary() if hasattr(state, "model_registry") else {}
+    provider_tap_summary = provider_probe_summary or (_provider_tap_summary(live_models))
     provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
     swarm_summary = build_swarm_state_summary(state)
+    context_projection = swarm_summary.get("context_projection", {})
     return {
         "outbox_summary": outbox_summary,
+        "outbox_dispatch_summary": outbox_dispatch_summary,
         "model_registry_summary": model_registry_summary,
         "live_models": live_models,
+        "provider_probe_summary": provider_probe_summary,
         "provider_tap_summary": provider_tap_summary,
         "provider_health_summary": provider_health_summary,
+        "runtime_summary": runtime_summary,
+        "recent_runtime_samples": recent_runtime_samples,
         "cli_discovery": cli_discovery,
         "cli_summary": cli_summary,
         "service_summary": service_summary,
         "context_model_summary": context_model_summary,
         "context_model_lane_summary": context_model_lane_summary,
         "context_graph_summary": context_graph_summary,
+        "context_signal_summary": context_signal_summary,
+        "context_route_signal_summary": context_route_signal_summary,
+        "context_projection": context_projection,
         **swarm_summary,
         "gateway": gateway_status or {},
         "assistx_tasks_configured": bool(settings.assistx_tasks_url),
@@ -81,9 +96,20 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
     nodes = list(context.nodes) if context is not None and hasattr(context, "nodes") else []
     services = context.all_services() if context is not None and hasattr(context, "all_services") else []
     models = context.all_models() if context is not None and hasattr(context, "all_models") else []
+    signals = context.all_signals() if context is not None and hasattr(context, "all_signals") else []
     provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
-    recent_snapshots = state.model_registry.recent_snapshots(limit=24) if hasattr(state, "model_registry") else []
+    recent_snapshots = state.model_registry.recent_snapshots(limit=24) if hasattr(state, "model_registry") and hasattr(state.model_registry, "recent_snapshots") else []
 
+    canonical_provider = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower()) if context is not None else (lambda value: str(value).strip().lower())
+    canonical_model_id = getattr(context, "canonical_model_id", lambda value: str(value).strip().lower()) if context is not None else (lambda value: str(value).strip().lower())
+    if context is not None:
+        provider_health_summary = [
+            {
+                **report,
+                "provider": canonical_provider(str(report.get("provider") or "")),
+            }
+            for report in provider_health_summary
+        ]
     health_by_provider = {str(report.get("provider") or ""): report for report in provider_health_summary}
     provider_nodes: dict[str, list[Any]] = defaultdict(list)
     model_nodes: dict[str, list[Any]] = defaultdict(list)
@@ -107,12 +133,13 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
 
     node_map: list[dict[str, Any]] = []
     for node in nodes:
-        node_providers = sorted(provider_nodes.get(node.node_id, []), key=lambda item: (item.priority, item.provider))
-        node_models = sorted(model_nodes.get(node.node_id, []), key=lambda item: (item.priority, item.provider or "", item.name.lower()))
-        node_services = sorted(service_nodes.get(node.node_id, []), key=lambda item: (item.priority, item.name.lower()))
-        node_reports = [report for provider in node_providers if (report := health_by_provider.get(provider.provider)) is not None]
+        node_providers = sorted(provider_nodes.get(node.node_id, []), key=lambda item: (getattr(item, "priority", 100), item.provider))
+        node_models = sorted(model_nodes.get(node.node_id, []), key=lambda item: (getattr(item, "priority", 100), item.provider or "", item.name.lower()))
+        node_services = sorted(service_nodes.get(node.node_id, []), key=lambda item: (getattr(item, "priority", 100), item.name.lower()))
+        node_reports = [report for provider in node_providers if (report := health_by_provider.get(canonical_provider(provider.provider))) is not None]
         endpoint_health = _endpoint_health_summary(node_services, running=bool(getattr(node, "running", False)))
         recent_history = _node_recent_history(node_providers, health_by_provider)
+        node_signals = _node_signals(context, node.node_id) if context is not None else []
         node_map.append(
             {
                 "node_id": node.node_id,
@@ -123,9 +150,11 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
                 "provider_count": len(node_providers),
                 "model_count": len(node_models),
                 "service_count": len(node_services),
-                "providers": [provider.provider for provider in node_providers],
-                "models": [model.provider_model or model.name for model in node_models[:8]],
+                "signal_count": len(node_signals),
+                "providers": [canonical_provider(provider.provider) for provider in node_providers],
+                "models": [canonical_model_id(f"{model.provider}.{model.provider_model or model.name}") for model in node_models[:8]],
                 "services": [service.model_dump() for service in node_services[:8]],
+                "signals": [signal.model_dump() for signal in node_signals[:8]],
                 "endpoint_health": endpoint_health,
                 "health_scores": [int(report.get("health_score") or 0) for report in node_reports],
                 "avg_health_score": int(mean([int(report.get("health_score") or 0) for report in node_reports])) if node_reports else endpoint_health["score"],
@@ -139,6 +168,14 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
     provider_latencies = [int(report.get("latency_ms") or 0) for report in provider_health_summary if report.get("latency_ms") is not None]
     endpoint_scores = [item["endpoint_health"]["score"] for item in node_map]
     drift_count = sum(1 for report in provider_health_summary if report.get("drift"))
+    signal_counts = len(signals)
+    context_projection = {
+        "status": getattr(context, "projection_status", lambda: "bootstrap")() if context is not None else "missing",
+        "degraded": getattr(context, "is_projection_degraded", lambda: False)() if context is not None else True,
+        "error": getattr(context, "projection_error", lambda: "")() if context is not None else "",
+        "source": getattr(context, "source", "") if context is not None else "",
+        "revision": getattr(context, "revision", "") if context is not None else "",
+    }
     return {
         "swarm_memory_map": node_map,
         "swarm_summary": {
@@ -146,6 +183,7 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
             "providers": len(providers),
             "models": len(models),
             "services": len(services),
+            "signals": signal_counts,
             "avg_provider_health_score": int(mean(provider_health_scores)) if provider_health_scores else 0,
             "avg_provider_model_count": round(mean(provider_model_counts), 1) if provider_model_counts else 0,
             "avg_provider_latency_ms": int(mean(provider_latencies)) if provider_latencies else 0,
@@ -153,6 +191,7 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
             "drift_providers": drift_count,
             "drift_rate": round(drift_count / len(provider_health_summary), 3) if provider_health_summary else 0,
         },
+        "context_projection": context_projection,
         "swarm_recent_probes": _flatten_recent_history(provider_health_summary),
         "swarm_recent_snapshots": recent_snapshots,
     }
@@ -188,15 +227,17 @@ def _status_score(status: str) -> int:
 def _node_recent_history(providers: list[Any], health_by_provider: dict[str, dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     now = int(time.time())
+    canonical_provider = lambda value: str(value).strip().lower()
     for provider in providers:
-        report = health_by_provider.get(provider.provider)
+        provider_id = canonical_provider(provider.provider)
+        report = health_by_provider.get(provider_id)
         if report is None:
             continue
         for item in report.get("recent", [])[:3]:
             fetched_at = int(item.get("fetched_at") or 0)
             rows.append(
                 {
-                    "provider": provider.provider,
+                    "provider": provider_id,
                     "fetched_at": fetched_at,
                     "age_seconds": max(now - fetched_at, 0),
                     "latency_ms": item.get("latency_ms"),
@@ -206,6 +247,12 @@ def _node_recent_history(providers: list[Any], health_by_provider: dict[str, dic
                 }
             )
     return sorted(rows, key=lambda item: (int(item["fetched_at"]), item["provider"]), reverse=True)[:limit]
+
+
+def _node_signals(context: Any, node_id: str) -> list[Any]:
+    if context is None or not hasattr(context, "signals_for_node"):
+        return []
+    return context.signals_for_node(node_id)
 
 
 def _flatten_recent_history(provider_health_summary: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
@@ -238,8 +285,12 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
     context_models = summary.get("context_model_summary") or {}
     context_graph = summary.get("context_graph_summary") or {}
     context_model_lanes = summary.get("context_model_lane_summary") or {}
+    context_signals = summary.get("context_signal_summary") or {}
+    context_route_signals = summary.get("context_route_signal_summary") or {}
     provider_taps = summary.get("provider_tap_summary") or {}
     provider_health = summary.get("provider_health_summary") or []
+    runtime_summary = summary.get("runtime_summary") or {}
+    recent_runtime_samples = summary.get("recent_runtime_samples") or []
     swarm_summary = summary.get("swarm_summary") or {}
     swarm_memory_map = summary.get("swarm_memory_map") or []
     swarm_recent_probes = summary.get("swarm_recent_probes") or []
@@ -276,6 +327,30 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
             "# HELP auto_router_context_graph_objects Number of graph objects projected from context.",
             "# TYPE auto_router_context_graph_objects gauge",
             f"auto_router_context_graph_objects {int(context_graph.get('total') or 0)}",
+            "# HELP auto_router_context_signals Number of durable signal objects projected from context.",
+            "# TYPE auto_router_context_signals gauge",
+            f"auto_router_context_signals {int(context_signals.get('total') or 0)}",
+            "# HELP auto_router_context_active_signals Number of active durable signal objects projected from context.",
+            "# TYPE auto_router_context_active_signals gauge",
+            f"auto_router_context_active_signals {int(context_signals.get('active') or 0)}",
+            "# HELP auto_router_route_signals Number of route decision/execution signals in the active context.",
+            "# TYPE auto_router_route_signals gauge",
+            f"auto_router_route_signals {int(context_route_signals.get('total') or 0)}",
+            "# HELP auto_router_route_signals_active Number of active route decision/execution signals in the active context.",
+            "# TYPE auto_router_route_signals_active gauge",
+            f"auto_router_route_signals_active {int(context_route_signals.get('active') or 0)}",
+            "# HELP auto_router_route_signals_preferred Number of preferred route signals in the active context.",
+            "# TYPE auto_router_route_signals_preferred gauge",
+            f"auto_router_route_signals_preferred {int(context_route_signals.get('preferred') or 0)}",
+            "# HELP auto_router_route_signals_blocked Number of blocked route signals in the active context.",
+            "# TYPE auto_router_route_signals_blocked gauge",
+            f"auto_router_route_signals_blocked {int(context_route_signals.get('blocked') or 0)}",
+            "# HELP auto_router_route_signals_realtime Number of realtime route signals in the active context.",
+            "# TYPE auto_router_route_signals_realtime gauge",
+            f"auto_router_route_signals_realtime {int(context_route_signals.get('realtime') or 0)}",
+            "# HELP auto_router_route_signals_avoid Number of avoid route signals in the active context.",
+            "# TYPE auto_router_route_signals_avoid gauge",
+            f"auto_router_route_signals_avoid {int(context_route_signals.get('avoid') or 0)}",
             "# HELP auto_router_provider_taps Number of live provider taps captured in the latest probe.",
             "# TYPE auto_router_provider_taps gauge",
             f"auto_router_provider_taps {int(provider_taps.get('providers') or 0)}",
@@ -328,6 +403,59 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
         lines.append(
             'auto_router_provider_probe_drift_latest{provider="%s"} %s'
             % (provider, 1 if report.get("drift") else 0)
+        )
+    lines.extend(
+        [
+            "# HELP auto_router_runtime_samples Number of persisted runtime samples.",
+            "# TYPE auto_router_runtime_samples gauge",
+            f"auto_router_runtime_samples {int(runtime_summary.get('samples') or 0)}",
+            "# HELP auto_router_runtime_samples_successful Number of successful runtime samples.",
+            "# TYPE auto_router_runtime_samples_successful gauge",
+            f"auto_router_runtime_samples_successful {int(runtime_summary.get('successful') or 0)}",
+            "# HELP auto_router_runtime_samples_failed Number of failed runtime samples.",
+            "# TYPE auto_router_runtime_samples_failed gauge",
+            f"auto_router_runtime_samples_failed {int(runtime_summary.get('failed') or 0)}",
+            "# HELP auto_router_runtime_avg_latency_ms Average latency across recent runtime samples.",
+            "# TYPE auto_router_runtime_avg_latency_ms gauge",
+            f"auto_router_runtime_avg_latency_ms {int(runtime_summary.get('avg_latency_ms') or 0)}",
+            "# HELP auto_router_runtime_avg_elapsed_ms Average wall-clock elapsed time across recent runtime samples.",
+            "# TYPE auto_router_runtime_avg_elapsed_ms gauge",
+            f"auto_router_runtime_avg_elapsed_ms {int(runtime_summary.get('avg_elapsed_ms') or 0)}",
+            "# HELP auto_router_runtime_avg_queue_wait_ms Average queue wait time across recent runtime samples.",
+            "# TYPE auto_router_runtime_avg_queue_wait_ms gauge",
+            f"auto_router_runtime_avg_queue_wait_ms {int(runtime_summary.get('avg_queue_wait_ms') or 0)}",
+            "# HELP auto_router_runtime_avg_load_time_ms Average load time across recent runtime samples.",
+            "# TYPE auto_router_runtime_avg_load_time_ms gauge",
+            f"auto_router_runtime_avg_load_time_ms {int(runtime_summary.get('avg_load_time_ms') or 0)}",
+            "# HELP auto_router_runtime_avg_tokens_per_second Average token throughput across recent runtime samples.",
+            "# TYPE auto_router_runtime_avg_tokens_per_second gauge",
+            f"auto_router_runtime_avg_tokens_per_second {float(runtime_summary.get('avg_tokens_per_second') or 0)}",
+            "# HELP auto_router_runtime_avg_value_per_second Average value throughput across recent runtime samples.",
+            "# TYPE auto_router_runtime_avg_value_per_second gauge",
+            f"auto_router_runtime_avg_value_per_second {float(runtime_summary.get('avg_value_per_second') or 0)}",
+        ]
+    )
+    for provider_summary in runtime_summary.get("by_provider", []):
+        provider = str(provider_summary.get("provider_id") or provider_summary.get("provider") or "unknown")
+        lines.append(
+            'auto_router_runtime_provider_samples{provider="%s"} %s'
+            % (provider, int(provider_summary.get("samples") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_provider_avg_tokens_per_second{provider="%s"} %s'
+            % (provider, float(provider_summary.get("avg_tokens_per_second") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_provider_avg_value_per_second{provider="%s"} %s'
+            % (provider, float(provider_summary.get("avg_value_per_second") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_provider_avg_queue_wait_ms{provider="%s"} %s'
+            % (provider, int(provider_summary.get("avg_queue_wait_ms") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_provider_avg_load_time_ms{provider="%s"} %s'
+            % (provider, int(provider_summary.get("avg_load_time_ms") or 0))
         )
     lines.extend(
         [
@@ -395,18 +523,51 @@ def _context_model_lane_summary(state: Any) -> dict[str, int]:
 
 def _context_graph_summary(state: Any) -> dict[str, int]:
     if not hasattr(state, "context"):
-        return {"total": 0, "node": 0, "provider": 0, "model": 0, "service": 0}
+        return {"total": 0, "node": 0, "provider": 0, "model": 0, "service": 0, "signal": 0}
     if hasattr(state.context, "graph_object_summary"):
         return state.context.graph_object_summary()
-    return {"total": 0, "node": 0, "provider": 0, "model": 0, "service": 0}
+    return {"total": 0, "node": 0, "provider": 0, "model": 0, "service": 0, "signal": 0}
+
+
+def _context_signal_summary(state: Any) -> dict[str, int]:
+    if not hasattr(state, "context") or not hasattr(state.context, "signal_summary"):
+        return {"total": 0, "active": 0, "provider": 0, "model": 0, "node": 0, "service": 0}
+    return state.context.signal_summary()
+
+
+def _context_route_signal_summary(state: Any) -> dict[str, int]:
+    if not hasattr(state, "context") or not hasattr(state.context, "all_signals"):
+        return {"total": 0, "active": 0, "preferred": 0, "blocked": 0, "realtime": 0, "avoid": 0}
+    signals = [signal for signal in state.context.all_signals() if str(getattr(signal, "source", "")).startswith("route_")]
+    return {
+        "total": len(signals),
+        "active": sum(1 for signal in signals if signal.is_active),
+        "preferred": sum(1 for signal in signals if signal.signal_type == "preferred"),
+        "blocked": sum(1 for signal in signals if signal.signal_type == "blocked"),
+        "realtime": sum(1 for signal in signals if signal.signal_type == "realtime"),
+        "avoid": sum(1 for signal in signals if signal.signal_type == "avoid"),
+    }
 
 
 def _provider_tap_summary(records: list[dict[str, Any]]) -> dict[str, int]:
+    return _provider_tap_metrics(records)
+
+
+def _provider_tap_metrics(provider_health: list[dict[str, Any]]) -> dict[str, int]:
+    avg_latency_ms = int(mean([int(report.get("latency_ms") or 0) for report in provider_health if report.get("latency_ms") is not None])) if any(report.get("latency_ms") is not None for report in provider_health) else 0
+    ok = sum(1 for report in provider_health if report.get("ok"))
+    error = sum(1 for report in provider_health if not report.get("ok"))
+    drift = sum(1 for report in provider_health if report.get("drift"))
+    models = sum(int(report.get("model_count") or 0) for report in provider_health)
+    healthy = sum(1 for report in provider_health if report.get("ok") and not report.get("drift"))
     return {
-        "providers": len(records),
-        "ok": sum(1 for record in records if record.get("ok")),
-        "error": sum(1 for record in records if not record.get("ok")),
-        "models": sum(int(record.get("model_count") or 0) for record in records),
+        "providers": len(provider_health),
+        "ok": ok,
+        "error": error,
+        "models": models,
+        "healthy": healthy,
+        "drift": drift,
+        "avg_latency_ms": avg_latency_ms,
     }
 
 

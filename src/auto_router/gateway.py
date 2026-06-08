@@ -72,10 +72,10 @@ def build_gateway_headers(
     # Add optional headers if provided
     if task_id:
         headers["x-auto-router-task-id"] = task_id
-    
+
     if agent_run_id:
         headers["x-auto-router-agent-run-id"] = agent_run_id
-    
+
     if node_id:
         headers["x-auto-router-node-id"] = node_id
 
@@ -92,6 +92,9 @@ def attach_gateway_metadata(
     privacy: str,
     quota_mode: str,
     context_revision: Optional[str] = None,
+    task_id: Optional[str] = None,
+    agent_run_id: Optional[str] = None,
+    node_id: Optional[str] = None,
     fallback_allowed: bool = True,
 ) -> Dict[str, Any]:
     """Attach auto-router metadata to request body.
@@ -122,6 +125,9 @@ def attach_gateway_metadata(
         "privacy": privacy,
         "quota_mode": quota_mode,
         "context_revision": context_revision or "none",
+        "task_id": task_id,
+        "agent_run_id": agent_run_id,
+        "node_id": node_id,
         "fallback_allowed": fallback_allowed,
     }
     return updated

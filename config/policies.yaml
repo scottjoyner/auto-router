@@ -50,10 +50,10 @@ profiles:
         allow_local_fallback: true
 
   sophia_realtime:
-    description: Low-latency lane for Sophia realtime app traffic; preserve privacy and keep local fallback first-class.
+    description: Low-latency local-only lane for Sophia realtime app traffic; preserve the voice/privacy wall.
     stages:
       - purpose: final
-        provider_classes: [local, fast_free]
+        provider_classes: [local]
         required_capabilities: [chat, low_latency]
         allow_local_fallback: true
 

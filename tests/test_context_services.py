@@ -97,7 +97,7 @@ def test_load_context_snapshot_bootstraps_provider_services(tmp_path) -> None:
     assert model is not None
     assert model.provider == "cerebras"
     assert snapshot.models_for_provider("cerebras")[0].provider_model == "gpt-oss-120b"
-    assert any(item.model_id == "cerebras.cerebras/flash-reasoner" for item in snapshot.all_models())
+    assert any(item.model_id == "cerebras.gpt-oss-120b" for item in snapshot.all_models())
     graph_summary = snapshot.graph_object_summary()
     assert graph_summary["provider"] == 1
     assert graph_summary["model"] >= 1
@@ -135,6 +135,15 @@ graph_objects:
       name: LM Studio API
       url: http://r2d2:1234/v1
       status: online
+  - kind: signal
+    id: provider.lmstudio-r2d2.preferred
+    properties:
+      target_type: provider
+      target_id: lmstudio-r2d2
+      signal_type: preferred
+      strength: 2
+      source: sophia
+      detail: Prefer the local gateway-backed endpoint
 """,
         encoding="utf-8",
     )
@@ -156,10 +165,32 @@ graph_objects:
     assert model.provider == "lmstudio-r2d2"
     assert model.provider_model == "local/default"
     assert services[0].status == ServiceStatus.online
+    assert snapshot.signal_summary()["total"] == 1
+    assert snapshot.signals_for_provider("lmstudio-r2d2")[0].signal_type == "preferred"
     graph_summary = snapshot.graph_object_summary()
     assert graph_summary["provider"] >= 1
     assert graph_summary["model"] >= 1
     assert graph_summary["service"] >= 1
+    assert graph_summary["signal"] == 1
+
+
+def test_load_context_snapshot_marks_bootstrap_fallback_when_http_projection_unreachable(monkeypatch) -> None:
+    from auto_router import config as config_module
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("projection unavailable")
+
+    monkeypatch.setattr(config_module, "_load_json_source", fail)
+
+    snapshot = load_context_snapshot(
+        "http://assistx:8000/api/router/context-projection",
+        ProviderRegistry.model_validate({"providers": []}),
+        AgentWorkerRegistry.model_validate({"agent_workers": []}),
+    )
+
+    assert snapshot.projection_status() == "bootstrap_fallback"
+    assert snapshot.is_projection_degraded() is True
+    assert snapshot.projection_error()
 
 
 def test_context_snapshot_deduplicates_services_by_id_with_nested_precedence() -> None:

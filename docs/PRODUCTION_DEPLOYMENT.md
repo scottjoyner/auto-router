@@ -41,12 +41,13 @@ Keep `auto-router` private-network only unless you add authentication and TLS in
 Recommended first production mode:
 
 ```bash
+pytest -q
 cp .env.example .env
 cp config/providers.example.yaml config/providers.yaml
 cp config/policies.example.yaml config/policies.yaml
 cp config/agent_workers.example.yaml config/agent_workers.yaml
 cp config/context.example.yaml config/context.yaml
-docker compose up --build -d
+docker compose up -d --build
 ```
 
 Verify:
@@ -55,6 +56,8 @@ Verify:
 curl http://localhost:8088/health | jq
 curl http://localhost:8088/v1/models | jq
 curl http://localhost:8088/admin/services | jq
+curl http://localhost:8088/admin/ops/summary | jq
+curl http://localhost:8088/dashboard | head -n 20
 ```
 
 ### 3.2 Systemd / bare metal
@@ -157,6 +160,7 @@ curl http://localhost:8088/admin/live-models | jq
 curl http://localhost:8088/admin/backlog/assistx/config | jq
 curl http://localhost:8088/admin/outbox | jq
 curl http://localhost:8088/admin/ops/summary | jq
+curl http://localhost:8088/dashboard | head -n 20
 curl http://localhost:8088/metrics/ops
 ```
 

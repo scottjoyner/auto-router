@@ -25,8 +25,8 @@ services:
     priority: 2
   - service_id: assistx.ui
     name: AssistX UI
-    url: http://172.20.0.5:8000
-    health_url: http://172.20.0.5:8000/health
+    url: http://assistx:8000
+    health_url: http://assistx:8000/health
     service_type: assistx_ui
     status: unknown
     tags: [assistx, tasks, sophia]
@@ -34,8 +34,8 @@ services:
     priority: 10
   - service_id: assistx.context
     name: AssistX Router Context Projection
-    url: http://172.20.0.5:8000/api/router/context-projection
-    health_url: http://172.20.0.5:8000/health
+    url: http://assistx:8000/api/router/context-projection
+    health_url: http://assistx:8000/health
     service_type: context_projection
     status: unknown
     tags: [assistx, neo4j, context]
@@ -73,8 +73,8 @@ nodes:
     local: true
     can_use_free_api: false
     running: true
-    capabilities: [large_models, long_context, agent_host]
-    detail: 96GB RAM, weak GPU
+    capabilities: [large_models, long_context, large_context, reasoning, agent_host, service_host]
+    detail: 96GB RAM, complex-reasoning/local-privacy node; also hosts core services so keep load moderate
     services:
       - service_id: x1-370.lmstudio
         name: X1-370 LM Studio
@@ -86,29 +86,29 @@ nodes:
         tags: [local_llm, lmstudio, openai_compatible]
         detail: Local OpenAI-compatible model endpoint
         priority: 40
-  - node_id: macbook-air
-    display_name: Mobile Speed Demon (MacBook Air)
+  - node_id: macbook-air-m2
+    display_name: Mobile Speed Demon (MacBook Air M2)
     lane: local
     local: true
     can_use_free_api: false
     running: true
-    capabilities: [fast_draft, low_latency]
-    detail: Gemma-3 powerhouse
-  - node_id: deathstar
+    capabilities: [fast_draft, low_latency, quick_iteration, sophia_response]
+    detail: 8GB RAM M2 MacBook Air; fast for short iterative generation and Sophia responses when online
+  - node_id: deathstar-XPS-8920
     display_name: GPU Specialist (Deathstar)
     lane: local
     local: true
     can_use_free_api: false
     running: true
-    capabilities: [gpu_accelerated, fast_inference]
-    detail: RX 480 8GB
+    capabilities: [gpu_accelerated, fast_inference, vram_fit, neo4j_origin, auto_ingest_origin]
+    detail: RX 480 8GB; fast when models fit VRAM, slow when offloaded to RAM
     services:
       - service_id: deathstar.lmstudio
         name: Deathstar LM Studio
         url: http://deathstar-XPS-8920:1234/v1
         health_url: http://deathstar-XPS-8920:1234/v1/models
         service_type: lmstudio
-        node_id: deathstar
+        node_id: deathstar-XPS-8920
         status: unknown
         tags: [local_llm, lmstudio, openai_compatible]
         detail: Deathstar local GPU model endpoint
@@ -118,11 +118,19 @@ nodes:
         url: http://deathstar-XPS-8920:7474
         health_url: http://deathstar-XPS-8920:7474
         service_type: graph_ui
-        node_id: deathstar
+        node_id: deathstar-XPS-8920
         status: unknown
         tags: [neo4j, graph, browser]
         detail: Graph browser on the legacy/ingest host
         priority: 42
+  - node_id: falcon@Demo
+    display_name: Demo Strix Halo WSL2 Node
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [shared_memory, gpu_accelerated, windows_wsl2, flexible_local]
+    detail: Windows Strix Halo AMD AI 9 495 with 8GB VRAM plus 32GB shared RAM; Hermes runs under WSL2
   - node_id: paperclip-control
     display_name: Paperclip control plane
     lane: paperclip
@@ -161,6 +169,28 @@ nodes:
         detail: WSE-3 backed OpenAI-compatible API endpoint
         priority: 5
 providers:
+  - provider: lmstudio-x1-370
+    node_id: x1-370
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/reasoning-large, local/moe-fast, auto/private, auto/local]
+    capabilities: [chat, streaming, json, code, reasoning, tool_use, large_context, local_only]
+    detail: primary local reasoning endpoint on x1-370; keep load moderate because this node hosts core services
+    services:
+      - service_id: provider.lmstudio-x1-370.api
+        name: LM Studio X1-370 API
+        url: http://host.docker.internal:1234/v1
+        health_url: http://host.docker.internal:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: x1-370
+        provider: lmstudio-x1-370
+        status: unknown
+        tags: [lmstudio, local_llm, reasoning, privacy_wall]
+        detail: Provider URL used by auto-router
+        priority: 30
   - provider: lmstudio-r2d2
     node_id: x1-370
     lane: local
@@ -182,7 +212,7 @@ providers:
         detail: Provider URL used by auto-router
         priority: 40
   - provider: lmstudio-deathstar
-    node_id: deathstar
+    node_id: deathstar-XPS-8920
     lane: local
     local: true
     can_use_free_api: false
@@ -195,7 +225,7 @@ providers:
         url: http://deathstar-XPS-8920:1234/v1
         health_url: http://deathstar-XPS-8920:1234/v1/models
         service_type: openai_compatible_api
-        node_id: deathstar
+        node_id: deathstar-XPS-8920
         provider: lmstudio-deathstar
         status: unknown
         tags: [lmstudio, local_llm]

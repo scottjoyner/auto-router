@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+import asyncio
+
+import auto_router.main as main_module
+
+
+class FakeContext:
+    revision = "rev-1"
+    source = "unit-test"
+
+    def local_provider_names(self):
+        return ["local"]
+
+    def free_api_provider_names(self):
+        return ["cerebras"]
+
+    def blocked_provider_names(self):
+        return ["blocked"]
+
+    def running_local_node_names(self):
+        return ["r2d2"]
+
+
+class FakeCircuits:
+    def snapshot(self):
+        return [{"owner": "cerebras", "open": False}]
+
+
+class FakeProviders:
+    def enabled(self):
+        return ["cerebras", "lmstudio"]
+
+
+class FakeAgents:
+    agent_workers = ["worker-1"]
+
+
+async def _fake_gateway_status() -> dict[str, object]:
+    return {"enabled": False, "ok": True, "mode": "direct", "detail": "mock"}
+
+
+def test_health_includes_outbox_dispatch_status(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "build_agentgateway_status", _fake_gateway_status)
+    monkeypatch.setattr(
+        main_module,
+        "state",
+        SimpleNamespace(
+            context=FakeContext(),
+            circuits=FakeCircuits(),
+            providers=FakeProviders(),
+            agents=FakeAgents(),
+            quota_backend="FakeQuota",
+            outbox_dispatch_status={
+                "status": "running",
+                "last_outcome": "running",
+                "last_reason": "scheduled",
+                "last_started_at": 90,
+                "last_completed_at": None,
+                "last_duration_ms": None,
+                "interval_seconds": 300.0,
+                "next_run_at": 395.0,
+            },
+        ),
+    )
+
+    result = asyncio.run(main_module.health())
+
+    assert result["ok"] is True
+    assert result["gateway"]["ok"] is True
+    assert result["assistx_outbox_dispatch"]["status"] == "running"
+    assert result["assistx_outbox_dispatch"]["last_reason"] == "scheduled"
+    assert result["assistx_outbox_dispatch"]["next_run_in_seconds"] >= 0
+
+
+def test_router_request_marks_private_payload_local_only() -> None:
+    request = main_module._router_request(
+        "chat_completions",
+        {"model": "auto/fast", "metadata": {"privacy": "internal"}},
+    )
+
+    assert request.local_only is True
+    assert request.allow_cloud is False
+
+
+def test_router_request_marks_sophia_model_local_only() -> None:
+    request = main_module._router_request("chat_completions", {"model": "auto/sophia"})
+
+    assert request.local_only is True
+    assert request.allow_cloud is False

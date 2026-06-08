@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     assistx_event_sink_url: str | None = None
     assistx_event_dispatch_timeout_seconds: float = 10.0
     assistx_event_dispatch_max_attempts: int = 5
+    assistx_event_dispatch_interval_seconds: float = 300.0
     assistx_tasks_url: str | None = None
     assistx_tasks_timeout_seconds: float = 10.0
 
