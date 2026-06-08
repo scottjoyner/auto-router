@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +27,49 @@ class DispatchResult:
             "error": self.error,
             "status_code": self.status_code,
         }
+
+
+def _build_canonical_envelope(event: dict[str, Any]) -> dict[str, Any]:
+    """Build a full AssistX canonical event envelope from an outbox event.
+
+    The outbox stores minimal fields. This function adds the required
+    envelope fields that AssistX's POST /api/events endpoint expects.
+    """
+    payload = event.get("payload", {})
+    correlation_id = payload.get("correlation_id")
+    task_id = payload.get("task_id")
+    route_id = payload.get("route_id")
+
+    occurred_at = event.get("created_at")
+    if isinstance(occurred_at, (int, float)):
+        from datetime import datetime, timezone
+        occurred_at = datetime.fromtimestamp(occurred_at, tz=timezone.utc).isoformat()
+
+    subject: dict[str, str] = {"kind": "task", "id": task_id} if task_id else {"kind": "event", "id": event["event_id"]}
+
+    links: dict[str, str | None] = {}
+    if task_id:
+        links["task_id"] = task_id
+    if route_id:
+        links["route_id"] = route_id
+
+    return {
+        "event_id": event["event_id"],
+        "event_type": event["event_type"],
+        "source_repo": "auto-router",
+        "source_service": event.get("source_service", "auto-router"),
+        "node_id": payload.get("node_id", "unknown"),
+        "occurred_at": occurred_at or int(time.time()),
+        "idempotency_key": event["idempotency_key"],
+        "schema_version": "2026-06-08.v1",
+        "subject": subject,
+        "payload": payload,
+        "artifact_refs": [],
+        "metadata": {},
+        "privacy": {"pii": False, "privacy_class": "internal", "retention_class": "keep"},
+        "correlation_id": correlation_id,
+        "links": links if links else None,
+    }
 
 
 class AssistXEventDispatcher:
@@ -84,17 +128,11 @@ class AssistXEventDispatcher:
 
     async def _dispatch_one(self, client: httpx.AsyncClient, event: dict[str, Any]) -> DispatchResult:
         event_id = str(event["event_id"])
+        envelope = _build_canonical_envelope(event)
         try:
             response = await client.post(
                 str(self.sink_url),
-                json={
-                    "event_id": event["event_id"],
-                    "event_type": event["event_type"],
-                    "source_service": event["source_service"],
-                    "idempotency_key": event["idempotency_key"],
-                    "payload": event["payload"],
-                    "created_at": event["created_at"],
-                },
+                json=envelope,
             )
         except Exception as exc:
             self.outbox.mark_failed(event_id, str(exc), retry=True)
