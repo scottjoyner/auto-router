@@ -20,6 +20,8 @@ async def dispatch_outbox_batch(state: Any, limit: int = 25, dry_run: bool = Fal
         sink_url=settings.assistx_event_sink_url,
         timeout_seconds=settings.assistx_event_dispatch_timeout_seconds,
         max_attempts=settings.assistx_event_dispatch_max_attempts,
+        basic_auth_user=settings.assistx_basic_auth_user,
+        basic_auth_pass=settings.assistx_basic_auth_pass,
     )
     lock = getattr(state, "outbox_dispatch_lock", None)
     if lock is not None:

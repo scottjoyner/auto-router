@@ -13,7 +13,7 @@ providers:
         capabilities: [chat, streaming, json, low_latency]
         context_window: 8192
         quota:
-          rpm: 30
+          rpm: 5
           tpd: 500000
 
   - name: cerebras
@@ -65,28 +65,11 @@ providers:
           rpm: 20
           rpd: 50
 
-  - name: lmstudio-x1-370
-    type: lmstudio
-    node_id: x1-370
-    enabled: true
-    base_url: ${LMSTUDIO_X1_370_BASE_URL:-http://host.docker.internal:1234/v1}
-    priority: 100
-    quota_class: local
-    models:
-      - alias: local/reasoning-large
-        provider_model: local/reasoning-large
-        capabilities: [chat, streaming, code, json, reasoning, tool_use, local_only, large_context]
-        context_window: 65536
-      - alias: local/moe-fast
-        provider_model: local/moe-fast
-        capabilities: [chat, streaming, json, low_latency, local_only, moe]
-        context_window: 32768
-
   - name: lmstudio-xwing
     type: lmstudio
     node_id: xwing
     enabled: true
-    base_url: ${LMSTUDIO_XWING_BASE_URL:-http://100.108.99.47:1234/v1}
+    base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
     priority: 90
     quota_class: local
     models:
@@ -99,7 +82,7 @@ providers:
     type: lmstudio
     node_id: deathstar-XPS-8920
     enabled: true
-    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-XPS-8920:1234/v1}
+    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-xps-8920.tailcb8954.ts.net:1234/v1}
     priority: 180
     quota_class: local
     models:
@@ -108,24 +91,28 @@ providers:
         capabilities: [chat, streaming, code, json, low_latency, local_only, vram_fit]
         context_window: 16384
 
-  - name: lmstudio-demo
+  - name: lmstudio-x1-370
     type: lmstudio
-    node_id: falcon@Demo
+    node_id: x1-370
     enabled: true
-    base_url: ${LMSTUDIO_DEMO_BASE_URL:-http://demo-1:1234/v1}
-    priority: 220
+    base_url: ${LMSTUDIO_X1_370_BASE_URL:-http://x1-370.tailcb8954.ts.net:1234/v1}
+    priority: 100
     quota_class: local
     models:
-      - alias: local/demo-flex
-        provider_model: local/demo-flex
-        capabilities: [chat, streaming, code, json, local_only, shared_memory]
+      - alias: local/reasoning-large
+        provider_model: local/reasoning-large
+        capabilities: [chat, streaming, code, json, reasoning, tool_use, local_only, large_context]
+        context_window: 65536
+      - alias: local/moe-fast
+        provider_model: local/moe-fast
+        capabilities: [chat, streaming, json, low_latency, local_only, moe]
         context_window: 32768
 
   - name: lmstudio-macbook-air
     type: lmstudio
     node_id: macbook-air-m2
     enabled: true
-    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://macbook-air:1234/v1}
+    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
     priority: 260
     quota_class: local
     models:
@@ -133,15 +120,3 @@ providers:
         provider_model: local/quick-iterate
         capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
         context_window: 8192
-
-  - name: lmstudio-r2d2
-    type: lmstudio
-    enabled: true
-    base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
-    priority: 900
-    quota_class: local
-    models:
-      - alias: local/default
-        provider_model: local/default
-        capabilities: [chat, streaming, code, json, local_only]
-        context_window: 32768

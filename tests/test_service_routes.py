@@ -132,6 +132,8 @@ def test_dispatch_outbox_cycle_updates_status(monkeypatch, tmp_path) -> None:
             assistx_event_dispatch_timeout_seconds=1.5,
             assistx_event_dispatch_max_attempts=4,
             assistx_event_dispatch_interval_seconds=5.0,
+            assistx_basic_auth_user="",
+            assistx_basic_auth_pass="",
         ),
     )
 

@@ -53,7 +53,7 @@ async def test_dispatcher_marks_success_delivered(monkeypatch, tmp_path) -> None
         )
     )
 
-    async def fake_post(self, url, json):
+    async def fake_post(self, url, json, **kwargs):
         return httpx.Response(202, json={"ok": True})
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -76,7 +76,7 @@ async def test_dispatcher_marks_409_delivered(monkeypatch, tmp_path) -> None:
         )
     )
 
-    async def fake_post(self, url, json):
+    async def fake_post(self, url, json, **kwargs):
         return httpx.Response(409, text="duplicate")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -99,7 +99,7 @@ async def test_dispatcher_retries_transient_error(monkeypatch, tmp_path) -> None
         )
     )
 
-    async def fake_post(self, url, json):
+    async def fake_post(self, url, json, **kwargs):
         return httpx.Response(503, text="temporarily down")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -123,7 +123,7 @@ async def test_dispatcher_dead_letters_after_max_attempts(monkeypatch, tmp_path)
     )
     outbox.mark_failed(event_id, "old failure", retry=True)
 
-    async def fake_post(self, url, json):
+    async def fake_post(self, url, json, **kwargs):
         return httpx.Response(503, text="still down")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)

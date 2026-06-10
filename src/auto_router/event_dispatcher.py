@@ -85,11 +85,14 @@ class AssistXEventDispatcher:
         sink_url: str | None,
         timeout_seconds: float = 10.0,
         max_attempts: int = 5,
+        basic_auth_user: str = "",
+        basic_auth_pass: str = "",
     ):
         self.outbox = outbox
         self.sink_url = sink_url
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
+        self.basic_auth = (basic_auth_user, basic_auth_pass) if basic_auth_user and basic_auth_pass else None
 
     @property
     def configured(self) -> bool:
@@ -133,6 +136,7 @@ class AssistXEventDispatcher:
             response = await client.post(
                 str(self.sink_url),
                 json=envelope,
+                auth=self.basic_auth,
             )
         except Exception as exc:
             self.outbox.mark_failed(event_id, str(exc), retry=True)

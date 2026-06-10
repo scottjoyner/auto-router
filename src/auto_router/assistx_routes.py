@@ -110,7 +110,7 @@ def register_assistx_routes(app: Any, state: Any) -> None:
         selection = _select_lane_and_provider(body, state)
         lane = selection["lane"]
 
-        if lane == "blocked" or body.event_type == "route.blocked":
+        if lane == "blocked":
             decision = _build_route_decision(
                 body,
                 lane="blocked",

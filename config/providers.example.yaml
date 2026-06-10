@@ -27,7 +27,7 @@ providers:
         capabilities: [chat, streaming, json, low_latency]
         context_window: 8192
         quota:
-          rpm: 30
+          rpm: 5
           tpd: 500000
 
   - name: cerebras

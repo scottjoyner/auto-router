@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from auto_router import __version__
 from auto_router.agent_jobs import AgentJobManager, build_agent_job_request, record_as_dict
+from auto_router.logging_utils import install_logging_middleware, setup_logging
 from auto_router.circuit_breaker import CircuitBreakerManager
 from auto_router.config import (
     AgentWorkerRegistry,
@@ -41,6 +43,8 @@ from auto_router.service_routes import build_outbox_dispatch_status, dispatch_ou
 
 templates = Jinja2Templates(directory="src/auto_router/templates")
 
+_start_time = time.time()
+
 
 class AppState:
     providers: ProviderRegistry
@@ -67,6 +71,16 @@ async def load_state() -> None:
     state.providers = load_provider_registry(settings.provider_config)
     state.policies = load_policy_registry(settings.policy_config)
     state.agents = load_agent_worker_registry(settings.agent_config)
+
+    missing: list[str] = []
+    for label, cfg in [("provider", settings.provider_config), ("policy", settings.policy_config), ("agent", settings.agent_config)]:
+        if isinstance(cfg, str) and not Path(cfg).exists():
+            missing.append(f"{label}: {cfg}")
+    if missing:
+        print(f"WARNING: Config files not found — {', '.join(missing)}")
+    if not state.providers.enabled():
+        print("WARNING: No providers enabled. All routing requests will return 503.")
+
     state.context = await load_context_snapshot_async(settings.context_config, state.providers, state.agents)
     state.ledger = UsageLedger(settings.database_url)
     state.model_registry = ModelRegistryStore(settings.database_url)
@@ -161,6 +175,15 @@ app = FastAPI(
     description="Local-first OpenAI-compatible LLM router with free quota scheduling.",
     lifespan=lifespan,
 )
+setup_logging()
+install_logging_middleware(app)
+
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+static_dir = Path(__file__).resolve().parent / "static"
+static_dir.mkdir(exist_ok=True)
+(static_dir / "vendor").mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 @app.get("/health")
@@ -168,10 +191,23 @@ async def health() -> dict[str, Any]:
     open_circuits = [circuit for circuit in state.circuits.snapshot() if circuit["open"]]
     gateway_status = await build_agentgateway_status()
     context_projection = _context_projection_summary()
+    overall_ok = not open_circuits
+    redis_ok = "not_configured"
+    if hasattr(state, "quota") and hasattr(state.quota, "client"):
+        try:
+            redis_ok = "ok" if state.quota.client.ping() else "down"
+        except Exception:
+            redis_ok = "down"
     
     return {
-        "ok": True,
+        "ok": overall_ok,
+        "status": "ok" if overall_ok else "degraded",
         "service": "auto-router",
+        "version": __version__,
+        "uptime": time.time() - _start_time,
+        "deps": {
+            "redis": {"status": redis_ok},
+        },
         "context_revision": state.context.revision,
         "context_source": state.context.source,
         "context_projection_status": context_projection["status"],
@@ -643,7 +679,7 @@ def _router_request(route: str, body: dict[str, Any]) -> RouterRequest:
         model=model if isinstance(model, str) else None,
         messages=body.get("messages") or [],
         input=body.get("input"),
-        max_tokens=body.get("max_tokens") or body.get("max_completion_tokens"),
+        max_tokens=body.get("max_tokens") if body.get("max_tokens") is not None else body.get("max_completion_tokens"),
         stream=bool(body.get("stream", False)),
         tools=body.get("tools"),
         response_format=body.get("response_format"),

@@ -1,12 +1,9 @@
-.PHONY: install dev dev-base test lint format docker-up docker-down smoke
+.PHONY: install dev test lint format smoke build docker-up docker-down
 
 install:
 	python -m pip install -e '.[dev]'
 
 dev:
-	uvicorn auto_router.main_live:app --host 0.0.0.0 --port 8088 --reload
-
-dev-base:
 	uvicorn auto_router.main:app --host 0.0.0.0 --port 8088 --reload
 
 test:
@@ -19,8 +16,11 @@ format:
 	ruff check --fix src tests
 
 smoke:
-	python -m py_compile $$(find src -name '*.py')
+	python -m compileall src
 	pytest -q
+
+build:
+	docker compose build
 
 docker-up:
 	docker compose up --build
@@ -28,7 +28,9 @@ docker-up:
 docker-down:
 	docker compose down
 
-# Agentgateway sidecar targets
+# Agentgateway sidecar targets (preserved)
+.PHONY: gateway-up gateway-down gateway-smoke gateway-metrics jaeger-ui
+
 gateway-up:
 	docker compose -f docker-compose.yml -f docker-compose.agentgateway.yml up --build
 
@@ -46,4 +48,3 @@ gateway-metrics:
 
 jaeger-ui:
 	@echo "Jaeger UI available at http://localhost:16686"
-

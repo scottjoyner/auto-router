@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from auto_router.route_events import enqueue_route_execution_event
+from auto_router.route_events import _provider_node_id, enqueue_route_execution_event
 from auto_router.signal_registry import route_execution_signals, signal_snapshot
 
 
@@ -118,17 +118,4 @@ def install_route_event_patch(main_module: Any) -> None:
     main_module._route_event_patch_installed = True
 
 
-def _provider_node_id(state: Any, provider_name: str | None) -> str | None:
-    if not provider_name or not hasattr(state, "providers"):
-        return None
-    context = getattr(state, "context", None)
-    canonical = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name)
-    if context is not None and hasattr(context, "provider_for"):
-        provider = context.provider_for(canonical)
-        if provider is not None:
-            return provider.node_id
-    for provider in state.providers.enabled():
-        provider_name_value = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name)
-        if provider_name_value == canonical:
-            return provider.node_id
-    return None
+

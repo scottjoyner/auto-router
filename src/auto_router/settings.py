@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     assistx_event_dispatch_interval_seconds: float = 300.0
     assistx_tasks_url: str | None = None
     assistx_tasks_timeout_seconds: float = 10.0
+    assistx_basic_auth_user: str = ""
+    assistx_basic_auth_pass: str = ""
 
 
 @lru_cache

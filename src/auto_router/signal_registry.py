@@ -607,11 +607,9 @@ class ContextSignalStore:
 
     def _path_from_url(self, database_url: str) -> Path:
         if database_url.startswith("sqlite:///./"):
-            return Path.cwd() / database_url.removeprefix("sqlite:///./")
+            return Path(database_url.removeprefix("sqlite:///"))
         if database_url.startswith("sqlite:////"):
-            return Path("/") / database_url.removeprefix("sqlite:////")
-        parsed = urlparse(database_url)
-        if parsed.scheme == "sqlite" and parsed.path:
+            parsed = urlparse(database_url)
             return Path(parsed.path)
         if database_url.startswith("sqlite:///"):
             return Path(database_url.removeprefix("sqlite:///"))
