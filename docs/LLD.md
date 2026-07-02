@@ -19,6 +19,10 @@ It matches the current HLD and production shape:
 - dry-run backlog scheduling;
 - dashboard/operator endpoints.
 
+Migration note:
+
+The current ownership split is documented in `docs/ROUTER_ASSISTX_AUTO_ASSIGN_BOUNDARIES.md`. Use that boundary map when changing router, assignment, or execution-consumer responsibilities.
+
 ## 2. Application entrypoints
 
 ### 2.1 Base app
@@ -147,9 +151,9 @@ The base app uses a shared runtime `state` object. Production extensions add att
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/jobs/agent` | Existing placeholder/surface for future agent jobs |
+| POST | `/jobs/agent` | Tool-capable agent job orchestration surface used by AssistX routing |
 
-Current repo posture: dry-run backlog selection and agent CLI discovery exist; actual agent execution is not enabled.
+Route requests that require tools now submit structured jobs to this surface, carrying task kind, evidence requirements, allowed tools, and preferred worker hints. The agent worker plane remains opt-in via config, but the routing contract is live.
 
 ## 5. Configuration files
 

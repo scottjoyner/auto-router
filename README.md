@@ -75,6 +75,9 @@ Operations:
 | `auto/flash-start` | Cerebras WSE-3 instant planning/decomposition starter |
 | `auto/high-quality` | Local draft plus stronger free refine/judge |
 | `auto/code` | Code-focused local draft plus free/cloud refinement |
+| `auto/review` | Iterative review/finalization handoff with explicit validation metrics |
+| `auto/iterate` | Iterative one-by-one task slicing before Hermes handoff |
+| `auto/finalize` | Final review and handoff path for already-reviewed work |
 | `auto/sophia` | Low-latency Sophia realtime profile |
 | `auto/backlog-burn` | Controlled surplus-quota burn profile for safe backlog tasks |
 | `auto/local` | LM Studio/local-only |
@@ -95,7 +98,7 @@ Sophia / AssistX / OpenAI-compatible clients / operator dashboard
       -> durable model registry
       -> agent CLI discovery
       -> durable usage ledger
-      -> durable event outbox and AssistX dispatcher
+      -> durable event outbox and AssistX event sink
   -> local LM Studio endpoints
   -> free hosted provider endpoints
   -> CLI coding agents
@@ -190,6 +193,8 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 - [`docs/TODO.md`](docs/TODO.md) — prioritized implementation backlog
 - [`docs/IDEAS.md`](docs/IDEAS.md) — future router, backlog, Sophia, and graph ideas
 - [`docs/QUOTA_STRATEGY.md`](docs/QUOTA_STRATEGY.md) — quota burn-down and reservation model
+- [`docs/ROUTER_ASSISTX_AUTO_ASSIGN_BOUNDARIES.md`](docs/ROUTER_ASSISTX_AUTO_ASSIGN_BOUNDARIES.md) — current ownership split between router, AssistX/Neo4j, auto-assign, and paperclip
+- [`docs/plans/2026-07-02-auto-router-migration-plan.md`](docs/plans/2026-07-02-auto-router-migration-plan.md) — docs-first migration plan for separating router, assigner, and canonical graph ownership
 - [`docs/PROVIDER_MATRIX.md`](docs/PROVIDER_MATRIX.md) — provider notes and volatile limits
 - [`docs/SECURITY_PRIVACY.md`](docs/SECURITY_PRIVACY.md) — privacy and key-handling constraints
 - [`docs/FLEET_ROUTING_POLICY.md`](docs/FLEET_ROUTING_POLICY.md) — fleet routing policy, privacy classes, and node/model selection guardrails
@@ -197,7 +202,7 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 
 ## Next implementation priorities
 
-1. Wire outbox dispatcher to POST `route.selected` events back to AssistX `/api/events` after route decisions.
+1. Wire outbox dispatcher to POST outbox events back to AssistX `/api/events` after route decisions, especially `router.route_decision` and `router.execution_stage.*`.
 2. Add AssistX task claim/approval flow after dry-run selection.
 3. Persist remote node CLI/service discovery from AssistX into Neo4j-backed context projection.
 4. Add model registry write-back events to AssistX/Neo4j.

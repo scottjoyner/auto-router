@@ -34,12 +34,13 @@ from auto_router.models import Priority, ProviderCandidate, ProviderHealth, Prov
 from auto_router.policy import PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
-from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary
+from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
 from auto_router.route_event_patch import install_route_event_patch
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, dispatch_outbox_cycle
+from auto_router.ui_pages import get_ui_page_sections
 
 templates = Jinja2Templates(directory="src/auto_router/templates")
 
@@ -187,6 +188,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 @app.get("/health")
+@app.get("/api/health")
 async def health() -> dict[str, Any]:
     open_circuits = [circuit for circuit in state.circuits.snapshot() if circuit["open"]]
     gateway_status = await build_agentgateway_status()
@@ -259,20 +261,26 @@ async def dashboard(request: Request) -> Any:
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"title": "auto-router dashboard"},
+        context={"title": "auto-router dashboard", "ui_page_sections": get_ui_page_sections()},
     )
 
 
 @app.get("/api/dashboard/summary", response_class=HTMLResponse)
 async def dashboard_summary(request: Request) -> Any:
+    settings = get_settings()
+    provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
+    fleet_dispatcher_stats = _fleet_dispatcher_stats()
+    workflow_contract_summary = _workflow_contract_summary(fleet_dispatcher_stats)
+    event_outbox = getattr(state, "event_outbox", None)
+    outbox_summary = event_outbox.summary() if event_outbox is not None else {}
+    outbox_dispatch_summary = build_outbox_dispatch_status(state)
     return templates.TemplateResponse(
         request=request,
         name="fragments/dashboard_summary.html",
         context={
             "snapshots": state.quota.snapshots(state.providers.enabled()),
-            "provider_health": await _provider_health_reports(),
             "provider_probe_summary": state.model_registry.probe_summary() if hasattr(state, "model_registry") else {},
-            "provider_health_summary": state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else [],
+            "provider_health_summary": provider_health_summary,
             "agents": state.agents.agent_workers,
             "jobs": list(state.agent_jobs.jobs.values()),
             "recent_usage": state.ledger.recent_events(limit=20),
@@ -284,7 +292,17 @@ async def dashboard_summary(request: Request) -> Any:
             "context_route_signal_summary": _context_route_signal_summary(state),
             "circuits": state.circuits.snapshot(),
             "gateway": await build_agentgateway_status(),
-            **build_swarm_state_summary(state),
+            "ui_page_sections": get_ui_page_sections(),
+            "assistx_tasks_url": settings.assistx_tasks_url,
+            "assistx_event_sink_url": settings.assistx_event_sink_url,
+            "assistx_tasks_configured": bool(settings.assistx_tasks_url),
+            "assistx_event_sink_configured": bool(settings.assistx_event_sink_url),
+            "outbox_summary": outbox_summary,
+            "outbox_dispatch_summary": outbox_dispatch_summary,
+            "fleet_dispatcher_stats": fleet_dispatcher_stats,
+            "fleet_loadout_report": _fleet_loadout_report(),
+            "workflow_contract_summary": workflow_contract_summary,
+            **build_swarm_state_summary(state, provider_health_summary=provider_health_summary),
         },
     )
 
@@ -368,6 +386,9 @@ async def list_models() -> dict[str, Any]:
             {"id": "auto/flash-start", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/high-quality", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/code", "object": "model", "created": 0, "owned_by": "auto-router"},
+            {"id": "auto/review", "object": "model", "created": 0, "owned_by": "auto-router"},
+            {"id": "auto/iterate", "object": "model", "created": 0, "owned_by": "auto-router"},
+            {"id": "auto/finalize", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/local", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/sophia", "object": "model", "created": 0, "owned_by": "auto-router"},
             {"id": "auto/backlog-burn", "object": "model", "created": 0, "owned_by": "auto-router"},

@@ -1,18 +1,4 @@
 providers:
-  # Agentgateway sidecar (optional first-class gateway)
-  - id: agentgateway-sidecar
-    name: agentgateway sidecar
-    type: openai_compatible
-    enabled: true
-    base_url: ${AUTO_ROUTER_AGENTGATEWAY_OPENAI_BASE_URL:-http://agentgateway:3000/v1}
-    api_key_env: AUTO_ROUTER_AGENTGATEWAY_API_KEY
-    priority: 50
-    quota_class: brokered_free
-    headers: {}
-    gateway_managed: true  # Route through agentgateway when enabled
-    local_gateway_only: false  # Can route to cloud providers via gateway
-    models: []
-
   - name: groq
     type: openai_compatible
     enabled: true
@@ -79,32 +65,52 @@ providers:
           rpm: 20
           rpd: 50
 
-  - name: lmstudio-r2d2
+  - name: lmstudio-xwing
     type: lmstudio
+    node_id: xwing
     enabled: true
-    base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
-    priority: 900
+    base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
+    priority: 90
     quota_class: local
     models:
-      - alias: local/default
-        provider_model: local/default
-        capabilities: [chat, streaming, code, json, local_only]
+      - alias: local/gemma-4-12b
+        provider_model: google/gemma-4-12b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 32768
 
   - name: lmstudio-deathstar
     type: lmstudio
+    node_id: deathstar-XPS-8920
     enabled: true
-    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-XPS-8920:1234/v1}
-    priority: 910
+    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-xps-8920.tailcb8954.ts.net:1234/v1}
+    priority: 180
     quota_class: local
     models:
-      - alias: local/batch
-        provider_model: local/batch
-        capabilities: [chat, streaming, code, json, local_only]
+      - alias: local/vram-fit
+        provider_model: local/vram-fit
+        capabilities: [chat, streaming, code, json, low_latency, local_only, vram_fit]
+        context_window: 16384
+
+  - name: lmstudio-x1-370
+    type: lmstudio
+    node_id: x1-370
+    enabled: true
+    base_url: ${LMSTUDIO_X1_370_BASE_URL:-http://x1-370.tailcb8954.ts.net:1234/v1}
+    priority: 100
+    quota_class: local
+    models:
+      - alias: local/reasoning-large
+        provider_model: local/reasoning-large
+        capabilities: [chat, streaming, code, json, reasoning, tool_use, local_only, large_context]
+        context_window: 65536
+      - alias: local/moe-fast
+        provider_model: local/moe-fast
+        capabilities: [chat, streaming, json, low_latency, local_only, moe]
         context_window: 32768
 
   - name: lmstudio-beelink-ryzen-7-mini-pc
     type: lmstudio
+    node_id: beelink-ryzen-7-mini-pc
     enabled: true
     base_url: ${LMSTUDIO_BEELINK_BASE_URL:-http://100.85.72.121:1234/v1}
     priority: 140
@@ -114,3 +120,16 @@ providers:
         provider_model: vibethinker-3b-hermes
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 131072
+
+  - name: lmstudio-macbook-air
+    type: lmstudio
+    node_id: macbook-air-m2
+    enabled: true
+    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
+    priority: 260
+    quota_class: local
+    models:
+      - alias: local/quick-iterate
+        provider_model: local/quick-iterate
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+        context_window: 8192

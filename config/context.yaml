@@ -105,6 +105,25 @@ nodes:
         tags: [local_llm, lmstudio, openai_compatible]
         detail: Local OpenAI-compatible model endpoint
         priority: 40
+  - node_id: beelink-ryzen-7-mini-pc
+    display_name: Beelink Ryzen 7 Mini PC
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [mid_tier_local, hermes_worker, lmstudio]
+    detail: Fresh Linux install; LM Studio endpoint is up but model performance is still being evaluated
+    services:
+      - service_id: beelink-ryzen-7-mini-pc.lmstudio
+        name: Beelink Ryzen 7 Mini PC LM Studio
+        url: http://100.85.72.121:1234/v1
+        health_url: http://100.85.72.121:1234/v1/models
+        service_type: lmstudio
+        node_id: beelink-ryzen-7-mini-pc
+        status: unknown
+        tags: [local_llm, lmstudio, openai_compatible, hermes_worker]
+        detail: Fresh Beelink LM Studio endpoint for worker dispatch
+        priority: 43
   - node_id: macbook-air-m2
     display_name: Mobile Speed Demon (MacBook Air M2)
     lane: local
@@ -195,7 +214,7 @@ providers:
     can_use_free_api: false
     free_api_credits: null
     blocked: false
-    aliases: [local/gemma-4-12b, auto/fast, auto/local]
+    aliases: [local/gemma-4-12b, auto/fast]
     capabilities: [chat, streaming, code, json, local_only, hermes_worker]
     detail: First active Hermes worker candidate on xwing; google/gemma-4-12b baseline model
     services:
@@ -232,6 +251,28 @@ providers:
         tags: [lmstudio, local_llm, reasoning, privacy_wall]
         detail: Provider URL used by auto-router
         priority: 30
+  - provider: lmstudio-beelink-ryzen-7-mini-pc
+    node_id: beelink-ryzen-7-mini-pc
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/worker-default]
+    capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+    detail: Fresh Beelink worker node; standard local model is vibethinker-3b-hermes
+    services:
+      - service_id: provider.lmstudio-beelink-ryzen-7-mini-pc.api
+        name: Beelink Ryzen 7 Mini PC LM Studio
+        url: http://100.85.72.121:1234/v1
+        health_url: http://100.85.72.121:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: beelink-ryzen-7-mini-pc
+        provider: lmstudio-beelink-ryzen-7-mini-pc
+        status: unknown
+        tags: [lmstudio, local_llm, hermes_worker]
+        detail: Provider URL used by auto-router
+        priority: 32
   - provider: lmstudio-r2d2
     node_id: x1-370
     lane: local

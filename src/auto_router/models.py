@@ -144,6 +144,11 @@ class AgentWorkerConfig(BaseModel):
     type: str
     command: str
     enabled: bool = False
+    launcher: str = "stdin"
+    model: str | None = None
+    provider: str | None = None
+    toolsets: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     quota: dict[str, Any] = Field(default_factory=dict)
     policy: dict[str, Any] = Field(default_factory=dict)
 
@@ -171,7 +176,8 @@ class RouteRequest(BaseModel):
     task_id: str | None = None
     intent: RouteIntent = Field(default_factory=RouteIntent)
     context_requirements: ContextRequirements = Field(default_factory=ContextRequirements)
-    eligible_lanes: list[str] = Field(default_factory=lambda: ["local", "free_api", "paid_api", "heavy_reasoning"])
+    tools: list[dict[str, Any]] | None = None
+    eligible_lanes: list[str] = Field(default_factory=lambda: ["local", "free_api", "paperclip", "paid_api", "heavy_reasoning"])
     blocked_lanes: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -186,5 +192,7 @@ class RouteDecision(BaseModel):
     model: str
     target_service: str | None = None
     target_node_id: str | None = None
+    target_job_id: str | None = None
+    target_worker: str | None = None
     rationale: str = ""
     confidence: float = 0.0

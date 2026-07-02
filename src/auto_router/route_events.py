@@ -76,7 +76,12 @@ def enqueue_route_execution_event(
     request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
     task_id = getattr(request, "task_id", None) or request_metadata.get("task_id")
     agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get("agent_run_id")
-    node_id = getattr(request, "node_id", None) or request_metadata.get("node_id")
+    node_id = (
+        getattr(request, "node_id", None)
+        or request_metadata.get("node_id")
+        or _provider_node_id(state, provider)
+        or str(request_metadata.get("provider_id") or provider or "unknown")
+    )
 
     payload = {
         "request_id": request.request_id,
@@ -145,7 +150,12 @@ def enqueue_route_decision_event(
     request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
     task_id = getattr(request, "task_id", None) or request_metadata.get("task_id")
     agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get("agent_run_id")
-    node_id = getattr(request, "node_id", None) or request_metadata.get("node_id")
+    node_id = (
+        getattr(request, "node_id", None)
+        or request_metadata.get("node_id")
+        or _provider_node_id(state, chosen_payload.get("provider_id") or chosen_payload.get("provider"))
+        or str(chosen_payload.get("provider_id") or chosen_payload.get("provider") or "unknown")
+    )
     payload = {
         "request_id": request.request_id,
         "route": request.route,

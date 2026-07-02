@@ -120,6 +120,36 @@ def test_route_execution_provider_model_id_does_not_double_prefix(tmp_path) -> N
     assert payload["provider_model_id"] == "lmstudio-x1-370.local/reasoning-large"
 
 
+
+
+def test_enqueue_route_execution_event_uses_provider_node_fallback(tmp_path) -> None:
+    provider = SimpleNamespace(node_id="x1-370")
+    state = SimpleNamespace(
+        event_outbox=EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}"),
+        context=SimpleNamespace(
+            revision="rev-route",
+            source="unit-test",
+            canonical_provider_name=lambda value: str(value).strip().lower(),
+            provider_for=lambda provider_name: provider if str(provider_name).strip().lower() == "lmstudio" else None,
+        ),
+        providers=SimpleNamespace(enabled=lambda: [SimpleNamespace(name="lmstudio", node_id="x1-370")]),
+    )
+    request = RouterRequest(request_id="req-node-fallback", route="chat_completions", model="auto/fast")
+
+    enqueue_route_execution_event(
+        state,
+        request=request,
+        provider="lmstudio",
+        model="lmstudio.local/reasoning-large",
+        stage="final",
+        estimate=Estimate(),
+        status_code=200,
+        latency_ms=25,
+    )
+
+    payload = state.event_outbox.pending()[0]["payload"]
+    assert payload["node_id"] == "x1-370"
+
 def test_route_event_records_gateway_metadata():
     state = SimpleNamespace(
         event_outbox=EventOutbox("sqlite:///:memory:"),
@@ -214,5 +244,5 @@ def test_route_decision_event_records_selection_and_rejections():
     assert payload["chosen"]["model_id"] == "cerebras.gpt-oss-120b"
     assert payload["task_id"] == "assistx-task-999"
     assert payload["agent_run_id"] is None
-    assert payload["node_id"] is None
+    assert payload["node_id"] == "cerebras"
     assert payload["rejections"] == ["quota unavailable for groq/llama"]

@@ -73,7 +73,7 @@ Sophia / AssistX / OpenAI-compatible clients / operator dashboard
 |    - durable model registry                                   |
 |    - agent CLI discovery                                      |
 |    - dry-run backlog scheduler                                |
-|    - durable event outbox + AssistX dispatcher                 |
+|    - durable event outbox + AssistX event sink                 |
 +---------------------------------------------------------------+
         |                 |                    |
         v                 v                    v
@@ -580,7 +580,7 @@ Implemented (2026-06-08):
 
 Next:
 
-- Wire outbox dispatcher to POST `route.selected` events back to AssistX `/api/events`.
+- Wire outbox dispatcher to POST `router.route_decision` and `router.execution_stage.*` events back to AssistX `/api/events`.
 - AssistX task claim/approval flow;
 - route/backlog/service/model event ingestion into Neo4j;
 - remote node service/CLI self-report;

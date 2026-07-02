@@ -1,5 +1,5 @@
 from auto_router.config import PolicyRegistry, ProviderRegistry
-from auto_router.models import ModelConfig, PolicyProfile, PolicyStage, ProviderConfig, RouterRequest, StagePurpose
+from auto_router.models import ModelConfig, PolicyProfile, PolicyStage, Priority, ProviderConfig, RouterRequest, StagePurpose
 from auto_router.policy import PolicyEngine
 
 
@@ -27,7 +27,7 @@ def test_local_only_request_routes_only_to_local() -> None:
             "local_only": PolicyProfile(
                 stages=[
                     PolicyStage(
-                        purpose="final",
+                        purpose=StagePurpose.final,
                         provider_classes=["local"],
                         required_capabilities={"chat"},
                     )
@@ -51,14 +51,31 @@ def test_high_priority_uses_high_priority_profile() -> None:
         profiles={
             "high_priority_deliverable": PolicyProfile(stages=[]),
             "interactive_balanced": PolicyProfile(stages=[]),
+            "iterative_review_handoff": PolicyProfile(stages=[]),
         }
     )
     engine = PolicyEngine(providers, policies, "interactive_balanced")
-    request = RouterRequest(request_id="1", route="chat_completions", priority="critical")
+    request = RouterRequest(request_id="1", route="chat_completions", priority=Priority.critical)
 
     assert engine.classify_profile(request) == "high_priority_deliverable"
 
 
+def test_finalized_workflow_uses_iterative_review_handoff_profile() -> None:
+    providers = ProviderRegistry(providers=[])
+    policies = PolicyRegistry(
+        profiles={
+            "iterative_review_handoff": PolicyProfile(stages=[]),
+            "interactive_balanced": PolicyProfile(stages=[]),
+        }
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="1",
+        route="chat_completions",
+        metadata={"workflow_stage": "handoff", "finalized": True},
+    )
+
+    assert engine.classify_profile(request) == "iterative_review_handoff"
 def test_exact_model_alias_is_honored() -> None:
     providers = ProviderRegistry(
         providers=[
@@ -161,7 +178,7 @@ def test_blocked_context_provider_is_skipped() -> None:
             "interactive_balanced": PolicyProfile(
                 stages=[
                     PolicyStage(
-                        purpose="final",
+                        purpose=StagePurpose.final,
                         provider_classes=[],
                         required_capabilities={"chat"},
                     )
@@ -346,3 +363,45 @@ def test_node_capabilities_bias_large_reasoning_to_x1_style_node() -> None:
     plan = engine.plan(RouterRequest(request_id="1", route="chat_completions"))
 
     assert plan.stages[0].candidates[0].provider.name == "lmstudio-x1"
+
+
+def test_portfolio_management_requests_prefer_xwing() -> None:
+    from auto_router.context import ContextSnapshot
+
+    xwing = ProviderConfig(
+        name="lmstudio-xwing",
+        type="lmstudio",
+        node_id="xwing",
+        enabled=True,
+        base_url="http://xwing.tailcb8954.ts.net:1234/v1",
+        priority=90,
+    )
+    beelink = ProviderConfig(
+        name="lmstudio-beelink",
+        type="lmstudio",
+        node_id="beelink-ryzen-7-mini-pc",
+        enabled=True,
+        base_url="http://100.85.72.121:1234/v1",
+        priority=140,
+    )
+    model = ModelConfig(alias="local/worker-default", provider_model="vibethinker-3b-hermes", capabilities={"chat"})
+    stage = PolicyStage(purpose=StagePurpose.draft, provider_classes=["local"], required_capabilities={"chat"})
+    request = RouterRequest(
+        request_id="req-1",
+        route="chat_completions",
+        model="auto/code",
+        metadata={"repo_path": "/home/scott/git/portfolio-management"},
+        priority=Priority.repo_critical,
+    )
+
+    engine = PolicyEngine(
+        ProviderRegistry(providers=[xwing, beelink]),
+        PolicyRegistry(profiles={}),
+        default_profile="code_high_quality",
+        context=ContextSnapshot(),
+    )
+
+    xwing_score = engine._score(xwing, model, stage, request)
+    beelink_score = engine._score(beelink, model, stage, request)
+
+    assert xwing_score < beelink_score

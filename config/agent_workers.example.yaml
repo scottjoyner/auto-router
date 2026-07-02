@@ -1,4 +1,20 @@
 agent_workers:
+  - name: hermes
+    type: hermes
+    command: hermes
+    enabled: true
+    launcher: hermes_oneshot
+    model: ornith-1.0-35b
+    provider: LM Studio
+    toolsets: [terminal, file, web, browser, code_execution, skills, session_search, memory, todo]
+    quota:
+      dimension: jobs_d
+      mode: manual_daily
+    policy:
+      allowed_priorities: [repo_critical, critical, batch, background]
+      allow_write_default: false
+      allow_commit_default: false
+
   - name: codex
     type: codex
     command: codex

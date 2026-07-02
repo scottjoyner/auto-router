@@ -81,11 +81,13 @@
 
 ### P2.2 AssistX event write-back
 
-- [ ] Add an outbox table for router events.
-- [ ] Emit `router.execution_stage.completed` and `router.execution_stage.skipped` events.
-- [ ] Emit `router.service_snapshot.recorded` events from service scan results.
-- [ ] Add idempotency keys based on request/stage/provider/model/service/check timestamp.
-- [ ] Add retry with exponential backoff and dead-letter state.
+- [x] Add an outbox table for router events.
+- [x] Emit `router.route_decision` and `router.execution_stage.completed` / `router.execution_stage.failed` events.
+- [x] Emit `router.service_snapshot.recorded` events from service scan results.
+- [x] Add idempotency keys based on request/stage/provider/model/service/check timestamp.
+- [x] Add retry with exponential backoff and dead-letter state.
+
+Current gap: align the AssistX consumer/schema and the remaining docs so they use the implemented outbox envelope names rather than the older `route.selected` wording.
 
 ### P2.3 Neo4j schema alignment
 

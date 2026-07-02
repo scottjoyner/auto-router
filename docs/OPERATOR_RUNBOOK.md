@@ -136,9 +136,9 @@ Discovery is capability reporting only. Scheduling is still policy-gated by cred
 
 Discovery events are queued as `router.agent_cli.discovered` events in the outbox.
 
-## 8. Dry-run backlog scheduling
+## 8. Dry-run backlog selection
 
-The backlog scheduler is selection-only right now. It does not call providers, spend quota, execute CLI agents, mutate repositories, claim AssistX tasks, or dispatch jobs.
+The backlog selector is selection-only. It does not call providers, spend quota, execute CLI agents, mutate repositories, claim AssistX tasks, or dispatch jobs.
 
 ### 8.1 Manual task candidates
 

@@ -35,8 +35,33 @@ def test_normalize_assistx_task_maps_normal_priority_to_batch() -> None:
     )
 
     assert task.priority == Priority.batch
+    assert task.queue_class == "batch"
     assert task.sensitive is False
     assert task.local_only is False
+
+
+@pytest.mark.parametrize(
+    "priority,expected,queue_class",
+    [
+        ("high", Priority.critical, "critical"),
+        ("critical", Priority.critical, "critical"),
+        ("repo_critical", Priority.repo_critical, "critical"),
+        ("interactive", Priority.interactive, "interactive"),
+        ("local_only", Priority.local_only, "background"),
+    ],
+)
+def test_normalize_assistx_task_preserves_high_priority_values(priority, expected, queue_class) -> None:
+    task = normalize_assistx_task(
+        {
+            "task_id": f"task-{priority}",
+            "title": "Priority task",
+            "description": "Do important work",
+            "priority": priority,
+        }
+    )
+
+    assert task.priority == expected
+    assert task.queue_class == queue_class
 
 
 @pytest.mark.asyncio

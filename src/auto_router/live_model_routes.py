@@ -88,13 +88,27 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
         previous = state.model_registry.latest_for_provider(item.name)
         snapshot = await state.live_models.refresh_provider(item, fetch_provider_models)
         latency_ms = int((time.perf_counter() - started) * 1000)
-        state.model_registry.save_snapshot(snapshot)
-        probe = state.model_registry.save_probe(snapshot, latency_ms=latency_ms, previous_snapshot=previous)
+        registry_error: str | None = None
+        probe: dict[str, Any] | None = None
+        try:
+            state.model_registry.save_snapshot(snapshot)
+            probe = state.model_registry.save_probe(snapshot, latency_ms=latency_ms, previous_snapshot=previous)
+        except Exception as exc:
+            registry_error = str(exc)
         if hasattr(state, "signal_registry"):
-            signals = live_model_signals(snapshot, node_id=item.node_id)
-            state.signal_registry.save_snapshot(signal_snapshot(signals, revision=f"live-model:{item.name}", source="live_models"))
-        records.append(snapshot.to_dict() | {"probe": probe})
-    hydrate_live_models_from_registry(state)
+            try:
+                signals = live_model_signals(snapshot, node_id=item.node_id)
+                state.signal_registry.save_snapshot(signal_snapshot(signals, revision=f"live-model:{item.name}", source="live_models"))
+            except Exception:
+                pass
+        record = snapshot.to_dict() | {"probe": probe or {"provider": snapshot.provider, "error": registry_error, "ok": snapshot.ok}}
+        if registry_error:
+            record["registry_error"] = registry_error
+        records.append(record)
+    try:
+        hydrate_live_models_from_registry(state)
+    except Exception:
+        pass
     return records
 
 
@@ -109,7 +123,12 @@ def discovered_lmstudio_providers(state: Any, provider_name: str | None = None) 
     enabled_known = providers_attr.enabled() if providers_attr and hasattr(providers_attr, "enabled") else []
     known = {provider.name.strip().lower() for provider in getattr(providers_attr, "providers", []) or []}
     known.update(provider.name.strip().lower() for provider in enabled_known)
-    known.update(getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name) for provider in getattr(context, "providers", []) or [])
+    known.update(
+        getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(
+            getattr(provider, "provider", getattr(provider, "name", ""))
+        )
+        for provider in getattr(context, "providers", []) or []
+    )
 
     target_provider = None
     if provider_name:
@@ -164,7 +183,8 @@ def _service_base_url(service: ContextService) -> str:
 
 
 def selected_refresh_providers(state: Any, provider_name: str | None = None) -> list[ProviderConfig]:
-    configured = getattr(state.providers, "enabled", lambda: [])()
+    providers_attr = getattr(state, "providers", None)
+    configured = providers_attr.enabled() if providers_attr and hasattr(providers_attr, "enabled") else []
     context = getattr(state, "context", None)
     target = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name) if provider_name else None
     if provider_name is None:

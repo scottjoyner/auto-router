@@ -733,6 +733,9 @@ def _node_context(worker: AgentWorkerConfig) -> ContextNode:
         raw_caps = worker.policy.get("capabilities")
         if isinstance(raw_caps, list):
             capabilities.update(str(item) for item in raw_caps if item)
+    capabilities.update(str(item) for item in worker.toolsets if str(item).strip())
+    if worker.launcher:
+        capabilities.add(f"launcher:{worker.launcher}")
     return ContextNode(
         node_id=worker.name,
         display_name=worker.name,

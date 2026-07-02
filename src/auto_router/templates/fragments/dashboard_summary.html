@@ -5,6 +5,7 @@
     {% set service_stats = namespace(online=0, offline=0, degraded=0, blocked=0, unknown=0) %}
     {% set services = context.all_services() %}
     {% set context_projection = context_projection|default({}) %}
+    {% set page_sections = ui_page_sections|default([]) %}
     {% for event in recent_usage %}
         {% set provider = event.provider_id if event.provider_id is defined else event.provider %}
         {% set model = event.model_id if event.model_id is defined else event.model %}
@@ -21,6 +22,84 @@
         {% elif service.status == 'blocked' %}{% set service_stats.blocked = service_stats.blocked + 1 %}
         {% else %}{% set service_stats.unknown = service_stats.unknown + 1 %}{% endif %}
     {% endfor %}
+
+    <section class="rounded-[2rem] border border-cyan-300/20 bg-gradient-to-br from-cyan-300/10 via-router-panel to-router-panel p-6 shadow-glow">
+        <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-cyan-100/80">Command center</p>
+                <h2 class="text-2xl font-black text-white md:text-3xl">Unified router + AssistX control surface</h2>
+                <p class="mt-1 max-w-3xl text-sm text-router-muted">One landing page for routing health, AssistX intake, backlog flow, outbox dispatch, and graph-backed runtime status.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full border border-white/10 bg-black/20 px-3 py-1 font-bold text-router-muted">localhost:8088</span>
+                <span class="rounded-full px-3 py-1 font-bold {% if assistx_tasks_configured %}bg-emerald-400/15 text-emerald-200{% else %}bg-rose-400/15 text-rose-200{% endif %}">AssistX tasks {{ 'configured' if assistx_tasks_configured else 'missing' }}</span>
+                <span class="rounded-full px-3 py-1 font-bold {% if assistx_event_sink_configured %}bg-emerald-400/15 text-emerald-200{% else %}bg-amber-300/15 text-amber-100{% endif %}">Event sink {{ 'configured' if assistx_event_sink_configured else 'missing' }}</span>
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">outbox {{ outbox_summary.pending|default(0) }} pending</span>
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">circuits {{ circuits|length }}</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">AssistX intake</div>
+                <div class="mt-2 text-lg font-black text-white">Backlog task routing</div>
+                <div class="mt-2 text-xs text-router-muted">{{ assistx_tasks_url or 'not configured' }}</div>
+                <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                    <a href="/admin/backlog/assistx/config" class="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-cyan-100 hover:bg-cyan-300/20">Config</a>
+                    <a href="/admin/agent-jobs" class="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-router-text hover:border-cyan-300/40">Jobs</a>
+                </div>
+            </div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Event sink</div>
+                <div class="mt-2 text-lg font-black text-white">AssistX dispatch path</div>
+                <div class="mt-2 text-xs text-router-muted">{{ assistx_event_sink_url or 'not configured' }}</div>
+                <div class="mt-2 flex flex-wrap gap-2 text-[10px]">
+                    <span class="rounded-full bg-black/20 px-2.5 py-1 text-router-muted">{{ outbox_dispatch_summary.status if outbox_dispatch_summary.status is not none else 'unknown' }}</span>
+                    <span class="rounded-full bg-black/20 px-2.5 py-1 text-router-muted">next {{ outbox_dispatch_summary.next_run_in_seconds if outbox_dispatch_summary.next_run_in_seconds is not none else 'n/a' }}s</span>
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                    <a href="/admin/outbox" class="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-cyan-100 hover:bg-cyan-300/20">Outbox</a>
+                    <a href="/metrics/ops" class="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-router-text hover:border-cyan-300/40">Ops metrics</a>
+                </div>
+            </div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Queue pressure</div>
+                <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Pending</div><div class="text-lg font-black text-white">{{ outbox_summary.pending|default(0) }}</div></div>
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Retry</div><div class="text-lg font-black text-white">{{ outbox_summary.retry|default(0) }}</div></div>
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Delivered</div><div class="text-lg font-black text-emerald-200">{{ outbox_summary.delivered|default(0) }}</div></div>
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Dead</div><div class="text-lg font-black text-rose-200">{{ outbox_summary.dead_letter|default(0) }}</div></div>
+                </div>
+            </div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Health check</div>
+                <div class="mt-2 text-lg font-black text-white">{{ context_projection.status|default('unknown') }}</div>
+                <div class="mt-2 text-xs text-router-muted">projection{% if context_projection.error %} · {{ context_projection.error }}{% endif %}</div>
+                <div class="mt-3 flex flex-wrap gap-2 text-[10px]">
+                    <a href="/dashboard" class="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-cyan-100 hover:bg-cyan-300/20">Dashboard</a>
+                    <a href="/admin/ops/summary" class="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-router-text hover:border-cyan-300/40">JSON summary</a>
+                </div>
+            </div>
+        </div>
+        <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {% for section in page_sections %}
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="font-bold text-white">{{ section.title }}</div>
+                <div class="mt-1 text-xs leading-5 text-router-muted">{{ section.description }}</div>
+                <div class="mt-3 space-y-2">
+                    {% for link in section.links %}
+                    <a href="{{ link.href }}" class="block rounded-xl border border-white/10 bg-black/20 px-3 py-2 transition hover:border-cyan-300/50 hover:bg-cyan-300/10">
+                        <div class="flex items-center justify-between gap-3">
+                            <span class="font-semibold text-white">{{ link.label }}</span>
+                            <span class="text-[10px] uppercase tracking-wide text-router-muted">{{ link.note }}</span>
+                        </div>
+                        <div class="mt-1 truncate font-mono text-[11px] text-cyan-100/80">{{ link.href }}</div>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
 
     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <div class="rounded-3xl border border-router-line bg-router-panel p-5 shadow-glow"><div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Providers</div><div class="mt-2 text-3xl font-black text-white">{{ snapshots|length }}</div><div class="mt-1 text-xs text-router-muted">quota-tracked routes</div></div>
@@ -193,12 +272,30 @@
                     <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if node.endpoint_health.state == 'healthy' %}bg-emerald-400/15 text-emerald-200{% elif node.endpoint_health.state == 'mixed' %}bg-yellow-400/15 text-yellow-100{% elif node.endpoint_health.state == 'degraded' %}bg-rose-400/15 text-rose-200{% else %}bg-white/10 text-router-muted{% endif %}">{{ node.endpoint_health.state }}</span>
                 </div>
                 <div class="mt-2 text-xs text-router-muted">{{ node.model_count }} models · {{ node.provider_count }} providers · {{ node.service_count }} endpoints · score {{ node.endpoint_health.score }}</div>
+                {% if node.runtime %}
+                <div class="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                    <span class="rounded-full bg-emerald-400/15 px-2 py-1 font-bold text-emerald-200">{{ node.runtime.avg_tokens_per_second or 0 }} tok/s</span>
+                    <span class="rounded-full bg-cyan-400/15 px-2 py-1 font-bold text-cyan-100">{{ node.runtime.avg_value_per_second or 0 }} value/s</span>
+                    <span class="rounded-full bg-amber-300/15 px-2 py-1 font-bold text-amber-100">{{ node.runtime.avg_queue_wait_ms or 0 }} ms queue</span>
+                    <span class="rounded-full bg-white/10 px-2 py-1 font-bold text-router-muted">{{ node.runtime.samples or 0 }} samples</span>
+                </div>
+                {% endif %}
                 {% if node.models %}
                 <div class="mt-3 flex flex-wrap gap-1.5 text-[10px]">
                     {% for model in node.models[:5] %}
                     <span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">{{ model }}</span>
                     {% endfor %}
                     {% if node.models|length > 5 %}<span class="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-router-muted">+{{ node.models|length - 5 }} more</span>{% endif %}
+                </div>
+                {% endif %}
+                {% if node.runtime and node.runtime.models %}
+                <div class="mt-3 space-y-1 text-[10px] text-router-muted">
+                    {% for model in node.runtime.models[:3] %}
+                    <div class="flex items-center justify-between gap-2 rounded-xl bg-black/20 px-2 py-1">
+                        <span class="truncate">{{ model.model_id }}</span>
+                        <span>{{ model.avg_tokens_per_second or 0 }} tok/s</span>
+                    </div>
+                    {% endfor %}
                 </div>
                 {% endif %}
                 {% if node.recent_history %}
@@ -215,6 +312,151 @@
             {% else %}
             <div class="rounded-2xl border border-router-line bg-router-panel2 p-4 text-sm text-router-muted">No swarm memory map available yet.</div>
             {% endfor %}
+        </div>
+    </section>
+
+    {% include "fragments/fleet_live_status.html" %}
+    {% include "fragments/ops_health_gaps.html" %}
+    {% include "fragments/workflow_contract.html" %}
+
+    {% set fleet = fleet_dispatcher_stats|default({}) %}
+    {% set fleet_queues = fleet.queues|default({}) %}
+    {% set fleet_summary = fleet.summary|default({}) %}
+    {% set fleet_stats = fleet.stats|default({}) %}
+    {% set fleet_by_stage = fleet_stats.by_stage|default({}) %}
+    {% set fleet_by_node = fleet.stats.by_node|default({}) %}
+    {% set fleet_slots = fleet.slots|default([]) %}
+    {% set loadout_report = fleet_loadout_report|default({}) %}
+    {% set loadout_items = loadout_report.loadouts|default([]) %}
+
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Fleet execution consumer</p>
+                <h2 class="text-2xl font-black text-white">Worker/reviewer utilization</h2>
+                <p class="mt-1 text-sm text-router-muted">The live execution consumer shows which node is busy, which slots are loaded, and how much work has been completed.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ fleet_summary.active_slots or 0 }} active slots</span>
+                <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">{{ fleet_summary.worker_slots or 0 }} workers</span>
+                <span class="rounded-full bg-violet-400/15 px-3 py-1 font-bold text-violet-100">{{ fleet_summary.reviewer_slots or 0 }} reviewers</span>
+                <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">queue {{ (fleet_queues.review or 0) + (fleet_queues.worker or 0) }}</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Completed</div>
+                <div class="mt-2 text-3xl font-black text-white">{{ fleet_summary.completed or 0 }}</div>
+                <div class="mt-1 text-xs text-router-muted">{{ fleet_summary.success or 0 }} success · {{ fleet_summary.failure or 0 }} failure</div>
+            </div>
+            <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Loaded nodes</div>
+                <div class="mt-2 text-3xl font-black text-white">{{ fleet_summary.online_nodes_with_loaded_models or 0 }}</div>
+                <div class="mt-1 text-xs text-router-muted">{{ fleet_summary.online_nodes or 0 }} online nodes</div>
+            </div>
+            <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Work by stage</div>
+                <div class="mt-2 text-3xl font-black text-white">{{ fleet_by_stage.work or 0 }}</div>
+                <div class="mt-1 text-xs text-router-muted">{{ fleet_by_stage.review or 0 }} review · {{ fleet_by_stage.work or 0 }} work</div>
+            </div>
+            <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Work by node</div>
+                <div class="mt-2 text-3xl font-black text-white">{{ fleet_by_node|length }}</div>
+                <div class="mt-1 text-xs text-router-muted">nodes with completed tasks</div>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="font-black text-white">Slots</h3>
+                    <div class="text-xs text-router-muted">{{ fleet_slots|length }} tracked</div>
+                </div>
+                <div class="mt-3 space-y-2 text-xs">
+                    {% for slot in fleet_slots[:6] %}
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="font-bold text-white">{{ slot.node or slot.key or 'unknown node' }}</div>
+                            <span class="rounded-full px-2 py-1 font-bold uppercase {% if slot.role == 'reviewer' %}bg-violet-400/15 text-violet-100{% else %}bg-emerald-400/15 text-emerald-200{% endif %}">{{ slot.role or 'worker' }}</span>
+                        </div>
+                        <div class="mt-1 text-router-muted">{{ slot.model or 'unknown model' }} · completed {{ slot.completed or 0 }} · success {{ slot.success or 0 }} · failure {{ slot.failure or 0 }}</div>
+                        <div class="mt-1 text-router-muted">in flight {{ 'yes' if slot.in_flight else 'no' }}</div>
+                    </div>
+                    {% else %}
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-router-muted">No live dispatcher slots yet.</div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="font-black text-white">Top nodes</h3>
+                    <div class="text-xs text-router-muted">completed tasks</div>
+                </div>
+                <div class="mt-3 space-y-2 text-xs">
+                    {% for node_name, count in fleet_by_node.items() %}
+                    <div class="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-2">
+                        <span class="font-semibold text-white">{{ node_name }}</span>
+                        <span class="text-router-muted">{{ count }}</span>
+                    </div>
+                    {% else %}
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-router-muted">No per-node work totals yet.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="rounded-[2rem] border border-router-line bg-router-panel p-6">
+        <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">Fleet loadouts</p>
+                <h2 class="text-2xl font-black text-white">Current routing builds</h2>
+                <p class="mt-1 text-sm text-router-muted">Latest node/model recommendations produced by the loadout rebuilder and persisted for historical comparison.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ loadout_report.snapshot_id or 'no snapshot yet' }}</span>
+                <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">{{ loadout_items|length }} loadouts</span>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <h3 class="font-black text-white">Top builds</h3>
+                <div class="mt-3 space-y-2 text-xs">
+                    {% for loadout in loadout_items[:4] %}
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="font-bold text-white">{{ loadout.task_profile_name or loadout.task_profile_id }}</div>
+                            <span class="rounded-full bg-emerald-400/15 px-2 py-1 font-bold text-emerald-200">score {{ loadout.score }}</span>
+                        </div>
+                        <div class="mt-1 text-router-muted">{{ loadout.rationale }}</div>
+                        {% if loadout.primary %}
+                        <div class="mt-2 text-router-muted">primary: {{ loadout.primary.node_name }}/{{ loadout.primary.model_id }}</div>
+                        {% endif %}
+                        {% if loadout.reviewer %}
+                        <div class="mt-1 text-router-muted">reviewer: {{ loadout.reviewer.node_name }}/{{ loadout.reviewer.model_id }}</div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-router-muted">No loadout report has been written yet.</div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <h3 class="font-black text-white">Snapshot details</h3>
+                <div class="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div class="text-xs uppercase tracking-wider text-router-muted">captured</div>
+                        <div class="mt-1 font-bold text-white">{{ loadout_report.captured_at or 'unknown' }}</div>
+                    </div>
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div class="text-xs uppercase tracking-wider text-router-muted">loadouts</div>
+                        <div class="mt-1 font-bold text-white">{{ loadout_items|length }}</div>
+                    </div>
+                    <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                        <div class="text-xs uppercase tracking-wider text-router-muted">profiles</div>
+                        <div class="mt-1 font-bold text-white">{{ loadout_report.task_profiles|length if loadout_report.task_profiles is defined else 0 }}</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </section>
 

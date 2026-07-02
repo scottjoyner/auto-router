@@ -49,6 +49,24 @@ profiles:
         required_capabilities: [chat, code]
         allow_local_fallback: true
 
+  iterative_review_handoff:
+    description: One-pass local iteration for small slices, then a Hermes-ready handoff with validation metrics for final review.
+    stages:
+      - purpose: draft
+        provider_classes: [local, fast_free]
+        required_capabilities: [chat, low_latency, quick_iteration]
+        allow_local_fallback: true
+      - purpose: refine
+        provider_classes: [local, fast_free, premium_free, brokered_free]
+        required_capabilities: [chat, reasoning, large_context]
+        allow_local_fallback: true
+        optional: true
+      - purpose: judge
+        provider_classes: [local, premium_free, fast_free]
+        required_capabilities: [chat, reasoning]
+        allow_local_fallback: false
+        optional: true
+
   sophia_realtime:
     description: Low-latency lane for Sophia realtime app traffic; preserve privacy and keep local fallback first-class.
     stages:
@@ -90,6 +108,9 @@ classification:
     auto/flash-start: flash_start_planner
     auto/high-quality: high_priority_deliverable
     auto/code: code_high_quality
+    auto/review: iterative_review_handoff
+    auto/iterate: iterative_review_handoff
+    auto/finalize: iterative_review_handoff
     auto/sophia: sophia_realtime
     auto/backlog-burn: backlog_burn
     auto/local: local_only

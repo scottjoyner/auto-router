@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections import defaultdict
 from statistics import mean
 from typing import Any
+import json
+import os
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -13,6 +16,7 @@ from auto_router.preflight import build_preflight_report
 from auto_router.gateway import build_agentgateway_status
 from auto_router.service_routes import build_outbox_dispatch_status
 from auto_router.settings import get_settings
+from auto_router.ui_pages import get_ui_page_sections
 
 
 templates = Jinja2Templates(directory="src/auto_router/templates")
@@ -47,6 +51,7 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
     outbox_dispatch_summary = build_outbox_dispatch_status(state)
     model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     live_models = state.live_models.snapshot() if hasattr(state, "live_models") else []
+    circuits = state.circuits.snapshot() if hasattr(state, "circuits") else []
     runtime_summary = state.ledger.runtime_summary() if hasattr(state, "ledger") and hasattr(state.ledger, "runtime_summary") else {}
     recent_runtime_samples = state.ledger.recent_runtime_samples(limit=12) if hasattr(state, "ledger") and hasattr(state.ledger, "recent_runtime_samples") else []
     cli_discovery = state.cli_discovery if hasattr(state, "cli_discovery") else []
@@ -62,11 +67,23 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
     provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
     swarm_summary = build_swarm_state_summary(state)
     context_projection = swarm_summary.get("context_projection", {})
+    fleet_dispatcher_stats = _fleet_dispatcher_stats()
+    workflow_contract_summary = _workflow_contract_summary(fleet_dispatcher_stats)
+    workflow_contract_alert = _workflow_contract_alert_summary(workflow_contract_summary, fleet_dispatcher_stats)
+    circuit_breaker_summary = _circuit_breaker_summary(circuits)
+    dead_letter_summary = _dead_letter_summary(state, outbox_summary)
+    live_model_freshness = _live_model_freshness_summary(live_models, provider_health_summary)
     return {
         "outbox_summary": outbox_summary,
         "outbox_dispatch_summary": outbox_dispatch_summary,
         "model_registry_summary": model_registry_summary,
         "live_models": live_models,
+        "circuits": circuits,
+        "circuit_breaker_summary": circuit_breaker_summary,
+        "dead_letter_summary": dead_letter_summary,
+        "dead_letter_events": dead_letter_summary.get("events", []),
+        "dead_letter_reasons": dead_letter_summary.get("top_reasons", []),
+        "live_model_freshness": live_model_freshness,
         "provider_probe_summary": provider_probe_summary,
         "provider_tap_summary": provider_tap_summary,
         "provider_health_summary": provider_health_summary,
@@ -82,35 +99,311 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
         "context_route_signal_summary": context_route_signal_summary,
         "context_projection": context_projection,
         **swarm_summary,
+        "swarm_runtime_throughput": swarm_summary.get("swarm_runtime_throughput", {}),
         "gateway": gateway_status or {},
-        "assistx_tasks_configured": bool(settings.assistx_tasks_url),
         "assistx_tasks_url": settings.assistx_tasks_url,
-        "assistx_event_sink_configured": bool(settings.assistx_event_sink_url),
         "assistx_event_sink_url": settings.assistx_event_sink_url,
+        "assistx_tasks_configured": bool(settings.assistx_tasks_url),
+        "assistx_event_sink_configured": bool(settings.assistx_event_sink_url),
+        "ui_page_sections": get_ui_page_sections(),
+        "fleet_dispatcher_stats": fleet_dispatcher_stats,
+        "fleet_loadout_report": _fleet_loadout_report(),
+        "workflow_contract_summary": workflow_contract_summary,
+        "workflow_contract_alert": workflow_contract_alert,
     }
 
 
-def build_swarm_state_summary(state: Any) -> dict[str, Any]:
+FLEET_DISPATCHER_STATS_PATH = Path(os.getenv("AUTO_ROUTER_FLEET_DISPATCHER_STATS_PATH", "/data/fleet_dispatcher_stats.json"))
+FLEET_LOADOUT_REPORT_PATH = Path(os.getenv("AUTO_ROUTER_FLEET_LOADOUT_REPORT_PATH", "/data/fleet_loadout_report.json"))
+
+
+def _fleet_dispatcher_stats() -> dict[str, Any]:
+    if not FLEET_DISPATCHER_STATS_PATH.exists():
+        return {}
+    try:
+        return json.loads(FLEET_DISPATCHER_STATS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _fleet_loadout_report() -> dict[str, Any]:
+    if not FLEET_LOADOUT_REPORT_PATH.exists():
+        return {}
+    try:
+        return json.loads(FLEET_LOADOUT_REPORT_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _workflow_contract_summary(fleet_dispatcher_stats: dict[str, Any]) -> dict[str, Any]:
+    fleet_stats = fleet_dispatcher_stats.get("stats") or {}
+    queues = fleet_dispatcher_stats.get("queues") or {}
+    stage_counts = {str(stage): int(count or 0) for stage, count in (fleet_stats.get("by_stage") or {}).items()}
+    recent_snapshots = list(fleet_stats.get("recent_snapshots") or [])
+    handoff_snapshot_count = sum(
+        1
+        for snapshot in recent_snapshots
+        if int(((snapshot.get("stats") or {}).get("by_stage") or {}).get("handoff") or 0) > 0
+    )
+    plan_steps = [
+        "Inspect the current state one slice at a time.",
+        "Make the smallest safe change or conclusion.",
+        "Validate the result against the acceptance criteria.",
+        "Report risks, gaps, and handoff notes.",
+    ]
+    validation_metrics = ["acceptance_criteria_met", "regressions_checked", "handoff_ready"]
+    review_checkpoints = ["reviewed by local iteration", "validated against plan", "final handoff approved"]
+
+    changeover_gaps: list[dict[str, Any]] = []
+    if not fleet_dispatcher_stats:
+        changeover_gaps.append(
+            {
+                "title": "No live dispatcher snapshot yet",
+                "detail": "The live fleet consumer has not written its stats payload, so changeover coverage is still inferred from code paths rather than runtime evidence.",
+            }
+        )
+    if stage_counts and stage_counts.get("handoff", 0) == 0:
+        changeover_gaps.append(
+            {
+                "title": "No observed handoff-stage traffic",
+                "detail": "The dispatcher snapshot shows work and review traffic, but no completed handoff-stage work yet, so the final-review path is not proven in production traffic.",
+            }
+        )
+    elif stage_counts.get("handoff", 0) > 0 and handoff_snapshot_count < 2:
+        changeover_gaps.append(
+            {
+                "title": "Handoff traffic needs a second live snapshot",
+                "detail": f"The live stage counts have handoff traffic, but only {handoff_snapshot_count} snapshot(s) so far show it, so the proof still needs one more production sample.",
+            }
+        )
+    if int(queues.get("review") or 0) > 0:
+        changeover_gaps.append(
+            {
+                "title": "Review backlog is still non-zero",
+                "detail": f"The live queue still has {int(queues.get('review') or 0)} review items waiting, so the new reviewer/handoff path is not yet caught up.",
+            }
+        )
+    if int(fleet_stats.get("completed") or 0) == 0:
+        changeover_gaps.append(
+            {
+                "title": "No completed tasks in the new snapshot",
+                "detail": "We can see the contract fields and queue geometry, but the rollout still needs real completed jobs to validate the updated workflow end-to-end.",
+            }
+        )
+    if not stage_counts:
+        changeover_gaps.append(
+            {
+                "title": "Stage breakdown still absent",
+                "detail": "The metrics file is not yet exposing per-stage counts, so the dashboard cannot show whether work, review, and handoff are balancing correctly.",
+            }
+        )
+
+    return {
+        "profile_name": "iterative_review_handoff",
+        "workflow_stage": "handoff",
+        "plan_steps": plan_steps,
+        "validation_metrics": validation_metrics,
+        "review_checkpoints": review_checkpoints,
+        "stage_counts": stage_counts,
+        "handoff_snapshot_count": handoff_snapshot_count,
+        "handoff_confirmed": handoff_snapshot_count >= 2,
+        "completed_tasks": int(fleet_stats.get("completed") or 0),
+        "changeover_gaps": changeover_gaps,
+    }
+
+
+def _workflow_contract_alert_summary(workflow_contract: dict[str, Any], fleet_dispatcher_stats: dict[str, Any]) -> dict[str, Any]:
+    stage_counts = workflow_contract.get("stage_counts") or {}
+    changeover_gaps = workflow_contract.get("changeover_gaps") or []
+    fleet_queues = fleet_dispatcher_stats.get("queues") or {}
+    review_queue_depth = int(fleet_queues.get("review") or 0)
+    worker_queue_depth = int(fleet_queues.get("worker") or 0)
+    handoff_present = int(stage_counts.get("handoff") or 0) > 0
+    handoff_snapshot_count = int(workflow_contract.get("handoff_snapshot_count") or 0)
+    handoff_confirmed = bool(workflow_contract.get("handoff_confirmed") or False)
+    completed_tasks = int(workflow_contract.get("completed_tasks") or 0)
+
+    if not fleet_dispatcher_stats:
+        return {
+            "active": True,
+            "level": "critical",
+            "headline": "No live dispatcher snapshot yet",
+            "detail": "We cannot confirm the new workflow path until the live dispatcher writes a fresh snapshot.",
+            "action": "Start or recover the dispatcher, then re-check the rollout snapshot.",
+            "open_gaps": len(changeover_gaps),
+            "handoff_present": False,
+            "handoff_snapshot_count": handoff_snapshot_count,
+            "handoff_confirmed": handoff_confirmed,
+            "review_queue_depth": review_queue_depth,
+            "worker_queue_depth": worker_queue_depth,
+            "completed_tasks": completed_tasks,
+        }
+
+    if not handoff_present:
+        return {
+            "active": True,
+            "level": "warning",
+            "headline": "Handoff-stage traffic has not shown up yet",
+            "detail": "The live snapshot still shows work and review activity, but no completed handoff-stage traffic to prove the final leg is flowing.",
+            "action": "Keep routing a few end-to-end jobs through the new path until handoff appears in the live stage counts.",
+            "open_gaps": len(changeover_gaps),
+            "handoff_present": False,
+            "handoff_snapshot_count": handoff_snapshot_count,
+            "handoff_confirmed": handoff_confirmed,
+            "review_queue_depth": review_queue_depth,
+            "worker_queue_depth": worker_queue_depth,
+            "completed_tasks": completed_tasks,
+        }
+
+    if not handoff_confirmed:
+        return {
+            "active": True,
+            "level": "watch",
+            "headline": "Handoff traffic still needs one more snapshot",
+            "detail": f"The live stage counts already include handoff traffic, but only {handoff_snapshot_count} production snapshot(s) have captured it so far.",
+            "action": "Let the dispatcher write one more production snapshot with handoff traffic before closing the proof.",
+            "open_gaps": len(changeover_gaps),
+            "handoff_present": True,
+            "handoff_snapshot_count": handoff_snapshot_count,
+            "handoff_confirmed": False,
+            "review_queue_depth": review_queue_depth,
+            "worker_queue_depth": worker_queue_depth,
+            "completed_tasks": completed_tasks,
+        }
+
+    if review_queue_depth > 0:
+        return {
+            "active": True,
+            "level": "warning",
+            "headline": "Review backlog is still burning down",
+            "detail": f"The dispatcher still has {review_queue_depth} review items waiting, so the rollout is active but not yet caught up.",
+            "action": "Let the reviewer lane clear and confirm the backlog trends downward on the next snapshot.",
+            "open_gaps": len(changeover_gaps),
+            "handoff_present": True,
+            "handoff_snapshot_count": handoff_snapshot_count,
+            "handoff_confirmed": True,
+            "review_queue_depth": review_queue_depth,
+            "worker_queue_depth": worker_queue_depth,
+            "completed_tasks": completed_tasks,
+        }
+
+    if changeover_gaps:
+        return {
+            "active": True,
+            "level": "watch",
+            "headline": "Changeover gaps still need proof",
+            "detail": f"There are still {len(changeover_gaps)} rollout gaps open, even though the handoff lane is now visible.",
+            "action": "Close the remaining evidence gaps and keep the stage counts moving toward steady state.",
+            "open_gaps": len(changeover_gaps),
+            "handoff_present": True,
+            "handoff_snapshot_count": handoff_snapshot_count,
+            "handoff_confirmed": True,
+            "review_queue_depth": review_queue_depth,
+            "worker_queue_depth": worker_queue_depth,
+            "completed_tasks": completed_tasks,
+        }
+
+    return {
+        "active": False,
+        "level": "ok",
+        "headline": "Rollout is caught up",
+        "detail": "The live snapshot shows handoff traffic, no review backlog, and no remaining changeover gaps.",
+        "action": "Keep the dashboard on watch, but no immediate intervention is required.",
+        "open_gaps": 0,
+        "handoff_present": True,
+        "handoff_snapshot_count": handoff_snapshot_count,
+        "handoff_confirmed": True,
+        "review_queue_depth": review_queue_depth,
+        "worker_queue_depth": worker_queue_depth,
+        "completed_tasks": completed_tasks,
+    }
+
+
+def _circuit_breaker_summary(circuits: list[dict[str, Any]]) -> dict[str, Any]:
+    open_circuits = [c for c in circuits if c.get("open")]
+    closed_circuits = [c for c in circuits if not c.get("open")]
+    sorted_circuits = sorted(circuits, key=lambda item: (not bool(item.get("open")), str(item.get("owner") or "")))
+    return {
+        "total": len(circuits),
+        "open": len(open_circuits),
+        "closed": len(closed_circuits),
+        "circuits": sorted_circuits,
+    }
+
+
+def _dead_letter_summary(state: Any, outbox_summary: dict[str, Any]) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+    if hasattr(state, "event_outbox") and hasattr(state.event_outbox, "recent"):
+        try:
+            recent = state.event_outbox.recent(limit=24)
+        except Exception:
+            recent = []
+        events = [event for event in recent if str(event.get("status") or "").lower() in {"retry", "dead_letter"}]
+    reason_counts: dict[str, int] = defaultdict(int)
+    for event in events:
+        reason = str(event.get("last_error") or "unknown").strip() or "unknown"
+        reason_counts[reason] += 1
+    top_reasons = [
+        {"reason": reason, "count": count}
+        for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+    ]
+    return {
+        "pending": int(outbox_summary.get("pending") or 0),
+        "retry": int(outbox_summary.get("retry") or 0),
+        "delivered": int(outbox_summary.get("delivered") or 0),
+        "dead_letter": int(outbox_summary.get("dead_letter") or 0),
+        "events": events[:8],
+        "top_reasons": top_reasons,
+    }
+
+
+def _live_model_freshness_summary(live_models: list[dict[str, Any]], provider_health_summary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = int(time.time())
+    health_by_provider = {str(report.get("provider") or "").strip().lower(): report for report in provider_health_summary}
+    rows: list[dict[str, Any]] = []
+    for snapshot in live_models:
+        provider = str(snapshot.get("provider") or snapshot.get("provider_id") or "").strip().lower()
+        health = health_by_provider.get(provider, {})
+        fetched_at = snapshot.get("fetched_at")
+        age_seconds = max(now - int(fetched_at), 0) if fetched_at else None
+        rows.append({
+            "provider": provider,
+            "ok": bool(snapshot.get("ok")),
+            "stale": bool(snapshot.get("stale")),
+            "model_count": int(snapshot.get("model_count") or 0),
+            "latency_ms": snapshot.get("latency_ms"),
+            "age_seconds": age_seconds if age_seconds is not None else health.get("age_seconds"),
+            "error": snapshot.get("error") or health.get("error"),
+            "signature": snapshot.get("signature"),
+            "previous_signature": snapshot.get("previous_signature"),
+        })
+    return sorted(rows, key=lambda item: (not item["stale"], item["age_seconds"] is None, -(item["age_seconds"] or 0), item["provider"]))
+
+
+
+
+def build_swarm_state_summary(state: Any, provider_health_summary: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     context = getattr(state, "context", None)
     providers = list(context.providers) if context is not None and hasattr(context, "providers") else []
     nodes = list(context.nodes) if context is not None and hasattr(context, "nodes") else []
     services = context.all_services() if context is not None and hasattr(context, "all_services") else []
     models = context.all_models() if context is not None and hasattr(context, "all_models") else []
     signals = context.all_signals() if context is not None and hasattr(context, "all_signals") else []
-    provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
+    resolved_provider_health_summary: list[dict[str, Any]] = provider_health_summary if provider_health_summary is not None else (state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else [])
     recent_snapshots = state.model_registry.recent_snapshots(limit=24) if hasattr(state, "model_registry") and hasattr(state.model_registry, "recent_snapshots") else []
+    recent_runtime_samples = state.ledger.recent_runtime_samples(limit=48) if hasattr(state, "ledger") and hasattr(state.ledger, "recent_runtime_samples") else []
 
     canonical_provider = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower()) if context is not None else (lambda value: str(value).strip().lower())
     canonical_model_id = getattr(context, "canonical_model_id", lambda value: str(value).strip().lower()) if context is not None else (lambda value: str(value).strip().lower())
     if context is not None:
-        provider_health_summary = [
+        resolved_provider_health_summary = [
             {
                 **report,
                 "provider": canonical_provider(str(report.get("provider") or "")),
             }
-            for report in provider_health_summary
+            for report in resolved_provider_health_summary
         ]
-    health_by_provider = {str(report.get("provider") or ""): report for report in provider_health_summary}
+    health_by_provider = {str(report.get("provider") or ""): report for report in resolved_provider_health_summary}
     provider_nodes: dict[str, list[Any]] = defaultdict(list)
     model_nodes: dict[str, list[Any]] = defaultdict(list)
     service_nodes: dict[str, list[Any]] = defaultdict(list)
@@ -131,6 +424,9 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
         if service.node_id:
             service_nodes[service.node_id].append(service)
 
+    runtime_by_provider = _runtime_throughput_by_provider(recent_runtime_samples)
+    runtime_by_model = _runtime_throughput_by_model(recent_runtime_samples)
+
     node_map: list[dict[str, Any]] = []
     for node in nodes:
         node_providers = sorted(provider_nodes.get(node.node_id, []), key=lambda item: (getattr(item, "priority", 100), item.provider))
@@ -140,6 +436,7 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
         endpoint_health = _endpoint_health_summary(node_services, running=bool(getattr(node, "running", False)))
         recent_history = _node_recent_history(node_providers, health_by_provider)
         node_signals = _node_signals(context, node.node_id) if context is not None else []
+        node_runtime = _node_runtime_summary(node_providers, runtime_by_provider, runtime_by_model)
         node_map.append(
             {
                 "node_id": node.node_id,
@@ -160,14 +457,15 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
                 "avg_health_score": int(mean([int(report.get("health_score") or 0) for report in node_reports])) if node_reports else endpoint_health["score"],
                 "drift_count": sum(1 for report in node_reports if report and report.get("drift")),
                 "recent_history": recent_history,
+                "runtime": node_runtime,
             }
         )
 
-    provider_health_scores = [int(report.get("health_score") or 0) for report in provider_health_summary if report.get("health_score") is not None]
-    provider_model_counts = [int(report.get("model_count") or 0) for report in provider_health_summary]
-    provider_latencies = [int(report.get("latency_ms") or 0) for report in provider_health_summary if report.get("latency_ms") is not None]
+    provider_health_scores = [int(report.get("health_score") or 0) for report in resolved_provider_health_summary if report.get("health_score") is not None]
+    provider_model_counts = [int(report.get("model_count") or 0) for report in resolved_provider_health_summary]
+    provider_latencies = [int(report.get("latency_ms") or 0) for report in resolved_provider_health_summary if report.get("latency_ms") is not None]
     endpoint_scores = [item["endpoint_health"]["score"] for item in node_map]
-    drift_count = sum(1 for report in provider_health_summary if report.get("drift"))
+    drift_count = sum(1 for report in resolved_provider_health_summary if report.get("drift"))
     signal_counts = len(signals)
     context_projection = {
         "status": getattr(context, "projection_status", lambda: "bootstrap")() if context is not None else "missing",
@@ -189,11 +487,15 @@ def build_swarm_state_summary(state: Any) -> dict[str, Any]:
             "avg_provider_latency_ms": int(mean(provider_latencies)) if provider_latencies else 0,
             "avg_endpoint_health_score": int(mean(endpoint_scores)) if endpoint_scores else 0,
             "drift_providers": drift_count,
-            "drift_rate": round(drift_count / len(provider_health_summary), 3) if provider_health_summary else 0,
+            "drift_rate": round(drift_count / len(resolved_provider_health_summary), 3) if resolved_provider_health_summary else 0,
         },
         "context_projection": context_projection,
-        "swarm_recent_probes": _flatten_recent_history(provider_health_summary),
+        "swarm_recent_probes": _flatten_recent_history(resolved_provider_health_summary),
         "swarm_recent_snapshots": recent_snapshots,
+        "swarm_runtime_throughput": {
+            "by_provider": runtime_by_provider,
+            "by_model": runtime_by_model,
+        },
     }
 
 
@@ -255,6 +557,67 @@ def _node_signals(context: Any, node_id: str) -> list[Any]:
     return context.signals_for_node(node_id)
 
 
+def _runtime_throughput_by_provider(samples: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        provider = str(sample.get("provider_id") or sample.get("provider") or "").strip().lower()
+        if provider:
+            buckets[provider].append(sample)
+    summary: dict[str, dict[str, Any]] = {}
+    for provider, rows in buckets.items():
+        summary[provider] = {
+            "samples": len(rows),
+            "avg_latency_ms": round(mean([float(row.get("elapsed_ms") or row.get("latency_ms") or 0) for row in rows]), 1),
+            "avg_queue_wait_ms": round(mean([float(row.get("queue_wait_ms") or 0) for row in rows]), 1),
+            "avg_load_time_ms": round(mean([float(row.get("load_time_ms") or 0) for row in rows]), 1),
+            "avg_tokens_per_second": round(mean([float(row.get("tokens_per_second") or 0) for row in rows]), 2),
+            "avg_value_per_second": round(mean([float(row.get("value_per_second") or 0) for row in rows]), 2),
+        }
+    return summary
+
+
+def _runtime_throughput_by_model(samples: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        model = str(sample.get("model_id") or sample.get("model") or "").strip().lower()
+        if model:
+            buckets[model].append(sample)
+    summary: dict[str, dict[str, Any]] = {}
+    for model, rows in buckets.items():
+        summary[model] = {
+            "samples": len(rows),
+            "avg_latency_ms": round(mean([float(row.get("elapsed_ms") or row.get("latency_ms") or 0) for row in rows]), 1),
+            "avg_queue_wait_ms": round(mean([float(row.get("queue_wait_ms") or 0) for row in rows]), 1),
+            "avg_tokens_per_second": round(mean([float(row.get("tokens_per_second") or 0) for row in rows]), 2),
+            "avg_value_per_second": round(mean([float(row.get("value_per_second") or 0) for row in rows]), 2),
+        }
+    return summary
+
+
+def _node_runtime_summary(
+    providers: list[Any],
+    runtime_by_provider: dict[str, dict[str, Any]],
+    runtime_by_model: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    provider_ids = [str(getattr(provider, "provider", "")).strip().lower() for provider in providers if str(getattr(provider, "provider", "")).strip()]
+    provider_rows = [runtime_by_provider[provider] for provider in provider_ids if provider in runtime_by_provider]
+    if not provider_rows:
+        return {"samples": 0, "avg_tokens_per_second": 0, "avg_value_per_second": 0, "avg_latency_ms": 0, "avg_queue_wait_ms": 0, "models": []}
+    related_models = []
+    for provider in provider_ids:
+        for model_id, row in runtime_by_model.items():
+            if model_id.startswith(provider) or provider in model_id:
+                related_models.append({"model_id": model_id, **row})
+    return {
+        "samples": sum(int(row.get("samples") or 0) for row in provider_rows),
+        "avg_tokens_per_second": round(mean([float(row.get("avg_tokens_per_second") or 0) for row in provider_rows]), 2),
+        "avg_value_per_second": round(mean([float(row.get("avg_value_per_second") or 0) for row in provider_rows]), 2),
+        "avg_latency_ms": round(mean([float(row.get("avg_latency_ms") or 0) for row in provider_rows]), 1),
+        "avg_queue_wait_ms": round(mean([float(row.get("avg_queue_wait_ms") or 0) for row in provider_rows]), 1),
+        "models": sorted(related_models, key=lambda item: (-float(item.get("avg_tokens_per_second") or 0), item.get("model_id", "")))[:6],
+    }
+
+
 def _flatten_recent_history(provider_health_summary: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     now = int(time.time())
@@ -294,6 +657,14 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
     swarm_summary = summary.get("swarm_summary") or {}
     swarm_memory_map = summary.get("swarm_memory_map") or []
     swarm_recent_probes = summary.get("swarm_recent_probes") or []
+    swarm_runtime_throughput = summary.get("swarm_runtime_throughput") or {}
+    fleet = summary.get("fleet_dispatcher_stats") or {}
+    fleet_queues = fleet.get("queues") or {}
+    fleet_summary = fleet.get("summary") or {}
+    fleet_stats = fleet.get("stats") or {}
+    fleet_slots = fleet.get("slots") or []
+    workflow_contract = summary.get("workflow_contract_summary") or {}
+    workflow_contract_alert = summary.get("workflow_contract_alert") or {}
 
     lines = [
         "# HELP auto_router_outbox_events Number of outbox events by state.",
@@ -457,6 +828,27 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
             'auto_router_runtime_provider_avg_load_time_ms{provider="%s"} %s'
             % (provider, int(provider_summary.get("avg_load_time_ms") or 0))
         )
+    for model_id, model_summary in (swarm_runtime_throughput.get("by_model") or {}).items():
+        lines.append(
+            'auto_router_runtime_model_samples{model="%s"} %s'
+            % (model_id, int(model_summary.get("samples") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_model_avg_tokens_per_second{model="%s"} %s'
+            % (model_id, float(model_summary.get("avg_tokens_per_second") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_model_avg_value_per_second{model="%s"} %s'
+            % (model_id, float(model_summary.get("avg_value_per_second") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_model_avg_queue_wait_ms{model="%s"} %s'
+            % (model_id, float(model_summary.get("avg_queue_wait_ms") or 0))
+        )
+        lines.append(
+            'auto_router_runtime_model_avg_latency_ms{model="%s"} %s'
+            % (model_id, float(model_summary.get("avg_latency_ms") or 0))
+        )
     lines.extend(
         [
             "# HELP auto_router_swarm_nodes Number of nodes in the unified swarm memory map.",
@@ -480,8 +872,86 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
             "# HELP auto_router_swarm_recent_probes Number of recent probe rows surfaced in the swarm history panel.",
             "# TYPE auto_router_swarm_recent_probes gauge",
             f"auto_router_swarm_recent_probes {int(len(swarm_recent_probes))}",
+            "# HELP auto_router_fleet_queue_depth Total queued dispatcher work items across worker and review lanes.",
+            "# TYPE auto_router_fleet_queue_depth gauge",
+            f"auto_router_fleet_queue_depth {int(fleet_queues.get('review') or 0) + int(fleet_queues.get('worker') or 0)}",
+            "# HELP auto_router_fleet_avg_queue_wait_ms Average queue wait time for completed fleet tasks.",
+            "# TYPE auto_router_fleet_avg_queue_wait_ms gauge",
+            f"auto_router_fleet_avg_queue_wait_ms {float(fleet_summary.get('avg_queue_wait_ms') or 0)}",
+            "# HELP auto_router_fleet_avg_dispatch_latency_ms Average dispatch latency for completed fleet tasks.",
+            "# TYPE auto_router_fleet_avg_dispatch_latency_ms gauge",
+            f"auto_router_fleet_avg_dispatch_latency_ms {float(fleet_summary.get('avg_dispatch_latency_ms') or 0)}",
+            "# HELP auto_router_fleet_avg_latency_ms Average model latency for completed fleet tasks.",
+            "# TYPE auto_router_fleet_avg_latency_ms gauge",
+            f"auto_router_fleet_avg_latency_ms {float(fleet_summary.get('avg_latency_ms') or 0)}",
+            "# HELP auto_router_fleet_avg_quality_score Average quality score for completed fleet tasks.",
+            "# TYPE auto_router_fleet_avg_quality_score gauge",
+            f"auto_router_fleet_avg_quality_score {float(fleet_summary.get('avg_quality_score') or 0)}",
+            "# HELP auto_router_fleet_avg_response_chars Average response size for completed fleet tasks.",
+            "# TYPE auto_router_fleet_avg_response_chars gauge",
+            f"auto_router_fleet_avg_response_chars {float(fleet_summary.get('avg_response_chars') or 0)}",
+            "# HELP auto_router_fleet_active_slots Number of active dispatcher slots.",
+            "# TYPE auto_router_fleet_active_slots gauge",
+            f"auto_router_fleet_active_slots {int(fleet_summary.get('active_slots') or len(fleet_slots))}",
+            "# HELP auto_router_fleet_busy_slots Number of currently in-flight dispatcher slots.",
+            "# TYPE auto_router_fleet_busy_slots gauge",
+            f"auto_router_fleet_busy_slots {int(fleet_summary.get('busy_slots') or sum(1 for slot in fleet_slots if slot.get('in_flight'))) }",
+            "# HELP auto_router_fleet_idle_slots Number of currently idle dispatcher slots.",
+            "# TYPE auto_router_fleet_idle_slots gauge",
+            f"auto_router_fleet_idle_slots {int(fleet_summary.get('idle_slots') or max(int(fleet_summary.get('active_slots') or len(fleet_slots)) - sum(1 for slot in fleet_slots if slot.get('in_flight')), 0))}",
+            "# HELP auto_router_fleet_worker_slots Number of worker slots in the dispatcher.",
+            "# TYPE auto_router_fleet_worker_slots gauge",
+            f"auto_router_fleet_worker_slots {int(fleet_summary.get('worker_slots') or 0)}",
+            "# HELP auto_router_fleet_reviewer_slots Number of reviewer slots in the dispatcher.",
+            "# TYPE auto_router_fleet_reviewer_slots gauge",
+            f"auto_router_fleet_reviewer_slots {int(fleet_summary.get('reviewer_slots') or 0)}",
+            "# HELP auto_router_fleet_completed_total Total completed fleet tasks.",
+            "# TYPE auto_router_fleet_completed_total gauge",
+            f"auto_router_fleet_completed_total {int(fleet_summary.get('completed') or 0)}",
+            "# HELP auto_router_fleet_success_total Total successful fleet tasks.",
+            "# TYPE auto_router_fleet_success_total gauge",
+            f"auto_router_fleet_success_total {int(fleet_summary.get('success') or 0)}",
+            "# HELP auto_router_fleet_failure_total Total failed fleet tasks.",
+            "# TYPE auto_router_fleet_failure_total gauge",
+            f"auto_router_fleet_failure_total {int(fleet_summary.get('failure') or 0)}",
+            "# HELP auto_router_workflow_contract_completed_tasks Completed tasks captured by the current workflow contract snapshot.",
+            "# TYPE auto_router_workflow_contract_completed_tasks gauge",
+            f"auto_router_workflow_contract_completed_tasks {int(workflow_contract.get('completed_tasks') or 0)}",
+            "# HELP auto_router_workflow_contract_open_gaps Number of remaining rollout gaps in the workflow contract.",
+            "# TYPE auto_router_workflow_contract_open_gaps gauge",
+            f"auto_router_workflow_contract_open_gaps {int(len(workflow_contract.get('changeover_gaps') or []))}",
+            "# HELP auto_router_workflow_contract_review_queue_depth Live review queue depth used by the workflow contract snapshot.",
+            "# TYPE auto_router_workflow_contract_review_queue_depth gauge",
+            f"auto_router_workflow_contract_review_queue_depth {int(fleet_queues.get('review') or 0)}",
+            "# HELP auto_router_workflow_contract_worker_queue_depth Live worker queue depth used by the workflow contract snapshot.",
+            "# TYPE auto_router_workflow_contract_worker_queue_depth gauge",
+            f"auto_router_workflow_contract_worker_queue_depth {int(fleet_queues.get('worker') or 0)}",
+            "# HELP auto_router_workflow_contract_handoff_stage_present Whether handoff-stage traffic is present in the snapshot.",
+            "# TYPE auto_router_workflow_contract_handoff_stage_present gauge",
+            f"auto_router_workflow_contract_handoff_stage_present {1 if int((workflow_contract.get('stage_counts') or {}).get('handoff') or 0) > 0 else 0}",
+            "# HELP auto_router_workflow_contract_alert_active Whether the rollout alert panel is actively warning about the workflow changeover.",
+            "# TYPE auto_router_workflow_contract_alert_active gauge",
+            f"auto_router_workflow_contract_alert_active {1 if workflow_contract_alert.get('active') else 0}",
         ]
     )
+    for stage_name, count in (workflow_contract.get("stage_counts") or {}).items():
+        lines.append('auto_router_workflow_contract_stage_count{stage="%s"} %s' % (stage_name, int(count or 0)))
+    for task_kind, count in (fleet_stats.get("by_task_kind") or {}).items():
+        lines.append('auto_router_fleet_tasks_by_kind{kind="%s"} %s' % (task_kind, int(count or 0)))
+    for lane_name, count in (fleet_stats.get("by_lane") or {}).items():
+        lines.append('auto_router_fleet_tasks_by_lane{lane="%s"} %s' % (lane_name, int(count or 0)))
+    for source_name, count in (fleet_stats.get("by_source") or {}).items():
+        lines.append('auto_router_fleet_tasks_by_source{source="%s"} %s' % (source_name, int(count or 0)))
+    for outcome_name, count in (fleet_stats.get("by_outcome") or {}).items():
+        lines.append('auto_router_fleet_tasks_by_outcome{outcome="%s"} %s' % (outcome_name, int(count or 0)))
+    for reason_name, count in (fleet_stats.get("by_failure_reason") or {}).items():
+        lines.append('auto_router_fleet_task_failures_by_reason{reason="%s"} %s' % (reason_name, int(count or 0)))
+    for node_name, count in (fleet_stats.get("by_node") or {}).items():
+        lines.append('auto_router_fleet_tasks_completed_total{node="%s"} %s' % (node_name, int(count or 0)))
+    for role_name, count in (fleet_stats.get("by_role") or {}).items():
+        lines.append('auto_router_fleet_tasks_by_role{role="%s"} %s' % (role_name, int(count or 0)))
+    for stage_name, count in (fleet_stats.get("by_stage") or {}).items():
+        lines.append('auto_router_fleet_tasks_by_stage{stage="%s"} %s' % (stage_name, int(count or 0)))
     return "\n".join(lines) + "\n"
 
 

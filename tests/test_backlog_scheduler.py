@@ -95,7 +95,7 @@ def test_dry_run_backlog_selection_skips_sensitive_and_local_only(tmp_path) -> N
 
 def test_dry_run_backlog_selection_skips_interactive_priority() -> None:
     request = BacklogDryRunRequest(
-        tasks=[BacklogTaskCandidate(title="Interactive", priority=Priority.interactive)]
+        tasks=[BacklogTaskCandidate(title="Interactive", priority=Priority.interactive, queue_class="interactive")]
     )
 
     decisions = dry_run_backlog_selection(
@@ -106,6 +106,21 @@ def test_dry_run_backlog_selection_skips_interactive_priority() -> None:
 
     assert decisions[0].status == "skipped"
     assert "batch/background" in decisions[0].reason
+
+
+def test_dry_run_backlog_selection_skips_non_backlog_queue_class() -> None:
+    request = BacklogDryRunRequest(
+        tasks=[BacklogTaskCandidate(title="Critical", priority=Priority.background, queue_class="critical")]
+    )
+
+    decisions = dry_run_backlog_selection(
+        request,
+        policy_engine=_policy_engine(),
+        quota=InMemoryQuotaManager(),
+    )
+
+    assert decisions[0].status == "skipped"
+    assert "queue_class=critical" in decisions[0].reason
 
 
 def test_backlog_summary_counts_decisions() -> None:
@@ -121,3 +136,53 @@ def test_backlog_summary_counts_decisions() -> None:
     )
 
     assert backlog_summary(decisions) == {"total": 2, "selected": 1, "skipped": 1}
+
+
+def test_backlog_decision_event_is_metadata_only(tmp_path) -> None:
+    outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    request = BacklogDryRunRequest(
+        tasks=[BacklogTaskCandidate(title="Document migration boundary", prompt="Do not include prompt bodies in events")]
+    )
+
+    decisions = dry_run_backlog_selection(
+        request,
+        policy_engine=_policy_engine(),
+        quota=InMemoryQuotaManager(),
+        outbox=outbox,
+        context=ContextSnapshot(revision="rev-backlog", source="unit-test"),
+    )
+
+    event = outbox.pending()[0]
+    payload = event["payload"]
+
+    assert decisions[0].status in {"selected", "skipped"}
+    assert event["event_type"] in {"router.backlog_job.selected", "router.backlog_job.skipped"}
+    assert payload["task_id"] == decisions[0].task_id
+    assert payload["title"] == "Document migration boundary"
+    assert payload["dry_run"] is True
+    assert payload["context_revision"] == "rev-backlog"
+    assert payload["context_source"] == "unit-test"
+    assert "prompt" not in payload
+    assert "Do not include prompt bodies in events" not in str(payload)
+
+
+def test_backlog_selection_can_enqueue_real_events(tmp_path) -> None:
+    outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    request = BacklogDryRunRequest(
+        tasks=[BacklogTaskCandidate(title="Burn down backlog", prompt="Actually enqueue the backlog decision")]
+    )
+
+    decisions = dry_run_backlog_selection(
+        request,
+        policy_engine=_policy_engine(),
+        quota=InMemoryQuotaManager(),
+        outbox=outbox,
+        context=ContextSnapshot(revision="rev-backlog", source="unit-test"),
+        dry_run=False,
+    )
+
+    event = outbox.pending()[0]
+    payload = event["payload"]
+
+    assert decisions[0].status == "selected"
+    assert payload["dry_run"] is False

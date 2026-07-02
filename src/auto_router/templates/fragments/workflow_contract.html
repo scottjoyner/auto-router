@@ -1,0 +1,118 @@
+{% set workflow_contract = workflow_contract_summary|default({}) %}
+{% set stage_counts = workflow_contract.stage_counts|default({}) %}
+{% set plan_steps = workflow_contract.plan_steps|default([]) %}
+{% set validation_metrics = workflow_contract.validation_metrics|default([]) %}
+{% set review_checkpoints = workflow_contract.review_checkpoints|default([]) %}
+{% set changeover_gaps = workflow_contract.changeover_gaps|default([]) %}
+{% set workflow_alert = workflow_contract_alert|default({}) %}
+<section class="mt-5 rounded-[2rem] border border-router-line bg-router-panel p-6">
+    <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wider text-router-muted">New workflow contract</p>
+            <h2 class="text-2xl font-black text-white">Iterative review → final handoff</h2>
+            <p class="mt-1 text-sm text-router-muted">This panel shows the live contract fields we now stamp into task routing and writeback, plus the current changeover gaps.</p>
+        </div>
+        <div class="flex flex-wrap gap-2 text-xs">
+            <span class="rounded-full bg-cyan-400/15 px-3 py-1 font-bold text-cyan-100">{{ workflow_contract.profile_name or 'iterative_review_handoff' }}</span>
+            <span class="rounded-full bg-emerald-400/15 px-3 py-1 font-bold text-emerald-200">stage {{ workflow_contract.workflow_stage or 'handoff' }}</span>
+            <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ workflow_contract.completed_tasks or 0 }} completed</span>
+        </div>
+    </div>
+
+    <div class="rounded-3xl border {% if workflow_alert.level == 'critical' %}border-rose-400/30 bg-rose-400/10{% elif workflow_alert.level == 'warning' %}border-amber-300/30 bg-amber-300/10{% elif workflow_alert.level == 'watch' %}border-cyan-300/20 bg-cyan-300/10{% else %}border-emerald-300/20 bg-emerald-300/10{% endif %} p-5">
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider {% if workflow_alert.level == 'critical' %}text-rose-100{% elif workflow_alert.level == 'warning' %}text-amber-100{% elif workflow_alert.level == 'watch' %}text-cyan-100{% else %}text-emerald-100{% endif %}">Rollout alert</p>
+                <h3 class="mt-1 text-xl font-black text-white">{{ workflow_alert.headline or 'Workflow rollout is being watched' }}</h3>
+                <p class="mt-1 text-sm text-router-muted">{{ workflow_alert.detail or 'The handoff path is under active review.' }}</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full bg-black/20 px-3 py-1 font-bold text-white">{{ workflow_alert.level or 'ok' }}</span>
+                <span class="rounded-full bg-black/20 px-3 py-1 font-bold text-white">{{ workflow_alert.open_gaps|default(changeover_gaps|length) }} open gaps</span>
+                <span class="rounded-full bg-black/20 px-3 py-1 font-bold text-white">{{ workflow_alert.review_queue_depth|default(0) }} review queue</span>
+                <span class="rounded-full bg-black/20 px-3 py-1 font-bold text-white">handoff {{ 'present' if workflow_alert.handoff_present else 'missing' }}</span>
+                <span class="rounded-full bg-black/20 px-3 py-1 font-bold text-white">{{ workflow_contract.handoff_snapshot_count|default(0) }} snapshot(s)</span>
+            </div>
+        </div>
+        <div class="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-router-text">
+            <span class="font-bold text-white">Next move:</span> {{ workflow_alert.action or 'Keep the rollout under observation.' }}
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Plan steps</h3>
+                    <p class="text-xs text-router-muted">The concrete sequence used for iterative review jobs.</p>
+                </div>
+                <span class="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-router-muted">{{ plan_steps|length }} steps</span>
+            </div>
+            <ol class="mt-3 space-y-2 text-sm">
+                {% for step in plan_steps %}
+                <li class="flex gap-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-router-text">
+                    <span class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-cyan-400/20 text-[11px] font-black text-cyan-100">{{ loop.index }}</span>
+                    <span>{{ step }}</span>
+                </li>
+                {% else %}
+                <li class="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-router-muted">No plan steps were supplied.</li>
+                {% endfor %}
+            </ol>
+        </div>
+
+        <div class="rounded-3xl border border-router-line bg-router-panel2 p-5">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="font-black text-white">Validation and review</h3>
+                    <p class="text-xs text-router-muted">What has to be true before the final handoff is considered done.</p>
+                </div>
+                <span class="rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-router-muted">{{ validation_metrics|length }} metrics</span>
+            </div>
+            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div class="text-xs uppercase tracking-wider text-router-muted">Validation metrics</div>
+                    <div class="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                        {% for metric in validation_metrics %}
+                        <span class="rounded-full bg-emerald-400/15 px-2 py-1 font-bold text-emerald-200">{{ metric }}</span>
+                        {% else %}
+                        <span class="rounded-full bg-white/10 px-2 py-1 font-bold text-router-muted">none</span>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div class="text-xs uppercase tracking-wider text-router-muted">Review checkpoints</div>
+                    <div class="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                        {% for checkpoint in review_checkpoints %}
+                        <span class="rounded-full bg-cyan-400/15 px-2 py-1 font-bold text-cyan-100">{{ checkpoint }}</span>
+                        {% else %}
+                        <span class="rounded-full bg-white/10 px-2 py-1 font-bold text-router-muted">none</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-xs text-amber-50/90">
+                Live stage counts: {% if stage_counts %}{% for stage, count in stage_counts.items() %}<span class="mr-2 inline-flex rounded-full bg-black/20 px-2 py-1 font-bold text-amber-100">{{ stage }} {{ count }}</span>{% endfor %}{% else %}no stage data yet{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-4 rounded-3xl border {% if changeover_gaps %}border-amber-300/20 bg-amber-300/10{% else %}border-emerald-300/20 bg-emerald-300/10{% endif %} p-5">
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <h3 class="font-black text-white">Remaining changeover gaps</h3>
+                <p class="text-xs text-router-muted">What we still need to prove before we can call the rollout complete.</p>
+            </div>
+            <span class="rounded-full bg-black/20 px-3 py-1 text-xs font-bold {% if changeover_gaps %}text-amber-100{% else %}text-emerald-100{% endif %}">{{ changeover_gaps|length }} open</span>
+        </div>
+        <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {% for gap in changeover_gaps %}
+            <div class="rounded-2xl border border-white/10 bg-black/20 p-3">
+                <div class="font-bold text-white">{{ gap.title }}</div>
+                <div class="mt-1 text-xs leading-5 text-router-muted">{{ gap.detail }}</div>
+            </div>
+            {% else %}
+            <div class="rounded-2xl border border-white/10 bg-black/20 p-3 text-sm text-router-muted">No live gaps are being reported from the current snapshot.</div>
+            {% endfor %}
+        </div>
+    </div>
+</section>

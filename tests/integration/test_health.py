@@ -9,12 +9,19 @@ def test_assistx_health(assistx_client: httpx.Client) -> None:
     resp = assistx_client.get("/health")
     assert resp.is_success, f"AssistX health failed: {resp.status_code}"
     data = resp.json()
-    assert data.get("service") == "assistx"
+    assert data.get("service") in {"assistx", "auto-assist"}
 
 
 def test_router_health(router_client: httpx.Client) -> None:
     resp = router_client.get("/health")
     assert resp.is_success, f"Router health failed: {resp.status_code}"
+    data = resp.json()
+    assert data.get("service") == "auto-router"
+
+
+def test_router_api_health_alias(router_client: httpx.Client) -> None:
+    resp = router_client.get("/api/health")
+    assert resp.is_success, f"Router API health failed: {resp.status_code}"
     data = resp.json()
     assert data.get("service") == "auto-router"
 

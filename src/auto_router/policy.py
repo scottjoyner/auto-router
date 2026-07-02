@@ -28,17 +28,21 @@ class PolicyEngine:
         self.policies = policies
         self.default_profile = default_profile
         self.context = context or ContextSnapshot()
+        self._request_context: RouterRequest | None = None
 
     def classify_profile(self, request: RouterRequest) -> str:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         requested_model = request.model or ""
+        workflow_stage = str(metadata.get("workflow_stage") or metadata.get("stage") or "").strip().lower()
         if self._request_requires_local_execution(request) and requested_model.startswith("auto/sophia") and "sophia_realtime" in self.policies.profiles:
             return "sophia_realtime"
-        if self._request_requires_local_execution(request):
-            return "local_only"
         metadata_profile = metadata.get("profile")
         if isinstance(metadata_profile, str) and metadata_profile in self.policies.profiles:
             return metadata_profile
+        if workflow_stage in {"handoff", "final", "finalized", "review_final"} and "iterative_review_handoff" in self.policies.profiles:
+            return "iterative_review_handoff"
+        if self._request_requires_local_execution(request):
+            return "local_only"
         if (
             isinstance(metadata.get("task_id"), str)
             or bool(metadata.get("assistx_source"))
@@ -57,12 +61,16 @@ class PolicyEngine:
             return "high_priority_deliverable"
         if requested_model.startswith("auto/code"):
             return "code_high_quality"
+        if requested_model.startswith("auto/review") and "iterative_review_handoff" in self.policies.profiles:
+            return "iterative_review_handoff"
         if requested_model.startswith("auto/sophia") and "sophia_realtime" in self.policies.profiles:
             return "sophia_realtime"
         if requested_model.startswith("auto/backlog") and "backlog_burn" in self.policies.profiles:
             return "backlog_burn"
         if requested_model.startswith("auto/local") or requested_model.startswith("auto/private"):
             return "local_only"
+        if requested_model.startswith("auto/iterate") and "iterative_review_handoff" in self.policies.profiles:
+            return "iterative_review_handoff"
         return self.default_profile
 
     def plan(self, request: RouterRequest) -> ExecutionPlan:
@@ -119,7 +127,7 @@ class PolicyEngine:
                     ProviderCandidate(
                         provider=provider,
                         model=model,
-                        score=self._score(provider, model, policy_stage),
+                        score=self._score(provider, model, policy_stage, request),
                         reason=f"matched {policy_stage.purpose}",
                     )
                 )
@@ -171,6 +179,15 @@ class PolicyEngine:
             }:
                 return True
         return False
+
+    def _repo_hint(self, request: RouterRequest) -> str:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        repo_path = str(metadata.get("repo_path") or request.metadata.get("repo_path") if isinstance(request.metadata, dict) else "")
+        repo_name = str(metadata.get("repo_name") or metadata.get("repository") or "").strip().lower()
+        text = f"{repo_path} {repo_name} {request.task_id or ''}"
+        if "portfolio-management" in text.lower():
+            return "portfolio-management"
+        return ""
 
     def _provider_is_eligible(self, provider: ProviderConfig, request: RouterRequest) -> bool:
         canonical_provider = self.context.canonical_provider_name(provider.name)
@@ -224,11 +241,12 @@ class PolicyEngine:
     def _provider_signal_blocked(self, provider: ProviderConfig, model: ModelConfig) -> bool:
         return any(signal.is_blocking for signal in self._context_signals(provider, model))
 
-    def _score(self, provider: ProviderConfig, model: ModelConfig, stage: PolicyStage) -> float:
+    def _score(self, provider: ProviderConfig, model: ModelConfig, stage: PolicyStage, request: RouterRequest) -> float:
         score = float(provider.priority)
         canonical_provider = self.context.canonical_provider_name(provider.name)
         context_provider = self.context.provider_for(canonical_provider)
         lane = self._provider_lane(provider, context_provider)
+        repo_hint = self._repo_hint(request)
         if lane == ExecutionLane.local:
             score -= 25
         elif lane == ExecutionLane.free_api:
@@ -243,6 +261,11 @@ class PolicyEngine:
             score -= 5
         if "reasoning" in model.capabilities and stage.purpose in {StagePurpose.refine, StagePurpose.judge}:
             score -= 10
+        if repo_hint == "portfolio-management":
+            if context_provider and context_provider.node_id == "xwing":
+                score -= 40
+            elif context_provider and context_provider.node_id:
+                score += 10
         if context_provider and context_provider.node_id:
             node = self.context.node_for(context_provider.node_id)
             if node and "gpu_accelerated" in node.capabilities:

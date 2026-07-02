@@ -53,12 +53,14 @@ def _build_canonical_envelope(event: dict[str, Any]) -> dict[str, Any]:
     if route_id:
         links["route_id"] = route_id
 
+    node_id = payload.get("node_id") or payload.get("provider_id") or payload.get("provider") or "unknown"
+
     return {
         "event_id": event["event_id"],
         "event_type": event["event_type"],
         "source_repo": "auto-router",
         "source_service": event.get("source_service", "auto-router"),
-        "node_id": payload.get("node_id", "unknown"),
+        "node_id": str(node_id),
         "occurred_at": occurred_at or int(time.time()),
         "idempotency_key": event["idempotency_key"],
         "schema_version": "2026-06-08.v1",

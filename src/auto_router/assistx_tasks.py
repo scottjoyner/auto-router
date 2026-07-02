@@ -51,6 +51,7 @@ def normalize_assistx_task(item: dict[str, Any]) -> BacklogTaskCandidate:
     prompt = str(item.get("prompt") or item.get("description") or item.get("body") or title)
     raw_priority = str(item.get("priority") or metadata.get("priority") or "background")
     priority = _priority(raw_priority)
+    queue_class = _queue_class(item.get("queue") or item.get("queue_class") or metadata.get("queue") or metadata.get("queue_class"), priority)
     privacy = str(item.get("privacy") or item.get("privacy_label") or metadata.get("privacy") or "").lower()
     local_only = bool(item.get("local_only") or metadata.get("local_only") or privacy in {"local_only", "private", "secret"})
     sensitive = bool(
@@ -68,6 +69,7 @@ def normalize_assistx_task(item: dict[str, Any]) -> BacklogTaskCandidate:
         prompt=prompt,
         model=model,
         priority=priority,
+        queue_class=queue_class,
         local_only=local_only,
         allow_cloud=allow_cloud,
         sensitive=sensitive,
@@ -77,6 +79,7 @@ def normalize_assistx_task(item: dict[str, Any]) -> BacklogTaskCandidate:
             "assistx_source": True,
             "assistx_raw_status": item.get("status"),
             "assistx_queue": item.get("queue"),
+            "assistx_queue_class": queue_class,
         },
     )
 
@@ -94,11 +97,37 @@ def _extract_tasks(payload: Any) -> list[dict[str, Any]]:
 
 
 def _priority(value: str) -> Priority:
-    try:
-        return Priority(value)
-    except ValueError:
-        if value in {"low", "deferred", "idle"}:
-            return Priority.background
-        if value in {"normal", "medium"}:
-            return Priority.batch
+    normalized = value.strip().lower()
+    if not normalized:
         return Priority.background
+    try:
+        return Priority(normalized)
+    except ValueError:
+        if normalized in {"low", "deferred", "idle"}:
+            return Priority.background
+        if normalized in {"normal", "medium"}:
+            return Priority.batch
+        if normalized in {"high", "urgent"}:
+            return Priority.critical
+        if normalized in {"repo-critical", "repo_critical", "repo critical"}:
+            return Priority.repo_critical
+        if normalized in {"interactive", "realtime", "real-time"}:
+            return Priority.interactive
+        if normalized in {"local", "local_only"}:
+            return Priority.local_only
+        return Priority.background
+
+
+def _queue_class(raw_queue: Any, priority: Priority) -> str:
+    normalized = str(raw_queue or "").strip().lower()
+    if normalized in {"backlog", "background", "batch", "critical", "interactive", "docs"}:
+        return normalized
+    if priority in {Priority.background, Priority.batch}:
+        return "background" if priority == Priority.background else "batch"
+    if priority in {Priority.critical, Priority.repo_critical}:
+        return "critical"
+    if priority == Priority.interactive:
+        return "interactive"
+    if priority == Priority.local_only:
+        return "background"
+    return "background"

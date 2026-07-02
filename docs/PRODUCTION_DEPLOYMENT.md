@@ -224,6 +224,10 @@ curl -X POST 'http://localhost:8088/admin/backlog/dry-run?source=assistx&queue=b
 
 This is read-only and selection-only. It does not claim tasks, call providers, or run agents.
 
+Backlog intake is intentionally narrow: it should only queue `batch` and `background` work. Anything marked `critical`, `repo_critical`, `interactive`, or `local_only` belongs in a separate immediate lane or a local-only path, not in the backlog burn-down flow.
+
+The router also preserves AssistX task `queue_class` in normalized candidates and dry-run decisions so operators can trace why a task was accepted or rejected.
+
 ### 8.5 Outbox dispatch
 
 Dry-run:
@@ -253,6 +257,17 @@ curl http://localhost:8088/metrics/ops
 ```
 
 The ops summary includes model registry counts, outbox backlog, service status counts, CLI discovery counts, and AssistX task/event-sink configuration flags.
+
+### 8.7 Generated analysis and review artifacts
+
+The main human-reviewable outputs from long-running analysis jobs are stored here:
+
+- `/home/scott/knowledge/vault-workspace/tasks/*.md` — per-task review/refinement outputs and operator-facing analysis notes
+- `/home/scott/git/auto-router/data/fleet_loadout_report.json` — captured fleet loadout report
+- `/home/scott/git/auto-router/data/fleet_dispatcher_stats.json` — fleet execution consumer summary, slot, queue, and completion stats
+- `/home/scott/git/auto-router/data/router.sqlite3` — durable router state, usage ledger, model registry, service scans, and event outbox
+
+These are the places to check first when you want to review what the fleet has been doing over the last run window.
 
 ## 9. Health and metrics
 

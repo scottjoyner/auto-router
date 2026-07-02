@@ -89,6 +89,32 @@ async def test_dispatcher_marks_409_delivered(monkeypatch, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_canonical_envelope_uses_string_node_id_fallback(monkeypatch, tmp_path) -> None:
+    outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    outbox.enqueue(
+        OutboxEvent(
+            event_type="router.route_decision",
+            idempotency_key="router.route_decision:req-1:draft:cerebras:gpt-oss-120b",
+            payload={"provider_id": "cerebras", "provider": "cerebras", "node_id": None},
+        )
+    )
+
+    captured = {}
+
+    async def fake_post(self, url, json, **kwargs):
+        captured["json"] = json
+        return httpx.Response(202, json={"ok": True})
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    dispatcher = AssistXEventDispatcher(outbox, sink_url="http://assistx.test/events")
+
+    results = await dispatcher.dispatch_pending()
+
+    assert results[0].status == "delivered"
+    assert captured["json"]["node_id"] == "cerebras"
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_retries_transient_error(monkeypatch, tmp_path) -> None:
     outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
     outbox.enqueue(

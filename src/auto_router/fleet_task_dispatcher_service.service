@@ -1,0 +1,22 @@
+[Unit]
+Description=Fleet Execution Consumer Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scott
+Group=scott
+WorkingDirectory=/home/scott/git/auto-router
+ExecStart=/home/scott/.venv/auto-router/bin/python -m auto_router.fleet_task_dispatcher_service
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONPATH=/home/scott/git/auto-router/src
+Environment=LM_FLEET_VAULT_WORKSPACE=/home/scott/knowledge/vault-workspace
+Environment=LM_FLEET_TASK_POWER_WATTS=65
+Environment=AUTO_ROUTER_FLEET_DISPATCHER_STATS_PATH=/home/scott/git/auto-router/data/fleet_dispatcher_stats.json
+
+[Install]
+WantedBy=multi-user.target

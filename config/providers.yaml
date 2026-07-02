@@ -1,122 +1,185 @@
 providers:
-  - name: groq
-    type: openai_compatible
-    enabled: true
-    base_url: https://api.groq.com/openai/v1
-    api_key_env: GROQ_API_KEY
-    priority: 20
-    quota_class: fast_free
-    headers: {}
-    models:
-      - alias: groq/fast-small
-        provider_model: llama-3.1-8b-instant
-        capabilities: [chat, streaming, json, low_latency]
-        context_window: 8192
-        quota:
-          rpm: 5
-          tpd: 500000
-
-  - name: cerebras
-    type: openai_compatible
-    enabled: true
-    base_url: https://api.cerebras.ai/v1
-    api_key_env: CEREBRAS_API_KEY
-    priority: 10
-    quota_class: fast_free
-    headers: {}
-    metadata:
-      role: flash_start_planning_node
-      docs: https://inference-docs.cerebras.ai
-      notes: Public docs currently list gpt-oss-120b and preview zai-glm-4.7 on shared endpoints. Confirm live availability with GET /v1/models.
-    models:
-      - alias: cerebras/flash-reasoner
-        provider_model: gpt-oss-120b
-        capabilities: [chat, streaming, json, code, reasoning, low_latency, flash_planning]
-        quota:
-          rpm: 5
-          tpm: 30000
-          tph: 1000000
-          tpd: 1000000
-      - alias: cerebras/glm-4.7-preview
-        provider_model: zai-glm-4.7
-        capabilities: [chat, streaming, json, code, reasoning, tool_use, low_latency, flash_planning, preview]
-        quota:
-          rpm: 5
-          tpm: 30000
-          tph: 1000000
-          tpd: 1000000
-
-  - name: openrouter
-    type: openai_compatible
-    enabled: true
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    priority: 80
-    quota_class: brokered_free
-    headers:
-      HTTP-Referer: http://localhost:8088
-      X-Title: auto-router
-    models:
-      - alias: openrouter/free-general
-        provider_model: meta-llama/llama-3.1-8b-instruct:free
-        capabilities: [chat, streaming]
-        context_window: 8192
-        quota:
-          rpm: 20
-          rpd: 50
-
-  - name: lmstudio-xwing
-    type: lmstudio
-    node_id: xwing
-    enabled: true
-    base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
-    priority: 90
-    quota_class: local
-    models:
-      - alias: local/gemma-4-12b
-        provider_model: google/gemma-4-12b
-        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
-        context_window: 32768
-
-  - name: lmstudio-deathstar
-    type: lmstudio
-    node_id: deathstar-XPS-8920
-    enabled: true
-    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-xps-8920.tailcb8954.ts.net:1234/v1}
-    priority: 180
-    quota_class: local
-    models:
-      - alias: local/vram-fit
-        provider_model: local/vram-fit
-        capabilities: [chat, streaming, code, json, low_latency, local_only, vram_fit]
-        context_window: 16384
-
-  - name: lmstudio-x1-370
-    type: lmstudio
-    node_id: x1-370
-    enabled: true
-    base_url: ${LMSTUDIO_X1_370_BASE_URL:-http://x1-370.tailcb8954.ts.net:1234/v1}
-    priority: 100
-    quota_class: local
-    models:
-      - alias: local/reasoning-large
-        provider_model: local/reasoning-large
-        capabilities: [chat, streaming, code, json, reasoning, tool_use, local_only, large_context]
-        context_window: 65536
-      - alias: local/moe-fast
-        provider_model: local/moe-fast
-        capabilities: [chat, streaming, json, low_latency, local_only, moe]
-        context_window: 32768
-
-  - name: lmstudio-macbook-air
-    type: lmstudio
-    node_id: macbook-air-m2
-    enabled: true
-    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
-    priority: 260
-    quota_class: local
-    models:
-      - alias: local/quick-iterate
-        provider_model: local/quick-iterate
-        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
-        context_window: 8192
+- api_key_env: GROQ_API_KEY
+  base_url: https://api.groq.com/openai/v1
+  enabled: true
+  headers: {}
+  models:
+  - alias: groq/fast-small
+    capabilities:
+    - chat
+    - streaming
+    - json
+    - low_latency
+    context_window: 8192
+    provider_model: llama-3.1-8b-instant
+    quota:
+      rpm: 5
+      tpd: 500000
+  name: groq
+  priority: 20
+  quota_class: fast_free
+  type: openai_compatible
+- api_key_env: CEREBRAS_API_KEY
+  base_url: https://api.cerebras.ai/v1
+  enabled: true
+  headers: {}
+  metadata:
+    docs: https://inference-docs.cerebras.ai
+    notes: Public docs currently list gpt-oss-120b and preview zai-glm-4.7 on shared
+      endpoints. Confirm live availability with GET /v1/models.
+    role: flash_start_planning_node
+  models:
+  - alias: cerebras/flash-reasoner
+    capabilities:
+    - chat
+    - streaming
+    - json
+    - code
+    - reasoning
+    - low_latency
+    - flash_planning
+    provider_model: gpt-oss-120b
+    quota:
+      rpm: 5
+      tpd: 1000000
+      tph: 1000000
+      tpm: 30000
+  - alias: cerebras/glm-4.7-preview
+    capabilities:
+    - chat
+    - streaming
+    - json
+    - code
+    - reasoning
+    - tool_use
+    - low_latency
+    - flash_planning
+    - preview
+    provider_model: zai-glm-4.7
+    quota:
+      rpm: 5
+      tpd: 1000000
+      tph: 1000000
+      tpm: 30000
+  name: cerebras
+  priority: 10
+  quota_class: fast_free
+  type: openai_compatible
+- api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  enabled: true
+  headers:
+    HTTP-Referer: http://localhost:8088
+    X-Title: auto-router
+  models:
+  - alias: openrouter/free-general
+    capabilities:
+    - chat
+    - streaming
+    context_window: 8192
+    provider_model: meta-llama/llama-3.1-8b-instruct:free
+    quota:
+      rpd: 50
+      rpm: 20
+  name: openrouter
+  priority: 80
+  quota_class: brokered_free
+  type: openai_compatible
+- base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
+  enabled: true
+  models:
+  - alias: local/gemma-4-12b
+    capabilities:
+    - chat
+    - streaming
+    - code
+    - json
+    - local_only
+    - hermes_worker
+    context_window: 32768
+    provider_model: google/gemma-4-12b
+  name: lmstudio-xwing
+  node_id: xwing
+  priority: 90
+  quota_class: local
+  type: lmstudio
+- base_url: http://host.docker.internal:1234/v1
+  enabled: true
+  models:
+  - alias: local/vram-fit
+    capabilities:
+    - chat
+    - streaming
+    - code
+    - json
+    - low_latency
+    - local_only
+    - vram_fit
+    context_window: 16384
+    provider_model: local/vram-fit
+  name: lmstudio-deathstar
+  node_id: deathstar-XPS-8920
+  priority: 180
+  quota_class: local
+  type: lmstudio
+- base_url: http://host.docker.internal:1234/v1
+  enabled: true
+  models:
+  - alias: local/reasoning-large
+    capabilities:
+    - chat
+    - reasoning
+    - json
+    - local_only
+    - large_context
+    context_window: 65536
+    provider_model: ornith-1.0-35b
+  - alias: local/moe-fast
+    capabilities:
+    - chat
+    - json
+    - low_latency
+    - local_only
+    context_window: 32768
+    provider_model: qwen3.5-9b-neo-heretic-i1
+  name: lmstudio-x1-370
+  node_id: x1-370
+  priority: 100
+  quota_class: local
+  type: lmstudio
+- base_url: ${LMSTUDIO_BEELINK_BASE_URL:-http://100.85.72.121:1234/v1}
+  enabled: true
+  models:
+  - alias: local/worker-default
+    capabilities:
+    - chat
+    - streaming
+    - code
+    - json
+    - local_only
+    - hermes_worker
+    context_window: 131072
+    provider_model: vibethinker-3b-hermes
+  name: lmstudio-beelink-ryzen-7-mini-pc
+  node_id: beelink-ryzen-7-mini-pc
+  priority: 140
+  quota_class: local
+  type: lmstudio
+- base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
+  enabled: true
+  models:
+  - alias: local/quick-iterate
+    capabilities:
+    - chat
+    - streaming
+    - json
+    - low_latency
+    - local_only
+    - quick_iteration
+    context_window: 8192
+    provider_model: local/quick-iterate
+  name: lmstudio-macbook-air
+  node_id: macbook-air-m2
+  priority: 260
+  quota_class: local
+  type: lmstudio

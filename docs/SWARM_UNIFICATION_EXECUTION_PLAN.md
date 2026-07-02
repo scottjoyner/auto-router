@@ -18,8 +18,10 @@ Important note:
 - The other repos were not present for direct source inspection here, so their status is inferred from prior session context and design docs.
 - Treat the inferred sections as a plan baseline, not a verified runtime audit.
 
-Related doc:
+Related docs:
 - `docs/SWARM_UNIFICATION_BACKLOG.md` for the file-by-file patch plan and command list.
+- `docs/ROUTER_ASSISTX_AUTO_ASSIGN_BOUNDARIES.md` for the steady-state ownership split.
+- `docs/plans/2026-07-02-auto-router-migration-plan.md` for the historical migration record.
 
 ---
 
