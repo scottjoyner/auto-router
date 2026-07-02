@@ -32,6 +32,7 @@ services:
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       ZAI_API_KEY: ${ZAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      HERMES_HOME: /root/.hermes
 
       # --- Agentgateway sidecar integration ---
       AUTO_ROUTER_AGENTGATEWAY_ENABLED: ${AUTO_ROUTER_AGENTGATEWAY_ENABLED:-false}
@@ -49,6 +50,10 @@ services:
       - ./data:/data
       - ./artifacts:/artifacts
       - ./worktrees:/worktrees
+      - /home/scott/.local/bin/hermes:/usr/local/bin/hermes:ro
+      - /home/scott/git/hermes-agent:/home/scott/git/hermes-agent:ro
+      - /home/scott/.hermes:/root/.hermes
+      - /home/scott/.local/share/uv/python:/home/scott/.local/share/uv/python:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

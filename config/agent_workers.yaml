@@ -5,7 +5,7 @@ agent_workers:
     enabled: true
     launcher: hermes_oneshot
     model: ornith-1.0-35b
-    provider: LM Studio
+    provider: lmstudio
     toolsets: [terminal, file, web, browser, code_execution, skills, session_search, memory, todo]
     quota:
       dimension: jobs_d
