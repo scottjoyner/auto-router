@@ -87,7 +87,7 @@
 - [x] Add idempotency keys based on request/stage/provider/model/service/check timestamp.
 - [x] Add retry with exponential backoff and dead-letter state.
 
-Current gap: align the AssistX consumer/schema and the remaining docs so they use the implemented outbox envelope names rather than the older `route.selected` wording.
+Current gap: legacy plans still mention `route.selected`; active surfaces should use the `router.route_decision` envelope name.
 
 ### P2.3 Neo4j schema alignment
 

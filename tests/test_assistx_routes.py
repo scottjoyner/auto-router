@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from auto_router.assistx_routes import register_assistx_routes, _select_lane_and_provider
+from auto_router.assistx_routes import register_assistx_routes, _select_lane_and_provider, _build_route_decision
 from auto_router.models import RouteIntent, RouteRequest
 
 
@@ -73,3 +73,20 @@ def test_finalized_request_routes_to_agent_jobs_with_handoff_metadata() -> None:
     assert selection["job_request"].workflow_stage == "handoff"
     assert selection["job_request"].plan_steps
     assert selection["job_request"].validation_metrics
+
+
+def test_route_decision_uses_router_route_decision_envelope() -> None:
+    request = RouteRequest(correlation_id="corr-2", task_id="task-2")
+
+    decision = _build_route_decision(
+        request,
+        lane="local",
+        provider="lmstudio",
+        model="local/default",
+        rationale="defaulted to local",
+    )
+
+    assert decision["event_type"] == "router.route_decision"
+    assert decision["status"] == "selected"
+    assert decision["correlation_id"] == "corr-2"
+    assert decision["task_id"] == "task-2"

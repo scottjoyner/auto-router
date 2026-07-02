@@ -28,9 +28,9 @@ def _build_route_decision(
     status: str = "selected",
 ) -> dict[str, Any]:
     route_id = f"route:{uuid.uuid4().hex[:12]}"
-    event_type = f"route.{status}"
     return RouteDecision(
-        event_type=event_type,
+        event_type="router.route_decision",
+        status=status,
         correlation_id=request.correlation_id,
         route_id=route_id,
         task_id=request.task_id,

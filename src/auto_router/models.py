@@ -183,7 +183,8 @@ class RouteRequest(BaseModel):
 
 
 class RouteDecision(BaseModel):
-    event_type: str = "route.selected"
+    event_type: str = "router.route_decision"
+    status: str = "selected"
     correlation_id: str
     route_id: str
     task_id: str | None = None
