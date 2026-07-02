@@ -9,6 +9,7 @@ from auto_router.agent_jobs import build_agent_job_request
 from auto_router.event_outbox import EventOutbox, OutboxEvent
 from auto_router.models import RouteDecision, RouteRequest
 from auto_router.route_events import ensure_event_outbox
+from auto_router.task_contract import build_task_contract
 
 router = APIRouter(tags=["assistx-routes"])
 
@@ -48,18 +49,14 @@ def _build_route_decision(
 
 def _request_needs_tools(request: RouteRequest) -> bool:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
-    task_kind = str(metadata.get("task_kind") or "").strip().lower()
-    capability_lane = str(metadata.get("capability_lane") or "").strip().lower()
-    workflow_stage = str(metadata.get("workflow_stage") or metadata.get("stage") or "").strip().lower()
     if request.context_requirements.needs_repo or request.context_requirements.needs_external_web or request.context_requirements.needs_local_files:
         return True
     if bool(metadata.get("requires_tools")) or bool(metadata.get("evidence_required")):
         return True
-    if bool(metadata.get("reviewed")) or bool(metadata.get("finalized")) or workflow_stage in {"handoff", "final", "finalized", "review_final"}:
+    contract = build_task_contract({**metadata, "task_kind": metadata.get("task_kind"), "workflow_stage": metadata.get("workflow_stage") or metadata.get("stage")})
+    if contract["requires_tools"]:
         return True
-    if capability_lane == "tool_required":
-        return True
-    if task_kind in {"research", "analysis", "operations", "code", "implementation", "refinement", "review", "repair"}:
+    if contract["workflow_stage"] == "handoff":
         return True
     if request.tools:
         return True
@@ -69,26 +66,16 @@ def _request_needs_tools(request: RouteRequest) -> bool:
 def _build_tool_job_body(request: RouteRequest, selection: dict[str, Any]) -> dict[str, Any]:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     intent_text = str(request.intent.text or metadata.get("task") or metadata.get("prompt") or request.task_id or "tool task").strip()
-    task_kind = str(metadata.get("task_kind") or ("analysis" if request.context_requirements.needs_external_web else "operations") or "tool_task").strip()
-    workflow_stage = str(metadata.get("workflow_stage") or metadata.get("stage") or "").strip().lower()
-    if not workflow_stage:
-        if bool(metadata.get("finalized")) or bool(metadata.get("reviewed")):
-            workflow_stage = "handoff"
-        else:
-            workflow_stage = "initial"
-    plan_steps = metadata.get("plan_steps")
-    if not isinstance(plan_steps, list) or not any(str(item).strip() for item in plan_steps):
-        plan_steps = [
-            "Review the current state one slice at a time.",
-            "Advance the task in the smallest safe increment.",
-            "Validate against the explicit acceptance criteria.",
-            "Return a final handoff with risks and next steps.",
-        ]
-    validation_metrics = metadata.get("validation_metrics")
-    if not isinstance(validation_metrics, list) or not any(str(item).strip() for item in validation_metrics):
-        validation_metrics = ["acceptance_criteria_met", "regressions_checked", "handoff_ready"]
-    review_checkpoints = metadata.get("review_checkpoints")
-    if not isinstance(review_checkpoints, list) or not any(str(item).strip() for item in review_checkpoints):
+    base_kind = "analysis" if request.context_requirements.needs_external_web else "operations"
+    contract = build_task_contract({**metadata, "task_kind": metadata.get("task_kind") or base_kind, "workflow_stage": metadata.get("workflow_stage") or metadata.get("stage")})
+    task_kind = contract["task_kind"]
+    workflow_stage = contract["workflow_stage"]
+    plan_steps = contract["plan_steps"]
+    validation_metrics = contract["validation_metrics"]
+    review_checkpoints = contract["review_checkpoints"]
+    metadata_review_checkpoints = metadata.get("review_checkpoints")
+    has_explicit_review_checkpoints = isinstance(metadata_review_checkpoints, list) and any(str(item).strip() for item in metadata_review_checkpoints)
+    if review_checkpoints == ["reviewed by local iteration", "validated against plan", "final handoff approved"] and not has_explicit_review_checkpoints:
         review_checkpoints = ["iterative review complete", "final validation complete", "handoff approved"]
     return {
         "task": intent_text,
@@ -96,7 +83,7 @@ def _build_tool_job_body(request: RouteRequest, selection: dict[str, Any]) -> di
         "repo_url": metadata.get("repo_url"),
         "branch": metadata.get("branch"),
         "task_kind": task_kind,
-        "capability_lane": "tool_required",
+        "capability_lane": contract["capability_lane"],
         "requires_tools": True,
         "evidence_required": bool(metadata.get("evidence_required", True)),
         "evidence_bundle": metadata.get("evidence_bundle") or {},
@@ -114,7 +101,7 @@ def _build_tool_job_body(request: RouteRequest, selection: dict[str, Any]) -> di
             **metadata,
             "source_route": "assistx",
             "task_kind": task_kind,
-            "capability_lane": "tool_required",
+            "capability_lane": contract["capability_lane"],
             "requires_tools": True,
             "evidence_required": bool(metadata.get("evidence_required", True)),
             "workflow_stage": workflow_stage,

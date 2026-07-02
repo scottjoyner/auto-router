@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from auto_router.preflight import build_preflight_report
 from auto_router.gateway import build_agentgateway_status
-from auto_router.service_routes import build_outbox_dispatch_status
+from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status
 from auto_router.settings import get_settings
 from auto_router.ui_pages import get_ui_page_sections
 
@@ -49,6 +49,7 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
     settings = get_settings()
     outbox_summary = state.event_outbox.summary() if hasattr(state, "event_outbox") else {}
     outbox_dispatch_summary = build_outbox_dispatch_status(state)
+    outbox_pressure_summary = build_outbox_pressure_status(state)
     model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     live_models = state.live_models.snapshot() if hasattr(state, "live_models") else []
     circuits = state.circuits.snapshot() if hasattr(state, "circuits") else []
@@ -76,6 +77,7 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
     return {
         "outbox_summary": outbox_summary,
         "outbox_dispatch_summary": outbox_dispatch_summary,
+        "outbox_pressure_summary": outbox_pressure_summary,
         "model_registry_summary": model_registry_summary,
         "live_models": live_models,
         "circuits": circuits,
@@ -642,6 +644,7 @@ def _flatten_recent_history(provider_health_summary: list[dict[str, Any]], limit
 
 def render_ops_metrics(summary: dict[str, Any]) -> str:
     outbox = summary.get("outbox_summary") or {}
+    outbox_pressure = summary.get("outbox_pressure_summary") or {}
     models = summary.get("model_registry_summary") or {}
     cli = summary.get("cli_summary") or {}
     services = summary.get("service_summary") or {}
@@ -914,6 +917,12 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
             "# HELP auto_router_fleet_failure_total Total failed fleet tasks.",
             "# TYPE auto_router_fleet_failure_total gauge",
             f"auto_router_fleet_failure_total {int(fleet_summary.get('failure') or 0)}",
+            "# HELP auto_router_outbox_pressure_total Combined pending/retry/dead-letter outbox pressure.",
+            "# TYPE auto_router_outbox_pressure_total gauge",
+            f"auto_router_outbox_pressure_total {int(outbox_pressure.get('pressure_total') or 0)}",
+            "# HELP auto_router_outbox_pressure_active Whether the router should treat outbox backlog as operational pressure.",
+            "# TYPE auto_router_outbox_pressure_active gauge",
+            f"auto_router_outbox_pressure_active {1 if outbox_pressure.get('active') else 0}",
             "# HELP auto_router_workflow_contract_completed_tasks Completed tasks captured by the current workflow contract snapshot.",
             "# TYPE auto_router_workflow_contract_completed_tasks gauge",
             f"auto_router_workflow_contract_completed_tasks {int(workflow_contract.get('completed_tasks') or 0)}",

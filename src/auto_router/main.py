@@ -39,7 +39,7 @@ from auto_router.quota import build_quota_manager
 from auto_router.route_event_patch import install_route_event_patch
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.settings import get_settings
-from auto_router.service_routes import build_outbox_dispatch_status, dispatch_outbox_cycle
+from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
 from auto_router.ui_pages import get_ui_page_sections
 
 templates = Jinja2Templates(directory="src/auto_router/templates")
@@ -193,7 +193,8 @@ async def health() -> dict[str, Any]:
     open_circuits = [circuit for circuit in state.circuits.snapshot() if circuit["open"]]
     gateway_status = await build_agentgateway_status()
     context_projection = _context_projection_summary()
-    overall_ok = not open_circuits
+    outbox_pressure = build_outbox_pressure_status(state)
+    overall_ok = not open_circuits and outbox_pressure["level"] == "ok"
     redis_ok = "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
@@ -226,6 +227,7 @@ async def health() -> dict[str, Any]:
         "time": int(time.time()),
         "gateway": gateway_status,
         "assistx_outbox_dispatch": build_outbox_dispatch_status(state),
+        "assistx_outbox_pressure": outbox_pressure,
     }
 
 @app.get("/metrics", response_class=PlainTextResponse)
@@ -253,6 +255,13 @@ async def metrics() -> str:
             'auto_router_circuit_open{owner="%s"} %s'
             % (circuit["owner"], 1 if circuit["open"] else 0)
         )
+    outbox_pressure = build_outbox_pressure_status(state)
+    lines.append("# HELP auto_router_assistx_outbox_pressure_total Combined pending/retry/dead-letter outbox pressure.")
+    lines.append("# TYPE auto_router_assistx_outbox_pressure_total gauge")
+    lines.append(f"auto_router_assistx_outbox_pressure_total {int(outbox_pressure.get('pressure_total') or 0)}")
+    lines.append("# HELP auto_router_assistx_outbox_pressure_active Whether outbox pressure is non-zero.")
+    lines.append("# TYPE auto_router_assistx_outbox_pressure_active gauge")
+    lines.append(f"auto_router_assistx_outbox_pressure_active {1 if outbox_pressure.get('active') else 0}")
     return "\n".join(lines) + "\n"
 
 
@@ -299,6 +308,7 @@ async def dashboard_summary(request: Request) -> Any:
             "assistx_event_sink_configured": bool(settings.assistx_event_sink_url),
             "outbox_summary": outbox_summary,
             "outbox_dispatch_summary": outbox_dispatch_summary,
+            "outbox_pressure_summary": build_outbox_pressure_status(state),
             "fleet_dispatcher_stats": fleet_dispatcher_stats,
             "fleet_loadout_report": _fleet_loadout_report(),
             "workflow_contract_summary": workflow_contract_summary,

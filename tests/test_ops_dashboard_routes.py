@@ -456,6 +456,7 @@ def test_dashboard_summary_renders_local_and_api_model_sections() -> None:
     text = render_ops_metrics(
         {
             "outbox_summary": {"pending": 2, "retry": 1, "delivered": 5, "dead_letter": 0},
+            "outbox_pressure_summary": {"pressure_total": 3, "active": True},
             "model_registry_summary": {"providers": 2, "models": 12, "stale": 1},
             "cli_summary": {"total": 3, "installed": 2, "runnable": 1, "missing": 1},
             "service_summary": {"total": 4, "online": 2, "offline": 1, "degraded": 0, "unknown": 1, "blocked": 0},
@@ -511,6 +512,8 @@ def test_dashboard_summary_renders_local_and_api_model_sections() -> None:
     )
 
     assert 'auto_router_outbox_events{state="pending"} 2' in text
+    assert "auto_router_outbox_pressure_total 3" in text
+    assert "auto_router_outbox_pressure_active 1" in text
     assert "auto_router_model_registry_models 12" in text
     assert 'auto_router_agent_cli_tools{state="runnable"} 1' in text
     assert 'auto_router_services{status="online"} 2' in text

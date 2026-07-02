@@ -61,17 +61,21 @@ def test_health_includes_outbox_dispatch_status(monkeypatch) -> None:
                 "last_duration_ms": None,
                 "interval_seconds": 300.0,
                 "next_run_at": 395.0,
+                "last_summary": {"pending": 2, "retry": 1, "delivered": 5, "dead_letter": 0},
             },
         ),
     )
 
     result = asyncio.run(main_module.health())
 
-    assert result["ok"] is True
+    assert result["ok"] is False
+    assert result["status"] == "degraded"
     assert result["gateway"]["ok"] is True
     assert result["assistx_outbox_dispatch"]["status"] == "running"
     assert result["assistx_outbox_dispatch"]["last_reason"] == "scheduled"
     assert result["assistx_outbox_dispatch"]["next_run_in_seconds"] >= 0
+    assert result["assistx_outbox_pressure"]["level"] == "warning"
+    assert result["assistx_outbox_pressure"]["pressure_total"] == 3
 
 
 def test_router_request_marks_private_payload_local_only() -> None:

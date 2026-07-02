@@ -95,6 +95,47 @@ def build_outbox_dispatch_status(state: Any) -> dict[str, Any]:
     }
 
 
+def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
+    dispatch_status = build_outbox_dispatch_status(state)
+    summary = dispatch_status.get("last_summary") or {}
+    pending = int(dispatch_status.get("pending") or summary.get("pending") or 0)
+    retry = int(dispatch_status.get("retry") or summary.get("retry") or 0)
+    dead_letter = int(dispatch_status.get("dead_letter") or summary.get("dead_letter") or 0)
+    total = pending + retry + dead_letter
+    critical_threshold = 25
+    if total == 0:
+        level = "ok"
+        headline = "Outbox pressure is clear"
+        detail = "No pending, retry, or dead-letter outbox events are waiting to be processed."
+        action = "No action required."
+    elif dead_letter > 0 or total >= critical_threshold:
+        level = "critical"
+        headline = "Outbox pressure is high"
+        detail = (
+            f"The outbox has {pending} pending, {retry} retry, and {dead_letter} dead-letter events "
+            "waiting to move through the AssistX sink path."
+        )
+        action = "Inspect /admin/outbox and /admin/outbox/dispatch before treating restart health as green."
+    else:
+        level = "warning"
+        headline = "Outbox pressure is present"
+        detail = (
+            f"The outbox has {pending} pending, {retry} retry, and {dead_letter} dead-letter events "
+            "waiting to move through the AssistX sink path."
+        )
+        action = "Clear the small backlog or confirm it is actively draining."
+    return {
+        **dispatch_status,
+        "pressure_total": total,
+        "level": level,
+        "active": level != "ok",
+        "critical_threshold": critical_threshold,
+        "headline": headline,
+        "detail": detail,
+        "action": action,
+    }
+
+
 async def dispatch_outbox_cycle(state: Any, limit: int = 25, dry_run: bool = False, reason: str = "scheduled") -> dict[str, Any]:
     status = ensure_outbox_dispatch_status(state)
     settings = get_settings()

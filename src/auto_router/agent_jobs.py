@@ -10,6 +10,14 @@ from typing import Any
 
 from auto_router.agent_workers import AgentJobRequest, AgentJobResult, AgentWorkerAdapter
 from auto_router.models import AgentWorkerConfig
+from auto_router.task_contract import (
+    build_task_contract,
+    normalize_task_kind,
+    task_plan_steps,
+    task_review_checkpoints,
+    task_validation_metrics,
+    task_workflow_stage,
+)
 
 
 @dataclass
@@ -157,17 +165,7 @@ def _dedupe_strings(items: list[str]) -> list[str]:
 
 
 def _default_workflow_stage(payload: dict[str, Any]) -> str:
-    explicit = payload.get("workflow_stage")
-    if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip().lower()
-    metadata_raw = payload.get("metadata")
-    metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
-    stage = str(metadata.get("workflow_stage") or metadata.get("stage") or "").strip().lower()
-    if stage:
-        return stage
-    if bool(metadata.get("finalized")) or bool(metadata.get("reviewed")):
-        return "handoff"
-    return "initial"
+    return task_workflow_stage(payload)
 
 
 def _tool_worker_preferences(payload: dict[str, Any]) -> list[str]:
@@ -175,7 +173,9 @@ def _tool_worker_preferences(payload: dict[str, Any]) -> list[str]:
     metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
     task_text = _normalize_task_text(payload).lower()
     task_kind = str(payload.get("task_kind") or metadata.get("task_kind") or "").strip().lower()
-    workflow_stage = _default_workflow_stage(payload)
+    if task_kind == "coding":
+        task_kind = "code"
+    workflow_stage = task_workflow_stage(payload)
     repo_path = str(payload.get("repo_path") or metadata.get("repo_path") or "").strip().lower()
     repo_name = str(metadata.get("repo_name") or metadata.get("repository") or "").strip().lower()
 
@@ -217,8 +217,8 @@ def _default_enabled_toolsets(payload: dict[str, Any]) -> list[str]:
     if cleaned:
         return cleaned
 
-    task_kind = str(payload.get("task_kind") or metadata.get("task_kind") or "").strip().lower()
-    workflow_stage = _default_workflow_stage(payload)
+    task_kind = normalize_task_kind(payload)
+    workflow_stage = task_workflow_stage(payload)
     if workflow_stage in {"handoff", "final", "finalized", "review_final"}:
         return ["file", "terminal", "session_search", "skills"]
     if task_kind in {"code", "implementation", "refinement", "repair", "review", "repo", "patch"}:
@@ -249,19 +249,7 @@ def _default_allow_commit(payload: dict[str, Any]) -> bool:
 
 
 def _default_validation_metrics(payload: dict[str, Any]) -> list[str]:
-    explicit = payload.get("validation_metrics")
-    if isinstance(explicit, list) and any(str(item).strip() for item in explicit):
-        return [str(item).strip() for item in explicit if str(item).strip()]
-    metadata_raw = payload.get("metadata")
-    metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
-    task_kind = str(payload.get("task_kind") or metadata.get("task_kind") or "").strip().lower()
-    if task_kind in {"code", "implementation", "refinement", "repair", "review", "repo", "patch"}:
-        return ["acceptance_criteria_met", "regressions_checked", "handoff_ready"]
-    if task_kind in {"research", "analysis", "documentation", "docs"}:
-        return ["evidence_captured", "claims_supported", "final_answer_ready"]
-    if task_kind in {"operations", "terminal", "shell"}:
-        return ["state_verified", "change_applied", "health_confirmed"]
-    return ["goal_understood", "next_step_defined", "handoff_ready"]
+    return task_validation_metrics(payload)
 
 
 def _default_allow_network(payload: dict[str, Any]) -> bool:
@@ -276,39 +264,7 @@ def _default_allow_network(payload: dict[str, Any]) -> bool:
 
 
 def _default_plan_steps(payload: dict[str, Any]) -> list[str]:
-    explicit = payload.get("plan_steps")
-    if isinstance(explicit, list) and any(str(item).strip() for item in explicit):
-        return [str(item).strip() for item in explicit if str(item).strip()]
-    metadata_raw = payload.get("metadata")
-    metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
-    task_kind = str(payload.get("task_kind") or metadata.get("task_kind") or "").strip().lower()
-    if task_kind in {"code", "implementation", "refinement", "repair", "review", "repo", "patch"}:
-        return [
-            "Inspect the current state one slice at a time.",
-            "Make the smallest safe change or conclusion.",
-            "Validate the result against the acceptance criteria.",
-            "Report risks, gaps, and handoff notes.",
-        ]
-    if task_kind in {"research", "analysis", "documentation", "docs"}:
-        return [
-            "Gather the relevant evidence or context.",
-            "Compare the options and identify the best path.",
-            "Draft the answer or recommendation.",
-            "Verify claims, cite sources, and finalize the handoff.",
-        ]
-    if task_kind in {"operations", "terminal", "shell"}:
-        return [
-            "Inspect the live state.",
-            "Apply the smallest safe operation.",
-            "Verify service health or output.",
-            "Record what changed and what remains.",
-        ]
-    return [
-        "Clarify the immediate goal.",
-        "Advance the task in one small step.",
-        "Validate the result.",
-        "Summarize the next handoff.",
-    ]
+    return task_plan_steps(payload)
 
 
 def _worker_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -339,10 +295,16 @@ def _worker_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
         allowed_tools = enabled_toolsets
     allowed_tools = _dedupe_strings(allowed_tools)
     enabled_toolsets = _dedupe_strings(enabled_toolsets)
-    workflow_stage = _default_workflow_stage(payload)
-    plan_steps = _default_plan_steps(payload)
-    validation_metrics = _default_validation_metrics(payload)
-    review_checkpoints = _default_review_checkpoints(payload)
+
+    contract = build_task_contract({**payload, "metadata": metadata})
+    task_kind = contract["task_kind"]
+    requires_tools = contract["requires_tools"]
+    evidence_required = contract["evidence_required"]
+    capability_lane = contract["capability_lane"]
+    workflow_stage = contract["workflow_stage"]
+    plan_steps = contract["plan_steps"]
+    validation_metrics = contract["validation_metrics"]
+    review_checkpoints = contract["review_checkpoints"]
 
     agent_payload = {
         "job_id": payload.get("job_id") or str(uuid.uuid4()),
@@ -384,7 +346,7 @@ def _worker_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "context_note": context_note,
         },
     }
-    preferred_workers = _tool_worker_preferences(agent_payload)
+    preferred_workers = _tool_worker_preferences({**payload, "metadata": metadata})
     if preferred_workers:
         agent_payload["preferred_workers"] = preferred_workers
     else:
@@ -393,10 +355,7 @@ def _worker_job_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _default_review_checkpoints(payload: dict[str, Any]) -> list[str]:
-    explicit = payload.get("review_checkpoints")
-    if isinstance(explicit, list) and any(str(item).strip() for item in explicit):
-        return [str(item).strip() for item in explicit if str(item).strip()]
-    return ["reviewed by local iteration", "validated against plan", "final handoff approved"]
+    return task_review_checkpoints(payload)
 
 
 def build_agent_job_request(body: dict[str, Any]) -> AgentJobRequest:

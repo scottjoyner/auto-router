@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 from neo4j import GraphDatabase
 
+from auto_router.task_contract import build_task_contract
+
 
 # Neo4j connection
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://100.64.43.123:7687")
@@ -163,63 +165,9 @@ def _task_evidence_bundle(props: dict) -> dict[str, object] | None:
 
 
 def _task_contract(props: dict) -> dict[str, object]:
-    task_kind = _task_kind(props)
-    evidence_bundle = _task_evidence_bundle(props)
-    requires_tools = bool(props.get("requires_tools")) if "requires_tools" in props else task_kind in {"research", "analysis", "operations"}
-    evidence_required = bool(props.get("evidence_required")) if "evidence_required" in props else task_kind in {"research", "analysis"}
-    capability_lane = str(props.get("capability_lane") or props.get("lane") or ("tool_required" if requires_tools else "prompt_only")).strip().lower()
-    workflow_stage = str(props.get("workflow_stage") or props.get("stage") or "").strip().lower()
-    if not workflow_stage:
-        if bool(props.get("finalized")) or bool(props.get("reviewed")):
-            workflow_stage = "handoff"
-        elif requires_tools:
-            workflow_stage = "iterative"
-        else:
-            workflow_stage = "prompt_only"
-    if task_kind in {"code", "coding", "implementation", "refinement", "repair", "review", "repo", "patch"}:
-        plan_steps = [
-            "Inspect the current state one slice at a time.",
-            "Make the smallest safe change or conclusion.",
-            "Validate the result against the acceptance criteria.",
-            "Report risks, gaps, and handoff notes.",
-        ]
-        validation_metrics = ["acceptance_criteria_met", "regressions_checked", "handoff_ready"]
-    elif task_kind in {"research", "analysis", "documentation", "docs"}:
-        plan_steps = [
-            "Gather the relevant evidence or context.",
-            "Compare the options and identify the best path.",
-            "Draft the answer or recommendation.",
-            "Verify claims, cite sources, and finalize the handoff.",
-        ]
-        validation_metrics = ["evidence_captured", "claims_supported", "final_answer_ready"]
-    elif task_kind in {"operations", "terminal", "shell"}:
-        plan_steps = [
-            "Inspect the live state.",
-            "Apply the smallest safe operation.",
-            "Verify service health or output.",
-            "Record what changed and what remains.",
-        ]
-        validation_metrics = ["state_verified", "change_applied", "health_confirmed"]
-    else:
-        plan_steps = [
-            "Clarify the immediate goal.",
-            "Advance the task in one small step.",
-            "Validate the result.",
-            "Summarize the next handoff.",
-        ]
-        validation_metrics = ["goal_understood", "next_step_defined", "handoff_ready"]
-    review_checkpoints = ["reviewed by local iteration", "validated against plan", "final handoff approved"]
-    return {
-        "task_kind": task_kind,
-        "requires_tools": requires_tools,
-        "evidence_required": evidence_required,
-        "capability_lane": capability_lane,
-        "workflow_stage": workflow_stage,
-        "plan_steps": plan_steps,
-        "validation_metrics": validation_metrics,
-        "review_checkpoints": review_checkpoints,
-        "evidence_bundle": evidence_bundle,
-    }
+    contract = build_task_contract(props)
+    contract["evidence_bundle"] = _task_evidence_bundle(props)
+    return contract
 
 
 def get_tasks_from_neo4j(limit: int = 5) -> list[dict]:

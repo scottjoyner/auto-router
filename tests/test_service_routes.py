@@ -7,6 +7,7 @@ from auto_router.event_outbox import EventOutbox, OutboxEvent
 from auto_router.service_routes import (
     apply_service_results_to_context,
     build_outbox_dispatch_status,
+    build_outbox_pressure_status,
     dispatch_outbox_batch,
     dispatch_outbox_cycle,
     enqueue_service_snapshot_events,
@@ -96,6 +97,24 @@ def test_enqueue_service_snapshot_events(tmp_path) -> None:
     assert events[0]["payload"]["service_id"] == "neo4j.browser"
     assert events[0]["payload"]["context_revision"] == "rev-1"
     assert events[0]["payload"]["context_source"] == "unit-test"
+
+
+def test_build_outbox_pressure_status_flags_small_backlog(tmp_path) -> None:
+    outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    outbox.enqueue(
+        OutboxEvent(
+            event_type="router.service_snapshot.recorded",
+            idempotency_key="service:a:1:online",
+            payload={"service_id": "a"},
+        )
+    )
+    state = SimpleNamespace(event_outbox=outbox, outbox_dispatch_status={})
+
+    pressure = build_outbox_pressure_status(state)
+
+    assert pressure["level"] == "warning"
+    assert pressure["pressure_total"] == 1
+    assert pressure["active"] is True
 
 
 def test_dispatch_outbox_cycle_updates_status(monkeypatch, tmp_path) -> None:

@@ -45,6 +45,22 @@ curl http://localhost:8088/admin/ops/summary | jq
 curl http://localhost:8088/v1/models | jq
 ```
 
+Post-restart verification:
+
+```bash
+curl http://localhost:8088/health | jq
+curl http://localhost:8088/admin/ops/summary | jq
+curl http://localhost:8088/admin/services | jq
+curl http://localhost:8088/admin/outbox | jq
+```
+
+Interpretation:
+
+- `/health` confirms the router, Redis, context projection, and dispatch bookkeeping are alive.
+- `/admin/ops/summary` gives the real operational picture: outbox backlog, dispatch status, provider/model freshness, and workflow-contract alerts.
+- A green `/health` response does not mean the outbox is drained; inspect `assistx_outbox_dispatch.pending` and `assistx_outbox_dispatch.retry`.
+- If `workflow_contract_alert.level` is `warning` or `critical`, the router is up but the review/handoff path is still catching up.
+
 OpenAI-compatible client configuration:
 
 ```bash
