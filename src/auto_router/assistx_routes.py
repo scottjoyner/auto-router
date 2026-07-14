@@ -164,9 +164,43 @@ def _select_lane_and_provider(
 
     enabled = providers.enabled()
     local_providers = [p for p in enabled if getattr(p, "quota_class", "") == "local" or (getattr(p, "base_url", "") or "").startswith("http://100.")]
+    local_by_name = {getattr(p, "name", "").strip().lower(): p for p in local_providers if getattr(p, "name", "")}
+
+    requested_model = str(request.model or metadata.get("model") or metadata.get("requested_model") or "").strip()
+    if requested_model:
+        matched_model = getattr(context, "model_for", lambda value: None)(requested_model)
+        if matched_model is not None and getattr(matched_model, "is_local", False) and not getattr(matched_model, "is_blocked", False):
+            provider_name = str(getattr(matched_model, "provider", "") or "").strip()
+            provider = local_by_name.get(provider_name.lower())
+            if provider is None:
+                provider = getattr(context, "provider_for", lambda value: None)(provider_name)
+            if provider is not None:
+                model_name = getattr(matched_model, "provider_model", None) or getattr(matched_model, "name", None) or requested_model
+                return {
+                    "lane": "local",
+                    "provider": provider.name,
+                    "model": model_name,
+                    "target_service": f"{provider.name}:{model_name}",
+                    "target_node_id": getattr(provider, "node_id", None),
+                    "rationale": f"Matched requested local model {requested_model} on provider {provider.name}",
+                    "confidence": 0.97,
+                }
+        matched_provider = getattr(context, "provider_for", lambda value: None)(requested_model)
+        if matched_provider is not None and getattr(matched_provider, "is_local", False):
+            models = getattr(matched_provider, "models", [])
+            model_name = models[0].provider_model if models else requested_model
+            return {
+                "lane": "local",
+                "provider": matched_provider.provider,
+                "model": model_name,
+                "target_service": f"{matched_provider.provider}:{model_name}",
+                "target_node_id": getattr(matched_provider, "node_id", None),
+                "rationale": f"Matched requested local provider {requested_model}",
+                "confidence": 0.9,
+            }
 
     if local_providers:
-        best = local_providers[0]
+        best = sorted(local_providers, key=lambda p: (getattr(p, "priority", 100), getattr(p, "name", "")))[0]
         models = getattr(best, "models", [])
         model_name = models[0].alias if models else "local/default"
         model_provider = models[0].provider_model if models else model_name

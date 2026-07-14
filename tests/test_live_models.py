@@ -23,6 +23,15 @@ def test_normalize_model_record_keeps_raw_payload() -> None:
     assert normalized["raw"] == payload
 
 
+def test_normalize_model_record_uses_lmstudio_key_and_publisher() -> None:
+    payload = {"key": "ornith-1.0-9b", "display_name": "Ornith 1.0 9B", "publisher": "deepreinforce-ai"}
+
+    normalized = normalize_model_record(payload)
+
+    assert normalized["id"] == "ornith-1.0-9b"
+    assert normalized["owned_by"] == "deepreinforce-ai"
+
+
 def test_live_model_cache_reuses_fresh_snapshot() -> None:
     cache = LiveModelCache(ttl_seconds=60)
     provider = ProviderConfig(name="cerebras", type="openai_compatible", base_url="https://example.test/v1")
@@ -173,6 +182,88 @@ def test_discovered_lmstudio_providers_include_context_services(monkeypatch) -> 
     assert discovered[0].name == "lmstudio-r2d2"
     assert discovered[0].base_url == "http://r2d2.tailcb8954.ts.net:1234/v1"
     assert discovered[0].type == "lmstudio"
+
+
+def test_refresh_provider_models_replaces_stale_bootstrap_model_on_changed_node(tmp_path) -> None:
+    providers = ProviderRegistry.model_validate(
+        {
+            "providers": [
+                {
+                    "name": "lmstudio-joyner",
+                    "type": "lmstudio",
+                    "enabled": True,
+                    "base_url": "http://joyner.tailcb8954.ts.net:1234/v1",
+                    "priority": 900,
+                    "quota_class": "local",
+                    "node_id": "joyner",
+                    "models": [],
+                }
+            ]
+        }
+    )
+    context = ContextSnapshot.model_validate(
+        {
+            "providers": [
+                {
+                    "provider": "lmstudio-joyner",
+                    "lane": "local",
+                    "local": True,
+                    "can_use_free_api": False,
+                    "blocked": False,
+                    "node_id": "joyner",
+                    "aliases": ["local/tailnet-joyner"],
+                    "detail": "Tailnet LM Studio node",
+                    "models": [
+                        {
+                            "model_id": "lmstudio-joyner.orinth-1.0-9b",
+                            "name": "orinth-1.0-9b",
+                            "provider": "lmstudio-joyner",
+                            "provider_model": "orinth-1.0-9b",
+                            "lane": "local",
+                            "local": True,
+                            "can_use_free_api": False,
+                            "blocked": False,
+                            "node_id": "joyner",
+                            "aliases": ["local/orinth-1.0-9b-joyner"],
+                            "capabilities": ["chat", "local_only"],
+                            "context_window": 8192,
+                            "quota": {},
+                            "detail": "stale bootstrap model",
+                            "priority": 900,
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    state = SimpleNamespace(
+        providers=providers,
+        context=context,
+        live_models=LiveModelCache(ttl_seconds=60),
+        model_registry=ModelRegistryStore(f"sqlite:///{tmp_path / 'router.sqlite3'}"),
+        signal_registry=ContextSignalStore(f"sqlite:///{tmp_path / 'signals.sqlite3'}"),
+        policy_engine=SimpleNamespace(context=None),
+    )
+
+    async def fake_fetch(provider: ProviderConfig):
+        assert provider.name == "lmstudio-joyner"
+        return [{"id": "qwen2.5-14b"}]
+
+    from auto_router import live_model_routes as routes
+
+    original_fetch = routes.fetch_provider_models
+    routes.fetch_provider_models = fake_fetch
+    try:
+        asyncio.run(refresh_provider_models(state, probeable_providers(state.providers.providers)))
+    finally:
+        routes.fetch_provider_models = original_fetch
+
+    assert state.context.model_for("orinth-1.0-9b") is None
+    refreshed = state.context.model_for("qwen2.5-14b")
+    assert refreshed is not None
+    assert refreshed.provider_model == "qwen2.5-14b"
+    assert refreshed.provider == "lmstudio-joyner"
+    assert refreshed.node_id == "joyner"
 
 
 def test_live_model_cache_records_fetch_errors() -> None:

@@ -3,9 +3,50 @@ agent_workers:
     type: hermes
     command: hermes
     enabled: true
+    priority: 10
     launcher: hermes_oneshot
     model: ornith-1.0-35b
     provider: lmstudio
+    env:
+      LM_BASE_URL: http://host.docker.internal:1234/v1
+    toolsets: [terminal, file, web, browser, code_execution, skills, session_search, memory, todo]
+    quota:
+      dimension: jobs_d
+      mode: manual_daily
+    policy:
+      allowed_priorities: [repo_critical, critical, batch, background]
+      allow_write_default: false
+      allow_commit_default: false
+
+  - name: hermes-mini
+    type: hermes
+    command: hermes
+    enabled: true
+    priority: 20
+    launcher: hermes_oneshot
+    model: vibethinker-3b-hermes
+    provider: lmstudio
+    env:
+      LM_BASE_URL: http://100.85.72.121:1234/v1
+    toolsets: [terminal, file, web, browser, code_execution, skills, session_search, memory, todo]
+    quota:
+      dimension: jobs_d
+      mode: manual_daily
+    policy:
+      allowed_priorities: [repo_critical, critical, batch, background]
+      allow_write_default: false
+      allow_commit_default: false
+
+  - name: hermes-draft
+    type: hermes
+    command: hermes
+    enabled: true
+    priority: 30
+    launcher: hermes_oneshot
+    model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+    provider: lmstudio
+    env:
+      LM_BASE_URL: http://scotts-macbook-air.tailcb8954.ts.net:1234/v1
     toolsets: [terminal, file, web, browser, code_execution, skills, session_search, memory, todo]
     quota:
       dimension: jobs_d
@@ -19,6 +60,7 @@ agent_workers:
     type: codex
     command: codex
     enabled: false
+    priority: 40
     quota:
       dimension: premium_m
       mode: manual_monthly
@@ -31,6 +73,7 @@ agent_workers:
     type: gemini_cli
     command: gemini
     enabled: false
+    priority: 50
     quota:
       dimension: jobs_d
       mode: manual_daily
@@ -43,6 +86,7 @@ agent_workers:
     type: opencode
     command: opencode
     enabled: false
+    priority: 60
     quota:
       dimension: jobs_d
       mode: manual_daily

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,20 +88,26 @@ class AgentWorkerAdapter:
             if self.config.skills:
                 command.extend(["--skills", ",".join(self.config.skills)])
             command.extend(["-z", task_payload])
+            env = os.environ.copy()
+            env.update({str(key): str(value) for key, value in (self.config.env or {}).items() if value is not None})
             process = await asyncio.create_subprocess_exec(
                 *command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workdir),
+                env=env,
             )
             stdin_payload = None
         else:
+            env = os.environ.copy()
+            env.update({str(key): str(value) for key, value in (self.config.env or {}).items() if value is not None})
             process = await asyncio.create_subprocess_exec(
                 self.config.command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.PIPE,
                 cwd=str(workdir),
+                env=env,
             )
             stdin_payload = task_payload.encode("utf-8")
 

@@ -53,8 +53,8 @@ def test_tool_capable_request_routes_to_agent_jobs() -> None:
     assert selection["lane"] == "paperclip"
     assert selection["provider"] == "agent-jobs"
     assert selection["target_service"] == "/jobs/agent"
-    assert selection["target_worker"] == "hermes"
-    assert selection["job_request"].preferred_workers[0] == "hermes"
+    assert selection["target_worker"] == "hermes-draft"
+    assert selection["job_request"].preferred_workers[0] == "hermes-draft"
     assert selection["plan_steps"][0] == "Gather the relevant evidence or context." or selection["plan_steps"][0] == "Review the current state one slice at a time."
 
 
@@ -90,3 +90,49 @@ def test_route_decision_uses_router_route_decision_envelope() -> None:
     assert decision["status"] == "selected"
     assert decision["correlation_id"] == "corr-2"
     assert decision["task_id"] == "task-2"
+
+
+class ModelContext:
+    def __init__(self, provider: str, provider_model: str):
+        self.provider = provider
+        self.provider_model = provider_model
+        self.name = provider_model
+        self.is_local = True
+        self.is_blocked = False
+
+
+class ProviderContext:
+    def __init__(self, provider: str, node_id: str):
+        self.provider = provider
+        self.node_id = node_id
+        self.is_local = True
+        self.models = []
+
+
+class MatchingContext:
+    def __init__(self) -> None:
+        self._provider = ProviderContext("lmstudio-joyner", "joyner")
+        self._model = ModelContext("lmstudio-joyner", "qwen2.5-14b")
+
+    def provider_for(self, value: str):
+        if value == "local/tailnet-joyner":
+            return self._provider
+        return None
+
+    def model_for(self, value: str):
+        if value == "local/tailnet-joyner":
+            return self._model
+        return None
+
+
+def test_requested_tailnet_model_routes_to_matching_local_provider() -> None:
+    state = SimpleNamespace(context=MatchingContext(), providers=FakeProviders(), agent_jobs=FakeAgentJobs())
+    request = RouteRequest(correlation_id="corr-3", task_id="task-3", model="local/tailnet-joyner")
+
+    selection = _select_lane_and_provider(request, state)
+
+    assert selection["lane"] == "local"
+    assert selection["provider"] == "lmstudio-joyner"
+    assert selection["target_node_id"] == "joyner"
+    assert selection["model"] in {"qwen2.5-14b", "local/tailnet-joyner"}
+    assert "tailnet-joyner" in selection["rationale"]

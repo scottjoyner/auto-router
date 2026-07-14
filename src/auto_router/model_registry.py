@@ -6,6 +6,7 @@ import sqlite3
 import time
 from pathlib import Path
 from statistics import mean
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from auto_router.live_models import LiveModelSnapshot
@@ -227,7 +228,8 @@ class ModelRegistryStore:
             "error": sum(1 for snapshot in latest if not snapshot.ok),
             "models": sum(len(snapshot.models) for snapshot in latest),
             "drift": sum(1 for snapshot in latest if snapshot.drift),
-            "healthy": sum(1 for snapshot in latest if snapshot.ok and not snapshot.drift and len(snapshot.models) > 0),
+            "stale": sum(1 for snapshot in latest if snapshot.stale),
+            "healthy": sum(1 for snapshot in latest if snapshot.ok and not snapshot.stale and not snapshot.drift and len(snapshot.models) > 0),
             "avg_latency_ms": int(mean([snapshot.latency_ms for snapshot in latest if snapshot.latency_ms is not None]) if any(snapshot.latency_ms is not None for snapshot in latest) else 0),
         }
 
@@ -241,17 +243,24 @@ class ModelRegistryStore:
         for provider, rows in grouped.items():
             window_rows = rows[:window]
             latest = window_rows[0]
+            age_seconds = max(now - int(cast(Any, latest["fetched_at"])), 0)
+            stale = now >= int(cast(Any, latest["expires_at"]))
             score = self._health_score(window_rows, now=now)
+            if stale:
+                score = min(score, 59)
+            ok = bool(cast(Any, latest["ok"])) and not stale and int(cast(Any, latest["model_count"])) > 0
             reports.append(
                 {
                     "provider": provider,
                     "health_score": score,
-                    "ok": bool(latest["ok"]),
+                    "ok": ok,
+                    "raw_ok": bool(cast(Any, latest["ok"])),
+                    "stale": stale,
                     "drift": any(bool(row["drift"]) for row in window_rows),
-                    "model_count": int(latest["model_count"]),
+                    "model_count": int(cast(Any, latest["model_count"])),
                     "latency_ms": latest["latency_ms"],
-                    "last_fetched_at": int(latest["fetched_at"]),
-                    "age_seconds": max(now - int(latest["fetched_at"]), 0),
+                    "last_fetched_at": int(cast(Any, latest["fetched_at"])),
+                    "age_seconds": age_seconds,
                     "success_rate": round(sum(1 for row in window_rows if row["ok"]) / len(window_rows), 3),
                     "error": latest["error"],
                     "signature": latest["signature"],

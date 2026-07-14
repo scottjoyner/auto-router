@@ -28,6 +28,19 @@ providers:
     assert "chat" in registry.providers[0].models[0].capabilities
 
 
+def test_macbook_air_provider_registry_includes_live_tailnet_models() -> None:
+    config_path = Path(__file__).resolve().parents[1] / "config" / "providers.yaml"
+
+    registry = load_provider_registry(config_path)
+    provider = next(provider for provider in registry.providers if provider.name == "lmstudio-scotts-macbook-air")
+
+    assert provider.node_id == "scotts-macbook-air"
+    assert provider.base_url.endswith("scotts-macbook-air.tailcb8954.ts.net:1234/v1")
+    model_ids = {model.provider_model for model in provider.models}
+    assert "qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled" in model_ids
+    assert "refinedtoolcallv5-3b" in model_ids
+
+
 def test_load_policy_registry(tmp_path: Path) -> None:
     config = tmp_path / "policies.yaml"
     config.write_text(

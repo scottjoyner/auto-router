@@ -105,14 +105,26 @@ nodes:
         tags: [local_llm, lmstudio, openai_compatible, hermes_worker]
         detail: Fresh Beelink LM Studio endpoint for worker dispatch
         priority: 43
-  - node_id: macbook-air
+  - node_id: scotts-macbook-air
     display_name: Mobile Speed Demon (MacBook Air)
     lane: local
     local: true
     can_use_free_api: false
     running: true
-    capabilities: [fast_draft, low_latency]
-    detail: Gemma-3 powerhouse
+    capabilities: [fast_draft, low_latency, quick_iteration, hermes_worker]
+    detail: 8GB RAM M2 MacBook Air; live tailnet LM Studio endpoint for short low-latency drafts and worker-sized tool calls
+    services:
+      - service_id: provider.lmstudio-scotts-macbook-air.api
+        name: MacBook Air LM Studio
+        url: http://scotts-macbook-air.tailcb8954.ts.net:1234/v1
+        health_url: http://scotts-macbook-air.tailcb8954.ts.net:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: scotts-macbook-air
+        provider: lmstudio-scotts-macbook-air
+        status: unknown
+        tags: [lmstudio, local_llm, openai_compatible, tailnet_discovered, hermes_worker]
+        detail: Live tailnet-discovered MacBook Air LM Studio endpoint
+        priority: 45
   - node_id: deathstar
     display_name: GPU Specialist (Deathstar)
     lane: local
@@ -200,6 +212,28 @@ providers:
         tags: [lmstudio, local_llm]
         detail: Provider URL used by auto-router
         priority: 40
+  - provider: lmstudio-joyner
+    node_id: joyner
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/tailnet-joyner]
+    capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+    detail: Tailnet LM Studio node; live model inventory is discovered on refresh and may change over time
+    services:
+      - service_id: provider.lmstudio-joyner.api
+        name: LM Studio Joyner API
+        url: http://joyner.tailcb8954.ts.net:1234/v1
+        health_url: http://joyner.tailcb8954.ts.net:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: joyner
+        provider: lmstudio-joyner
+        status: unknown
+        tags: [lmstudio, local_llm, hermes_worker, tailnet_discovered]
+        detail: Tailnet-discovered provider URL used by auto-router; model identity comes from live probes
+        priority: 5
   - provider: lmstudio-deathstar
     node_id: deathstar
     lane: local

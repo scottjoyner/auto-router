@@ -28,7 +28,8 @@ def test_build_agent_job_request_prefers_codex_for_code_tasks() -> None:
 
     assert request.capability_lane == "tool_required"
     assert request.requires_tools is True
-    assert request.preferred_workers[0] == "hermes"
+    assert request.preferred_workers[0] == "hermes-mini"
+    assert "hermes" in request.preferred_workers
     assert "codex" in request.preferred_workers
     assert request.allow_write is True
     assert request.enabled_toolsets == ["terminal", "file", "code_execution", "skills"]
@@ -43,7 +44,7 @@ def test_build_agent_job_request_prefers_gemini_for_research_tasks() -> None:
         }
     )
 
-    assert request.preferred_workers[0] == "hermes"
+    assert request.preferred_workers[0] == "hermes-draft"
     assert request.evidence_required is True
     assert request.plan_steps[0] == "Gather the relevant evidence or context."
     assert request.validation_metrics == ["evidence_captured", "claims_supported", "final_answer_ready"]
@@ -61,9 +62,12 @@ def test_build_agent_job_request_handoff_prefers_finalize_workers() -> None:
     )
 
     assert request.workflow_stage == "handoff"
-    assert request.preferred_workers[:4] == ["hermes", "codex", "opencode", "gemini-cli"]
+    assert request.preferred_workers[:3] == ["hermes", "hermes-mini", "hermes-draft"]
+    assert "codex" in request.preferred_workers
     assert request.review_checkpoints[0] == "reviewed by local iteration"
     assert request.validation_metrics[0] == "acceptance_criteria_met"
+
+
 def test_agent_job_manager_reports_queued_and_404_safely(tmp_path) -> None:
     manager = AgentJobManager(
         [AgentWorkerConfig(name="noop", type="custom", command="definitely-not-installed", enabled=False)],
@@ -86,6 +90,7 @@ def test_agent_job_manager_lists_records(tmp_path) -> None:
     manager.submit(request)
 
     assert len(manager.list_records()) == 1
+
 
 
 def test_agent_worker_prompt_requests_coordination() -> None:
@@ -159,3 +164,114 @@ def test_agent_worker_hermes_launcher_builds_oneshot_command(monkeypatch, tmp_pa
     assert kwargs["cwd"] == str(tmp_path)
     assert "stdin" not in kwargs
     assert captured.get("input") is None
+
+
+def test_agent_worker_merges_explicit_environment(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self, input=None):
+            captured["input"] = input
+            return b"stdout", b""
+
+        def kill(self):
+            captured["killed"] = True
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    adapter = AgentWorkerAdapter(
+        AgentWorkerConfig(
+            name="hermes",
+            type="hermes",
+            command="hermes",
+            enabled=True,
+            launcher="hermes_oneshot",
+            model="ornith-1.0-35b",
+            provider="lmstudio",
+            env={"LM_BASE_URL": "http://host.docker.internal:1234/v1", "LM_API_KEY": ""},
+        )
+    )
+    request = build_agent_job_request({"task": "Inspect the router status", "task_kind": "operations"})
+
+    result = asyncio.run(adapter.run(request, tmp_path))
+
+    assert result.status == "succeeded"
+    kwargs = captured.get("kwargs")
+    assert isinstance(kwargs, dict)
+    env = kwargs.get("env")
+    assert isinstance(env, dict)
+    assert env["LM_BASE_URL"] == "http://host.docker.internal:1234/v1"
+    assert env["LM_API_KEY"] == ""
+
+
+def test_agent_job_manager_respects_worker_priority_and_allowed_priorities(tmp_path) -> None:
+    manager = AgentJobManager(
+        [
+            AgentWorkerConfig(
+                name="slow",
+                type="hermes",
+                command="python3",
+                enabled=True,
+                priority=40,
+                toolsets=["terminal"],
+                policy={"allowed_priorities": ["background", "batch"]},
+            ),
+            AgentWorkerConfig(
+                name="fast",
+                type="hermes",
+                command="python3",
+                enabled=True,
+                priority=10,
+                toolsets=["terminal"],
+                policy={"allowed_priorities": ["repo_critical", "critical", "batch", "background"]},
+            ),
+        ],
+        base_dir=tmp_path,
+    )
+
+    request = build_agent_job_request(
+        {"task": "burn down backlog", "priority": "repo_critical", "enabled_toolsets": ["terminal"]}
+    )
+
+    adapter = manager._choose_adapter(request)
+
+    assert adapter is not None
+    assert adapter.config.name == "fast"
+
+
+def test_agent_job_manager_falls_back_to_lowest_priority_available_worker(tmp_path) -> None:
+    manager = AgentJobManager(
+        [
+            AgentWorkerConfig(
+                name="fallback-b",
+                type="hermes",
+                command="python3",
+                enabled=True,
+                priority=20,
+                toolsets=["terminal"],
+            ),
+            AgentWorkerConfig(
+                name="fallback-a",
+                type="hermes",
+                command="python3",
+                enabled=True,
+                priority=5,
+                toolsets=["terminal"],
+            ),
+        ],
+        base_dir=tmp_path,
+    )
+
+    request = build_agent_job_request({"task": "inspect the router", "enabled_toolsets": ["terminal"]})
+
+    adapter = manager._choose_adapter(request)
+
+    assert adapter is not None
+    assert adapter.config.name == "fallback-a"

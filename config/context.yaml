@@ -74,18 +74,37 @@ nodes:
     can_use_free_api: false
     running: true
     capabilities: [hermes_worker, terminal, file, fast_draft, local_only]
-    detail: Fresh Ubuntu node, first active Hermes worker candidate; LM Studio on 100.108.99.47:1234 with google/gemma-4-12b
+    detail: Fresh Ubuntu node, first active Hermes worker candidate; LM Studio on http://xwing.tailcb8954.ts.net:1234 with orinth-1.0-9b
     services:
       - service_id: xwing.lmstudio
         name: Xwing LM Studio
-        url: http://100.108.99.47:1234/v1
-        health_url: http://100.108.99.47:1234/v1/models
+        url: http://xwing.tailcb8954.ts.net:1234/v1
+        health_url: http://xwing.tailcb8954.ts.net:1234/v1/models
         service_type: lmstudio
         node_id: xwing
         status: online
         tags: [local_llm, lmstudio, openai_compatible, hermes_worker]
         detail: Primary local model endpoint on xwing for direct worker dispatch
         priority: 35
+  - node_id: joyner
+    display_name: Joyner Tailnet LM Studio
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [hermes_worker, fast_draft, local_only, tailnet_discovered]
+    detail: Tailnet LM Studio node with a live ornith-1.0-9b endpoint
+    services:
+      - service_id: joyner.lmstudio
+        name: Joyner LM Studio
+        url: http://joyner.tailcb8954.ts.net:1234/v1
+        health_url: http://joyner.tailcb8954.ts.net:1234/v1/models
+        service_type: lmstudio
+        node_id: joyner
+        status: online
+        tags: [local_llm, lmstudio, openai_compatible, hermes_worker, tailnet_discovered]
+        detail: Tailnet-discovered Joyner LM Studio endpoint
+        priority: 36
   - node_id: x1-370
     display_name: Network Orchestrator (X1-370)
     lane: local
@@ -124,14 +143,64 @@ nodes:
         tags: [local_llm, lmstudio, openai_compatible, hermes_worker]
         detail: Fresh Beelink LM Studio endpoint for worker dispatch
         priority: 43
-  - node_id: macbook-air-m2
-    display_name: Mobile Speed Demon (MacBook Air M2)
+  - node_id: scott-lenovo-ideapad-330s-15ikb
+    display_name: Lenovo Ideapad 330S LM Studio
     lane: local
     local: true
     can_use_free_api: false
     running: true
-    capabilities: [fast_draft, low_latency, quick_iteration, sophia_response]
-    detail: 8GB RAM M2 MacBook Air; fast for short iterative generation and Sophia responses when online
+    capabilities: [fast_draft, low_latency, quick_iteration, lmstudio]
+    detail: Live tailnet-discovered Lenovo LM Studio endpoint; suitable for short low-risk iterations
+    services:
+      - service_id: scott-lenovo-ideapad-330s-15ikb.lmstudio
+        name: Lenovo Ideapad 330S LM Studio
+        url: http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1
+        health_url: http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1/models
+        service_type: lmstudio
+        node_id: scott-lenovo-ideapad-330s-15ikb
+        status: online
+        tags: [local_llm, lmstudio, openai_compatible, tailnet_discovered]
+        detail: Tailnet-discovered Lenovo LM Studio endpoint
+        priority: 25
+  - node_id: scott-optiplex-9030-aio
+    display_name: OptiPlex 9030 AIO LM Studio
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [fast_draft, low_latency, quick_iteration, lmstudio]
+    detail: Live tailnet-discovered OptiPlex LM Studio endpoint; suitable for short low-risk iterations
+    services:
+      - service_id: scott-optiplex-9030-aio.lmstudio
+        name: OptiPlex 9030 AIO LM Studio
+        url: http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1
+        health_url: http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1/models
+        service_type: lmstudio
+        node_id: scott-optiplex-9030-aio
+        status: online
+        tags: [local_llm, lmstudio, openai_compatible, tailnet_discovered]
+        detail: Tailnet-discovered OptiPlex LM Studio endpoint
+        priority: 65
+  - node_id: scotts-macbook-air
+    display_name: Mobile Speed Demon (MacBook Air)
+    lane: local
+    local: true
+    can_use_free_api: false
+    running: true
+    capabilities: [fast_draft, low_latency, quick_iteration, hermes_worker]
+    detail: 8GB RAM M2 MacBook Air; live tailnet LM Studio endpoint for short low-latency drafts and worker-sized tool calls
+    services:
+      - service_id: provider.lmstudio-scotts-macbook-air.api
+        name: MacBook Air LM Studio
+        url: http://scotts-macbook-air.tailcb8954.ts.net:1234/v1
+        health_url: http://scotts-macbook-air.tailcb8954.ts.net:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: scotts-macbook-air
+        provider: lmstudio-scotts-macbook-air
+        status: online
+        tags: [lmstudio, local_llm, openai_compatible, tailnet_discovered, hermes_worker]
+        detail: Live tailnet-discovered MacBook Air LM Studio endpoint
+        priority: 45
   - node_id: deathstar-XPS-8920
     display_name: GPU Specialist (Deathstar)
     lane: local
@@ -143,8 +212,8 @@ nodes:
     services:
       - service_id: deathstar.lmstudio
         name: Deathstar LM Studio
-        url: http://deathstar-XPS-8920:1234/v1
-        health_url: http://deathstar-XPS-8920:1234/v1/models
+        url: http://100.78.106.121:1234/v1
+        health_url: http://100.78.106.121:1234/v1/models
         service_type: lmstudio
         node_id: deathstar-XPS-8920
         status: unknown
@@ -214,21 +283,43 @@ providers:
     can_use_free_api: false
     free_api_credits: null
     blocked: false
-    aliases: [local/gemma-4-12b, auto/fast]
+    aliases: [local/orinth-1.0-9b, auto/fast]
     capabilities: [chat, streaming, code, json, local_only, hermes_worker]
-    detail: First active Hermes worker candidate on xwing; google/gemma-4-12b baseline model
+    detail: Secondary Hermes worker candidate on xwing; orinth-1.0-9b baseline model
     services:
       - service_id: provider.lmstudio-xwing.api
         name: LM Studio Xwing API
-        url: http://100.108.99.47:1234/v1
-        health_url: http://100.108.99.47:1234/v1/models
+        url: http://xwing.tailcb8954.ts.net:1234/v1
+        health_url: http://xwing.tailcb8954.ts.net:1234/v1/models
         service_type: openai_compatible_api
         node_id: xwing
         provider: lmstudio-xwing
         status: online
-        tags: [lmstudio, local_llm, hermes_worker, primary_worker]
-        detail: Primary local model endpoint for direct worker dispatch
+        tags: [lmstudio, local_llm, hermes_worker, secondary_worker]
+        detail: Secondary local model endpoint for worker dispatch (x1-370 is primary)
         priority: 35
+  - provider: lmstudio-joyner
+    node_id: joyner
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/tailnet-joyner]
+    capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+    detail: Tailnet LM Studio node; live model inventory is discovered on refresh and may change over time
+    services:
+      - service_id: provider.lmstudio-joyner.api
+        name: LM Studio Joyner API
+        url: http://joyner.tailcb8954.ts.net:1234/v1
+        health_url: http://joyner.tailcb8954.ts.net:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: joyner
+        provider: lmstudio-joyner
+        status: unknown
+        tags: [lmstudio, local_llm, hermes_worker, tailnet_discovered]
+        detail: Tailnet-discovered provider URL used by auto-router; model identity comes from live probes
+        priority: 5
   - provider: lmstudio-x1-370
     node_id: x1-370
     lane: local
@@ -236,9 +327,9 @@ providers:
     can_use_free_api: false
     free_api_credits: null
     blocked: false
-    aliases: [local/reasoning-large, local/moe-fast, auto/private, auto/local]
-    capabilities: [chat, streaming, json, code, reasoning, tool_use, large_context, local_only]
-    detail: primary local reasoning endpoint on x1-370; keep load moderate because this node hosts core services
+    aliases: [local/reasoning-large, local/moe-fast, local/tool-call-x1, auto/private, auto/local]
+    capabilities: [chat, streaming, json, code, reasoning, tool_use, large_context, local_only, hermes_worker, primary_worker]
+    detail: Primary Hermes session + reasoning endpoint on x1-370 (ornith-1.0-35b); keep load moderate because this node hosts core services
     services:
       - service_id: provider.lmstudio-x1-370.api
         name: LM Studio X1-370 API
@@ -247,9 +338,9 @@ providers:
         service_type: openai_compatible_api
         node_id: x1-370
         provider: lmstudio-x1-370
-        status: unknown
-        tags: [lmstudio, local_llm, reasoning, privacy_wall]
-        detail: Provider URL used by auto-router
+        status: online
+        tags: [lmstudio, local_llm, reasoning, privacy_wall, primary_worker]
+        detail: Primary Hermes session endpoint (ornith-1.0-35b) used by auto-router
         priority: 30
   - provider: lmstudio-beelink-ryzen-7-mini-pc
     node_id: beelink-ryzen-7-mini-pc
@@ -273,6 +364,50 @@ providers:
         tags: [lmstudio, local_llm, hermes_worker]
         detail: Provider URL used by auto-router
         priority: 32
+  - provider: lmstudio-lenovo-ideapad-330s-15ikb
+    node_id: scott-lenovo-ideapad-330s-15ikb
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/lenovo-fast]
+    capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+    detail: Tailnet-discovered Lenovo LM Studio node; live model inventory comes from refresh
+    services:
+      - service_id: provider.lmstudio-lenovo-ideapad-330s-15ikb.api
+        name: Lenovo Ideapad 330S LM Studio API
+        url: http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1
+        health_url: http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: scott-lenovo-ideapad-330s-15ikb
+        provider: lmstudio-lenovo-ideapad-330s-15ikb
+        status: unknown
+        tags: [lmstudio, local_llm, tailnet_discovered]
+        detail: Tailnet-discovered provider URL used by auto-router
+        priority: 25
+  - provider: lmstudio-optiplex-9030-aio
+    node_id: scott-optiplex-9030-aio
+    lane: local
+    local: true
+    can_use_free_api: false
+    free_api_credits: null
+    blocked: false
+    aliases: [local/optiplex-fast]
+    capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+    detail: Tailnet-discovered OptiPlex LM Studio node; live model inventory comes from refresh
+    services:
+      - service_id: provider.lmstudio-optiplex-9030-aio.api
+        name: OptiPlex 9030 AIO LM Studio API
+        url: http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1
+        health_url: http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1/models
+        service_type: openai_compatible_api
+        node_id: scott-optiplex-9030-aio
+        provider: lmstudio-optiplex-9030-aio
+        status: unknown
+        tags: [lmstudio, local_llm, tailnet_discovered]
+        detail: Tailnet-discovered provider URL used by auto-router
+        priority: 65
   - provider: lmstudio-r2d2
     node_id: x1-370
     lane: local
@@ -304,8 +439,8 @@ providers:
     services:
       - service_id: provider.lmstudio-deathstar.api
         name: LM Studio Deathstar API
-        url: http://deathstar-XPS-8920:1234/v1
-        health_url: http://deathstar-XPS-8920:1234/v1/models
+        url: http://100.78.106.121:1234/v1
+        health_url: http://100.78.106.121:1234/v1/models
         service_type: openai_compatible_api
         node_id: deathstar-XPS-8920
         provider: lmstudio-deathstar

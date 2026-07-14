@@ -91,6 +91,15 @@ providers:
         capabilities: [chat, streaming, code, json, local_only]
         context_window: 32768
 
+  - name: lmstudio-joyner
+    type: lmstudio
+    enabled: true
+    base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
+    priority: 5
+    capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+    quota_class: local
+    models: []
+
   - name: lmstudio-deathstar
     type: lmstudio
     enabled: true
@@ -113,4 +122,20 @@ providers:
       - alias: local/worker-default
         provider_model: vibethinker-3b-hermes
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+        context_window: 131072
+
+  - name: lmstudio-scotts-macbook-air
+    type: lmstudio
+    enabled: true
+    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
+    priority: 150
+    quota_class: local
+    models:
+      - alias: local/quick-iterate
+        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning]
+        context_window: 262144
+      - alias: local/tool-call
+        provider_model: refinedtoolcallv5-3b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
         context_window: 131072

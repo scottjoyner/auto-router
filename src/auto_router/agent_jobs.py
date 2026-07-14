@@ -79,20 +79,34 @@ class AgentJobManager:
     def _choose_adapter(self, request: AgentJobRequest) -> AgentWorkerAdapter | None:
         preferred = [name for name in request.preferred_workers if name]
         requested_toolsets = {tool for tool in request.enabled_toolsets if tool}
+        request_priority = str(request.priority or "").strip()
+
+        def _priority_allowed(adapter: AgentWorkerAdapter) -> bool:
+            policy = adapter.config.policy if isinstance(adapter.config.policy, dict) else {}
+            allowed = policy.get("allowed_priorities")
+            if not isinstance(allowed, list) or not allowed:
+                return True
+            normalized = {str(item).strip() for item in allowed if str(item).strip()}
+            return not normalized or request_priority in normalized
+
+        def _toolsets_match(adapter: AgentWorkerAdapter) -> bool:
+            return not requested_toolsets or requested_toolsets.issubset(set(adapter.config.toolsets or []))
+
+        def _adapter_key(adapter: AgentWorkerAdapter) -> tuple[int, str]:
+            return (int(getattr(adapter.config, "priority", 100)), adapter.config.name)
+
         if preferred:
-            for name in preferred:
-                for adapter in self.adapters:
-                    if adapter.config.name != name or not adapter.available():
-                        continue
-                    if requested_toolsets and not requested_toolsets.issubset(set(adapter.config.toolsets or [])):
-                        continue
-                    return adapter
-        for adapter in self.adapters:
-            if not adapter.available():
-                continue
-            if requested_toolsets and adapter.config.toolsets and not requested_toolsets.issubset(set(adapter.config.toolsets)):
-                continue
-            return adapter
+            ordered: list[AgentWorkerAdapter] = []
+            for index, name in enumerate(preferred):
+                matched = [adapter for adapter in self.adapters if adapter.config.name == name and adapter.available() and _toolsets_match(adapter) and _priority_allowed(adapter)]
+                matched.sort(key=_adapter_key)
+                ordered.extend(matched)
+            if ordered:
+                return ordered[0]
+        fallback = [adapter for adapter in self.adapters if adapter.available() and _toolsets_match(adapter) and _priority_allowed(adapter)]
+        fallback.sort(key=_adapter_key)
+        if fallback:
+            return fallback[0]
         return None
 
     def artifacts_for(self, job_id: str) -> list[dict[str, Any]]:
@@ -184,17 +198,17 @@ def _tool_worker_preferences(payload: dict[str, Any]) -> list[str]:
         preferred.append("xwing")
 
     if workflow_stage in {"handoff", "final", "finalized", "review_final"}:
-        preferred.extend(["hermes", "codex", "opencode", "gemini-cli"])
+        preferred.extend(["hermes", "hermes-mini", "hermes-draft", "codex", "opencode", "gemini-cli"])
     elif task_kind in {"code", "implementation", "refinement", "repair", "review", "repo", "patch"} or any(
         token in task_text for token in ("fix", "patch", "implement", "refactor", "review code", "repository")
     ):
-        preferred.extend(["hermes", "codex", "opencode"])
+        preferred.extend(["hermes-mini", "hermes", "codex", "opencode"])
     elif task_kind in {"research", "analysis", "documentation", "docs"} or any(
         token in task_text for token in ("research", "analyze", "analysis", "compare", "summarize", "document")
     ):
-        preferred.extend(["hermes", "gemini-cli", "codex"])
+        preferred.extend(["hermes-draft", "hermes-mini", "hermes", "gemini-cli", "codex"])
     elif task_kind in {"operations", "terminal", "shell"} or any(token in task_text for token in ("run", "inspect", "diagnose", "terminal")):
-        preferred.extend(["hermes", "opencode", "codex"])
+        preferred.extend(["hermes-mini", "hermes", "opencode", "codex"])
 
     explicit = payload.get("preferred_workers")
     if isinstance(explicit, list):

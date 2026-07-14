@@ -144,9 +144,11 @@ class AgentWorkerConfig(BaseModel):
     type: str
     command: str
     enabled: bool = False
+    priority: int = 100
     launcher: str = "stdin"
     model: str | None = None
     provider: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
     toolsets: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     quota: dict[str, Any] = Field(default_factory=dict)
@@ -174,6 +176,7 @@ class RouteRequest(BaseModel):
     correlation_id: str
     dispatch_id: str | None = None
     task_id: str | None = None
+    model: str | None = None
     intent: RouteIntent = Field(default_factory=RouteIntent)
     context_requirements: ContextRequirements = Field(default_factory=ContextRequirements)
     tools: list[dict[str, Any]] | None = None

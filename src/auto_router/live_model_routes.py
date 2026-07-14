@@ -36,8 +36,10 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
 
     @app.post("/admin/live-models/refresh")
     async def refresh_live_models(provider: str | None = None) -> dict[str, Any]:
+        merge_discovered_lmstudio_providers(state, provider)
         providers = selected_refresh_providers(state, provider)
-        providers.extend(discovered_lmstudio_providers(state, provider))
+        if provider is None:
+            providers.extend(item for item in state.providers.enabled() if item.type == "lmstudio")
         providers = dedupe_providers(providers)
         if provider and not providers:
             raise HTTPException(status_code=404, detail={"error": "provider not found or not enabled", "provider": provider})
@@ -51,8 +53,10 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
 
     @app.post("/admin/providers/probe")
     async def probe_provider_models(provider: str | None = None) -> dict[str, Any]:
+        merge_discovered_lmstudio_providers(state, provider)
         providers = selected_probe_providers(state, provider)
-        providers.extend(discovered_lmstudio_providers(state, provider))
+        if provider is None:
+            providers.extend(item for item in state.providers.enabled() if item.type == "lmstudio")
         providers = dedupe_providers(providers)
         if provider and not providers:
             raise HTTPException(status_code=404, detail={"error": "provider not found or not enabled", "provider": provider})
@@ -112,7 +116,7 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
     return records
 
 
-def discovered_lmstudio_providers(state: Any, provider_name: str | None = None) -> list[ProviderConfig]:
+def discovered_lmstudio_providers(state: Any, provider_name: str | None = None, include_known: bool = False) -> list[ProviderConfig]:
     candidates: list[ContextService] = []
     context = getattr(state, "context", None)
     if context is not None and hasattr(context, "all_services"):
@@ -121,14 +125,16 @@ def discovered_lmstudio_providers(state: Any, provider_name: str | None = None) 
 
     providers_attr = getattr(state, "providers", None)
     enabled_known = providers_attr.enabled() if providers_attr and hasattr(providers_attr, "enabled") else []
-    known = {provider.name.strip().lower() for provider in getattr(providers_attr, "providers", []) or []}
-    known.update(provider.name.strip().lower() for provider in enabled_known)
-    known.update(
-        getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(
-            getattr(provider, "provider", getattr(provider, "name", ""))
+    known = set()
+    if not include_known:
+        known = {provider.name.strip().lower() for provider in getattr(providers_attr, "providers", []) or []}
+        known.update(provider.name.strip().lower() for provider in enabled_known)
+        known.update(
+            getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(
+                getattr(provider, "provider", getattr(provider, "name", ""))
+            )
+            for provider in getattr(context, "providers", []) or []
         )
-        for provider in getattr(context, "providers", []) or []
-    )
 
     target_provider = None
     if provider_name:
@@ -141,7 +147,7 @@ def discovered_lmstudio_providers(state: Any, provider_name: str | None = None) 
         service_name = service.service_id.strip().lower()
         if target_provider and config_name != target_provider and service_name != target_provider:
             continue
-        if config_name in known:
+        if not include_known and config_name in known:
             continue
         providers.append(config)
     return providers
@@ -157,6 +163,37 @@ def dedupe_providers(providers: list[ProviderConfig]) -> list[ProviderConfig]:
         seen.add(key)
         deduped.append(provider)
     return deduped
+
+
+def merge_discovered_lmstudio_providers(state: Any, provider_name: str | None = None) -> int:
+    discovered = dedupe_providers(discovered_lmstudio_providers(state, provider_name, include_known=True))
+    if not discovered:
+        return 0
+    registry = getattr(state, "providers", None)
+    if registry is None or not hasattr(registry, "providers"):
+        return 0
+    providers = list(registry.providers)
+    index_by_name = {provider.name.strip().lower(): idx for idx, provider in enumerate(providers)}
+    changed = 0
+    for provider in discovered:
+        key = provider.name.strip().lower()
+        if key in index_by_name:
+            idx = index_by_name[key]
+            current = providers[idx]
+            providers[idx] = current.model_copy(
+                update={
+                    "enabled": bool(current.enabled or provider.enabled),
+                    "base_url": provider.base_url or current.base_url,
+                    "node_id": provider.node_id or current.node_id,
+                    "priority": min(getattr(current, "priority", 100), getattr(provider, "priority", 100)),
+                }
+            )
+        else:
+            providers.append(provider)
+            index_by_name[key] = len(providers) - 1
+        changed += 1
+    registry.providers = providers
+    return changed
 
 
 def _provider_from_service(service: ContextService) -> ProviderConfig:

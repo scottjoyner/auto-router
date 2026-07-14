@@ -146,8 +146,8 @@ class OpenAICompatibleProvider:
                 headers={key.lower(): value for key, value in response.headers.items()},
             )
         data = response.json()
-        usage = data.get("usage") if isinstance(data, dict) else None
-        return ProviderResponse(provider=self.name, model=provider_model, data=data, usage=usage or {}, status_code=response.status_code)
+        usage = _normalize_usage(data.get("usage") if isinstance(data, dict) else None)
+        return ProviderResponse(provider=self.name, model=provider_model, data=data, usage=usage, status_code=response.status_code)
 
     async def _stream_post(self, path: str, payload: dict[str, Any], provider_model: str) -> ProviderStreamResponse:
         if not self.is_configured():
@@ -195,14 +195,48 @@ class OpenAICompatibleProvider:
 
 
 def normalize_model_record(item: dict[str, Any]) -> dict[str, Any]:
-    model_id = item.get("id") or item.get("name") or item.get("model")
+    model_id = item.get("id") or item.get("key") or item.get("name") or item.get("display_name") or item.get("model")
     return {
         "id": model_id,
         "object": item.get("object", "model"),
-        "owned_by": item.get("owned_by") or item.get("owner"),
+        "owned_by": item.get("owned_by") or item.get("publisher") or item.get("owner"),
         "created": item.get("created"),
         "raw": item,
     }
+
+
+def _normalize_usage(usage: Any) -> dict[str, int]:
+    if not isinstance(usage, dict):
+        return {}
+    normalized: dict[str, int] = {}
+    for key in ("prompt_tokens", "input_tokens", "completion_tokens", "output_tokens", "total_tokens"):
+        value = usage.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            if value is not None:
+                normalized[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict):
+        reasoning = details.get("reasoning_tokens")
+        if not isinstance(reasoning, bool):
+            try:
+                if reasoning is not None:
+                    normalized["reasoning_tokens"] = int(reasoning)
+            except (TypeError, ValueError):
+                pass
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if not isinstance(cached, bool):
+            try:
+                if cached is not None:
+                    normalized["cached_tokens"] = int(cached)
+            except (TypeError, ValueError):
+                pass
+    return normalized
 
 
 def parse_retry_after(headers: httpx.Headers | dict[str, str]) -> int | None:
@@ -453,15 +487,15 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             "quota_mode": quota_mode,
             "latency_ms": int(response.elapsed.total_seconds() * 1000),
         }
-        
+        usage = _normalize_usage(data.get("usage") if isinstance(data, dict) else None)
         return ProviderResponse(
-            provider=self.config.id or "agentgateway-sidecar",
+            provider=self.config.id or self.name or "agentgateway-sidecar",
             model=provider_model,
             data=data,
-            usage=usage if isinstance(usage, dict) else {},
+            usage=usage,
             status_code=response.status_code,
         )
-    
+
     async def stream_chat_completions(
         self, 
         request: RouterRequest, 

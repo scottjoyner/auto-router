@@ -43,3 +43,25 @@ def test_trace_id_propagation(assistx_client: httpx.Client) -> None:
     tid = "test-tid-integration"
     resp = assistx_client.get("/health", headers={"X-Trace-ID": tid})
     assert resp.headers.get("X-Trace-ID") == tid
+
+
+def test_assistx_router_projection_surface(assistx_client: httpx.Client) -> None:
+    resp = assistx_client.get("/api/router/context-projection")
+    assert resp.is_success, f"Context projection failed: {resp.status_code}"
+
+    projection = resp.json()
+    metadata = projection.get("metadata", {})
+    nodes = projection.get("nodes", [])
+
+    assert projection.get("source") == "assistx"
+    assert metadata.get("read_only") is True
+    assert metadata.get("projection_version") == "router-context-v1"
+    assert any(node.get("node_id") == "assistx-api" for node in nodes)
+
+    backlog = assistx_client.get("/api/router/backlog-candidates?limit=5&queue=backlog&dry_run=true")
+    assert backlog.is_success, f"Backlog candidates failed: {backlog.status_code}"
+
+    backlog_payload = backlog.json()
+    assert backlog_payload.get("read_only") is True
+    assert backlog_payload.get("dry_run") is True
+    assert isinstance(backlog_payload.get("tasks"), list)

@@ -5,7 +5,12 @@
     {% set service_stats = namespace(online=0, offline=0, degraded=0, blocked=0, unknown=0) %}
     {% set services = context.all_services() %}
     {% set context_projection = context_projection|default({}) %}
-    {% set page_sections = ui_page_sections|default([]) %}
+    {% set freshness = namespace(total=0, stale=0, oldest=0) %}
+    {% for item in live_model_freshness %}
+        {% set freshness.total = freshness.total + 1 %}
+        {% if item.stale %}{% set freshness.stale = freshness.stale + 1 %}{% endif %}
+        {% if item.age_seconds is not none and item.age_seconds > freshness.oldest %}{% set freshness.oldest = item.age_seconds %}{% endif %}
+    {% endfor %}
     {% for event in recent_usage %}
         {% set provider = event.provider_id if event.provider_id is defined else event.provider %}
         {% set model = event.model_id if event.model_id is defined else event.model %}
@@ -34,8 +39,9 @@
                 <span class="rounded-full border border-white/10 bg-black/20 px-3 py-1 font-bold text-router-muted">localhost:8088</span>
                 <span class="rounded-full px-3 py-1 font-bold {% if assistx_tasks_configured %}bg-emerald-400/15 text-emerald-200{% else %}bg-rose-400/15 text-rose-200{% endif %}">AssistX tasks {{ 'configured' if assistx_tasks_configured else 'missing' }}</span>
                 <span class="rounded-full px-3 py-1 font-bold {% if assistx_event_sink_configured %}bg-emerald-400/15 text-emerald-200{% else %}bg-amber-300/15 text-amber-100{% endif %}">Event sink {{ 'configured' if assistx_event_sink_configured else 'missing' }}</span>
-                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">outbox {{ outbox_summary.pending|default(0) }} pending</span>
-                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">circuits {{ circuits|length }}</span>
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">{{ freshness.total }} live snapshots</span>
+                <span class="rounded-full {% if freshness.stale > 0 %}bg-amber-300/15 text-amber-100{% else %}bg-emerald-400/15 text-emerald-200{% endif %} px-3 py-1 font-bold">{{ freshness.stale }} stale</span>
+                <span class="rounded-full bg-white/10 px-3 py-1 font-bold text-router-muted">oldest {{ freshness.oldest }}s</span>
             </div>
         </div>
         <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -81,6 +87,15 @@
             </div>
         </div>
         <div class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
+                <div class="text-xs font-semibold uppercase tracking-wider text-router-muted">Freshness ledger</div>
+                <div class="mt-2 grid grid-cols-3 gap-2 text-sm">
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Snapshots</div><div class="text-lg font-black text-white">{{ freshness.total }}</div></div>
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Stale</div><div class="text-lg font-black {% if freshness.stale > 0 %}text-amber-100{% else %}text-emerald-200{% endif %}">{{ freshness.stale }}</div></div>
+                    <div class="rounded-xl bg-black/20 px-3 py-2"><div class="text-[10px] uppercase text-router-muted">Oldest</div><div class="text-lg font-black text-white">{{ freshness.oldest }}s</div></div>
+                </div>
+                <div class="mt-3 text-xs text-router-muted">This is the live model registry freshness view; stale snapshots should be investigated before trusting route selection.</div>
+            </div>
             {% for section in page_sections %}
             <div class="rounded-2xl border border-router-line bg-router-panel2 p-4">
                 <div class="font-bold text-white">{{ section.title }}</div>
@@ -132,7 +147,7 @@
                     <div class="font-bold text-white">{{ provider.provider_id if provider.provider_id is defined else provider.provider }}</div>
                     <span class="rounded-full px-2 py-1 text-[10px] font-bold uppercase {% if provider.health_score >= 80 %}bg-emerald-400/15 text-emerald-200{% elif provider.health_score >= 60 %}bg-yellow-400/15 text-yellow-100{% else %}bg-rose-400/15 text-rose-200{% endif %}">score {{ provider.health_score }}</span>
                 </div>
-                <div class="mt-1 text-xs text-router-muted">{{ provider.model_count }} models · {{ provider.success_rate }} success · {{ provider.age_seconds }}s old{% if provider.drift %} · drift{% endif %}</div>
+                <div class="mt-1 text-xs text-router-muted">{{ provider.model_count }} models · {{ provider.success_rate }} success · {{ provider.age_seconds }}s old{% if provider.stale %} · stale{% elif provider.drift %} · drift{% endif %}</div>
                 {% if provider.error %}<div class="mt-2 line-clamp-2 text-xs text-rose-200">{{ provider.error }}</div>{% endif %}
             </div>
             {% else %}

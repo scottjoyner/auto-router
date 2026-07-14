@@ -450,7 +450,7 @@ def test_dashboard_summary_renders_local_and_api_model_sections() -> None:
     assert "Unified router + AssistX control surface" in html
     assert "Backlog task routing" in html
     assert "AssistX dispatch path" in html
-    assert "pending" in html
+    assert "Pending" in html
     assert "running" in html
     assert "next n/a" in html
     text = render_ops_metrics(

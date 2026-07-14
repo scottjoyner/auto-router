@@ -34,6 +34,7 @@ from auto_router.models import Priority, ProviderCandidate, ProviderHealth, Prov
 from auto_router.policy import PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
+from auto_router.live_model_routes import merge_discovered_lmstudio_providers
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
 from auto_router.route_event_patch import install_route_event_patch
@@ -70,6 +71,7 @@ state = AppState()
 async def load_state() -> None:
     settings = get_settings()
     state.providers = load_provider_registry(settings.provider_config)
+    merge_discovered_lmstudio_providers(state)
     state.policies = load_policy_registry(settings.policy_config)
     state.agents = load_agent_worker_registry(settings.agent_config)
 
@@ -114,6 +116,23 @@ async def refresh_context_task() -> None:
             print(f"Error refreshing context: {exc}")
 
 
+async def refresh_tailnet_provider_task() -> None:
+    while True:
+        await asyncio.sleep(120)
+        try:
+            settings = get_settings()
+            changed = merge_discovered_lmstudio_providers(state)
+            if not changed:
+                continue
+            state.context = await load_context_snapshot_async(settings.context_config, state.providers, state.agents)
+            state.context = _project_live_models(state.context, state.providers, state.model_registry.latest_inventory())
+            state.signal_registry.save_snapshot(state.context)
+            state.context = state.signal_registry.hydrate_context(state.context)
+            state.policy_engine.context = state.context
+        except Exception as exc:  # pragma: no cover
+            print(f"Error refreshing tailnet providers: {exc}")
+
+
 async def outbox_dispatch_task() -> None:
     settings = get_settings()
     interval = max(float(settings.assistx_event_dispatch_interval_seconds), 1.0)
@@ -154,14 +173,27 @@ def _context_projection_summary() -> dict[str, Any]:
 async def lifespan(_: FastAPI):
     await load_state()
     refresh_task = asyncio.create_task(refresh_context_task())
+    tailnet_refresh_task = asyncio.create_task(refresh_tailnet_provider_task())
     dispatch_task = asyncio.create_task(outbox_dispatch_task())
+    from auto_router.model_placement import RECONCILE_SECONDS, placement_reconcile_task
+
+    placement_task = None
+    if RECONCILE_SECONDS > 0:
+        placement_task = asyncio.create_task(placement_reconcile_task())
     try:
         yield
     finally:
         refresh_task.cancel()
+        tailnet_refresh_task.cancel()
         dispatch_task.cancel()
+        if placement_task is not None:
+            placement_task.cancel()
         try:
             await refresh_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await tailnet_refresh_task
         except asyncio.CancelledError:
             pass
         try:
@@ -347,6 +379,21 @@ async def admin_providers() -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
+@app.get("/admin/placement")
+async def admin_placement() -> dict[str, Any]:
+    from auto_router.model_placement import compute_plan
+
+    return compute_plan(state)
+
+
+@app.post("/admin/load")
+async def admin_load(apply: bool | None = None) -> dict[str, Any]:
+    from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
+
+    do_apply = apply if apply is not None else AUTOLOAD_ENABLED
+    return await reconcile_once(state, apply=do_apply)
+
+
 @app.get("/admin/agent-workers")
 async def admin_agent_workers() -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
@@ -376,6 +423,10 @@ async def list_models() -> dict[str, Any]:
         lane = _lane_for_provider(provider, context_provider)
         for model in provider.models:
             canonical_model = state.context.canonical_model_id(f"{provider.name}.{model.provider_model}")
+            raw_ctx = getattr(model, "context_length", None) or getattr(model, "context_window", None)
+            if isinstance(raw_ctx, dict):
+                raw_ctx = raw_ctx.get("value") or raw_ctx.get("context_length")
+            ctx = int(raw_ctx) if isinstance(raw_ctx, (int, float)) and raw_ctx > 0 else 128000
             data.append(
                 {
                     "id": canonical_model,
@@ -388,20 +439,22 @@ async def list_models() -> dict[str, Any]:
                     "local": lane == "local",
                     "free_api": lane == "free_api",
                     "blocked": bool(context_provider.is_blocked) if context_provider is not None else False,
+                    "context_length": ctx,
+                    "context_window": ctx,
                 }
             )
     data.extend(
         [
-            {"id": "auto/fast", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/flash-start", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/high-quality", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/code", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/review", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/iterate", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/finalize", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/local", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/sophia", "object": "model", "created": 0, "owned_by": "auto-router"},
-            {"id": "auto/backlog-burn", "object": "model", "created": 0, "owned_by": "auto-router"},
+            {"id": "auto/fast", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/flash-start", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/high-quality", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/code", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/review", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/iterate", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/finalize", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/local", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/sophia", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
+            {"id": "auto/backlog-burn", "object": "model", "created": 0, "owned_by": "auto-router", "context_length": 128000, "context_window": 128000},
         ]
     )
     return {"object": "list", "data": data}

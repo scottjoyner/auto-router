@@ -1,6 +1,9 @@
+from __future__ import annotations
+
+from typing import cast
+
 from auto_router.live_models import LiveModelSnapshot
 from auto_router.model_registry import ModelRegistryStore
-
 
 def test_model_registry_saves_and_restores_latest_snapshot(tmp_path) -> None:
     store = ModelRegistryStore(f"sqlite:///{tmp_path / 'router.sqlite3'}")
@@ -95,4 +98,29 @@ def test_model_registry_records_probe_history_and_health_scores(tmp_path) -> Non
     assert probe_summary["drift"] == 1
     assert probe_summary["healthy"] == 0
     assert health_reports[0]["provider"] == "cerebras"
-    assert 0 <= int(health_reports[0]["health_score"]) <= 100
+    assert 0 <= int(cast(int, health_reports[0]["health_score"])) <= 100
+
+
+def test_model_registry_marks_expired_probe_as_stale_and_degraded(tmp_path) -> None:
+    store = ModelRegistryStore(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    expired = LiveModelSnapshot(
+        provider="lmstudio-xwing",
+        ok=True,
+        fetched_at=1,
+        expires_at=1,
+        models=[{"id": "xwing.model-1"}],
+        latency_ms=12,
+    )
+
+    store.save_snapshot(expired)
+    store.save_probe(expired, latency_ms=12)
+
+    report = store.provider_health_reports()[0]
+    probe_summary = store.probe_summary()
+
+    assert report["provider"] == "lmstudio-xwing"
+    assert report["stale"] is True
+    assert report["ok"] is False
+    assert int(cast(int, report["health_score"])) <= 59
+    assert probe_summary["stale"] == 1
+    assert probe_summary["healthy"] == 0

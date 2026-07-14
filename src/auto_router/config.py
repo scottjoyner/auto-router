@@ -451,20 +451,20 @@ def _merge_live_model(
         detail = f"{base.detail} · {overlay.detail}"
     return base.model_copy(
         update={
-            "name": base.name or overlay.name,
-            "provider": base.provider or overlay.provider,
-            "provider_model": base.provider_model or overlay.provider_model,
+            "name": overlay.name or base.name,
+            "provider": overlay.provider or base.provider,
+            "provider_model": overlay.provider_model or base.provider_model,
             "lane": base.lane if base.lane is not None else overlay.lane,
-            "local": base.local or overlay.local,
-            "can_use_free_api": base.can_use_free_api or overlay.can_use_free_api,
-            "blocked": base.blocked or overlay.blocked,
-            "node_id": base.node_id or overlay.node_id,
+            "local": overlay.local or base.local,
+            "can_use_free_api": overlay.can_use_free_api or base.can_use_free_api,
+            "blocked": overlay.blocked or base.blocked,
+            "node_id": overlay.node_id or base.node_id,
             "aliases": aliases,
-            "capabilities": set(base.capabilities) | set(overlay.capabilities),
-            "context_window": base.context_window if base.context_window is not None else overlay.context_window,
-            "quota": dict(base.quota) or dict(overlay.quota),
+            "capabilities": set(overlay.capabilities) | set(base.capabilities),
+            "context_window": overlay.context_window if overlay.context_window is not None else base.context_window,
+            "quota": dict(overlay.quota) or dict(base.quota),
             "detail": detail,
-            "services": _merge_services(list(base.services), list(overlay.services)),
+            "services": _merge_services(list(overlay.services), list(base.services)),
             "priority": min(base.priority, overlay.priority),
         }
     )
@@ -497,7 +497,7 @@ def _live_model_context(
         blocked=lane == ExecutionLane.blocked,
         node_id=provider.node_id,
         aliases=_unique_list(aliases),
-        capabilities=set(),
+        capabilities=set(model_record.get("capabilities") or []) or {"chat", "streaming", "code", "json", "local_only"},
         detail=detail,
         priority=provider.priority,
     )
@@ -521,7 +521,10 @@ def _project_live_models(
             if matched is None:
                 live_model_map[live_model.model_id] = live_model
                 continue
-            live_model_map[matched.model_id] = _merge_live_model(matched, live_model)
+            merged = _merge_live_model(matched, live_model)
+            if matched.model_id != live_model.model_id:
+                live_model_map.pop(matched.model_id, None)
+            live_model_map[live_model.model_id] = merged
     snapshot.models = sorted(live_model_map.values(), key=lambda item: (item.priority, item.provider or "", item.name.lower()))
     for provider in snapshot.providers:
         provider.models = [model for model in snapshot.models if model.provider == provider.provider]
@@ -531,6 +534,8 @@ def _project_live_models(
 def _provider_context(provider: ProviderConfig) -> ContextProvider:
     lane = _lane_from_provider(provider)
     aliases = [provider.id or provider.name, provider.name, provider.type]
+    if provider.type == "lmstudio" and provider.node_id:
+        aliases.append(f"local/tailnet-{provider.node_id.strip().lower()}")
     model_aliases = [model.alias for model in provider.models if model.alias]
     aliases.extend(sorted(set(model_aliases)))
     model_detail = ""
