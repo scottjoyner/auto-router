@@ -34,7 +34,7 @@ from auto_router.models import Priority, ProviderCandidate, ProviderHealth, Prov
 from auto_router.policy import PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
-from auto_router.live_model_routes import merge_discovered_lmstudio_providers
+from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
 from auto_router.route_event_patch import install_route_event_patch
@@ -133,6 +133,27 @@ async def refresh_tailnet_provider_task() -> None:
             print(f"Error refreshing tailnet providers: {exc}")
 
 
+async def refresh_live_models_task() -> None:
+    """Continuously poll every LM Studio provider's /v1/models endpoint (every few
+    seconds) and fold the live model list straight into the routing context. This
+    is what keeps each node's advertised models current in real time -- e.g. when a
+    node swaps its loaded model (3B -> a medium/large model) the new model is added
+    to routing immediately instead of going stale for the cache TTL, and a model
+    that gets unloaded is dropped just as fast. Runs forever ("never stops")."""
+    settings = get_settings()
+    interval = max(float(getattr(settings, "live_model_poll_interval_seconds", 5.0)), 1.0)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            merge_discovered_lmstudio_providers(state)
+            providers = [p for p in state.providers.enabled() if p.type == "lmstudio"]
+            if not providers:
+                continue
+            await refresh_provider_models(state, providers)
+        except Exception as exc:  # pragma: no cover
+            print(f"Error polling live models: {exc}")
+
+
 async def outbox_dispatch_task() -> None:
     settings = get_settings()
     interval = max(float(settings.assistx_event_dispatch_interval_seconds), 1.0)
@@ -174,6 +195,7 @@ async def lifespan(_: FastAPI):
     await load_state()
     refresh_task = asyncio.create_task(refresh_context_task())
     tailnet_refresh_task = asyncio.create_task(refresh_tailnet_provider_task())
+    live_models_poll_task = asyncio.create_task(refresh_live_models_task())
     dispatch_task = asyncio.create_task(outbox_dispatch_task())
     from auto_router.model_placement import RECONCILE_SECONDS, placement_reconcile_task
 
@@ -185,11 +207,16 @@ async def lifespan(_: FastAPI):
     finally:
         refresh_task.cancel()
         tailnet_refresh_task.cancel()
+        live_models_poll_task.cancel()
         dispatch_task.cancel()
         if placement_task is not None:
             placement_task.cancel()
         try:
             await refresh_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await live_models_poll_task
         except asyncio.CancelledError:
             pass
         try:

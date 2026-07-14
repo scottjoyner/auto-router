@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -9,7 +10,7 @@ from auto_router.context import ContextService
 from auto_router.config import _project_live_models
 from auto_router.live_models import LiveModelCache
 from auto_router.model_registry import ModelRegistryStore
-from auto_router.models import ProviderConfig
+from auto_router.models import ModelConfig, ProviderConfig
 from auto_router.providers import build_provider
 from auto_router.service_scanner import discover_tailnet_lmstudio_services, is_lmstudio_service
 from auto_router.settings import get_settings
@@ -85,9 +86,20 @@ async def fetch_provider_models(provider: ProviderConfig) -> list[dict[str, Any]
     return await adapter.list_models()
 
 
+# Tracks the last known up/down state per provider so the continuous poll loop
+# only re-projects the live models into the routing context when something
+# actually changed (a model set drifted, or a provider came up/went down).
+_LIVE_OK_STATE: dict[str, bool] = {}
+
+
 async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for item in providers:
+    """Fetch /v1/models for every provider concurrently and fold the results into
+    the live-model cache + registry. Re-projects the live models into the routing
+    context only when something actually changed, so a continuous poll loop stays
+    cheap while still propagating model swaps (e.g. a node loading a medium/large
+    model in place of its 3B) into routing instantly."""
+
+    async def _refresh_one(item: ProviderConfig) -> dict[str, Any]:
         started = time.perf_counter()
         previous = state.model_registry.latest_for_provider(item.name)
         snapshot = await state.live_models.refresh_provider(item, fetch_provider_models)
@@ -108,12 +120,80 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
         record = snapshot.to_dict() | {"probe": probe or {"provider": snapshot.provider, "error": registry_error, "ok": snapshot.ok}}
         if registry_error:
             record["registry_error"] = registry_error
-        records.append(record)
+        return record
+
+    records = await asyncio.gather(*(_refresh_one(item) for item in providers))
+    changed = False
+    for rec in records:
+        provider = rec.get("provider")
+        now_ok = bool(rec.get("ok", True))
+        prior = _LIVE_OK_STATE.get(provider)
+        if rec.get("drift") or prior is None or prior != now_ok:
+            changed = True
+        _LIVE_OK_STATE[provider] = now_ok
+    if changed:
+        try:
+            hydrate_live_models_from_registry(state)
+        except Exception:
+            pass
+    # Fold the live LM Studio model list into the provider registry that /v1/models
+    # + routing read from. This is what makes a newly-loaded model (e.g. a node
+    # swapping its 3B for a 35B) instantly routable, and an unloaded model instantly
+    # dropped -- the live model list is the source of truth for what can serve.
     try:
-        hydrate_live_models_from_registry(state)
-    except Exception:
-        pass
+        synced = sync_live_models_to_providers(state)
+        if synced:
+            print(f"[live-poll] synced {synced} provider model set(s) into routing")
+    except Exception as exc:
+        print(f"[live-poll] sync_live_models_to_providers error: {exc}")
     return records
+
+
+def _infer_capabilities(model_id: str, metadata: dict) -> set[str]:
+    mid = (model_id or "").lower()
+    mtype = str(metadata.get("type") or "").lower()
+    if "embed" in mid or mtype == "embedding":
+        return {"embed"}
+    arch = str(metadata.get("architecture") or "").lower()
+    if "vision" in mid or "vl" in mid or "vision" in arch:
+        return {"vision", "chat", "completion"}
+    return {"chat", "completion"}
+
+
+def sync_live_models_to_providers(state: Any) -> int:
+    """Write the live-discovered model list for each lmstudio provider into
+    ``state.providers`` (which /v1/models + request routing consume). Returns the
+    number of providers whose model set changed."""
+    registry = getattr(state, "providers", None)
+    live = getattr(state, "live_models", None)
+    if registry is None or live is None or not hasattr(registry, "providers"):
+        return 0
+    changed = 0
+    providers = list(registry.providers)
+    for idx, provider in enumerate(providers):
+        if provider.type != "lmstudio":
+            continue
+        snap = live.get(provider.name) or live.get(provider.id)
+        if snap is None or not snap.ok:
+            continue
+        static = {m.provider_model: m for m in provider.models}
+        new_models: list[ModelConfig] = []
+        for entry in snap.models:
+            mid = entry.get("id") if isinstance(entry, dict) else str(entry)
+            if not mid:
+                continue
+            meta = entry.get("metadata", {}) if isinstance(entry, dict) else {}
+            ctx = meta.get("context_length") or meta.get("context_window")
+            static_model = static.get(mid)
+            caps = set(static_model.capabilities) if (static_model and static_model.capabilities) else _infer_capabilities(mid, meta)
+            cw = int(ctx) if ctx else (static_model.context_window if static_model else None)
+            new_models.append(ModelConfig(alias=mid, provider_model=mid, capabilities=caps, context_window=cw))
+        if [m.provider_model for m in new_models] != [m.provider_model for m in provider.models]:
+            providers[idx] = provider.model_copy(update={"models": new_models})
+            changed += 1
+    if changed:
+        registry.providers = providers
+    return changed
 
 
 def discovered_lmstudio_providers(state: Any, provider_name: str | None = None, include_known: bool = False) -> list[ProviderConfig]:
