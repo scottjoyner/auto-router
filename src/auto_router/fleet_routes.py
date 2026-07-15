@@ -41,9 +41,15 @@ def _publish(report: dict[str, Any]) -> None:
 async def node_report(request: Request) -> dict[str, Any]:
     body = await request.json()
     hostname = str(body.get("hostname") or body.get("host_name") or "unknown")
+    # Prefer the real connection source IP (the node's tailscale IP) so consumers
+    # can match reports to fleet nodes by IP, not just by (sometimes mismatched)
+    # hostname. Fall back to an explicitly-sent ip for non-socket transports.
+    src_ip = None
+    if request.client is not None:
+        src_ip = request.client.host
     report = {
         "hostname": hostname,
-        "ip": body.get("ip"),
+        "ip": src_ip or body.get("ip"),
         "library": body.get("library") or [],
         "loaded": body.get("loaded") or [],
         "specs": body.get("specs") or {},
