@@ -313,7 +313,10 @@ async def health() -> dict[str, Any]:
     gateway_status = await build_agentgateway_status()
     context_projection = _context_projection_summary()
     outbox_pressure = build_outbox_pressure_status(state)
-    overall_ok = not open_circuits and outbox_pressure["level"] == "ok"
+    # A live telemetry trickle sits at 'warning' (draining, below the critical
+    # threshold) during normal operation; only 'critical' backlog or dead-letters
+    # should mark the whole system degraded. Open circuits still always degrade.
+    overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
     redis_ok = "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:

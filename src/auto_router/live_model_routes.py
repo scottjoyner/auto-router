@@ -199,6 +199,19 @@ def _infer_capabilities(model_id: str, metadata: dict) -> set[str]:
     return {"chat", "completion"}
 
 
+def _is_model_loaded(entry: Any) -> bool:
+    """A model is resident iff LM Studio reports loaded instances. The top-level
+    ``loaded`` boolean is unreliable; the authoritative signal is
+    ``raw.loaded_instances`` (non-empty = actually running on the endpoint)."""
+    if not isinstance(entry, dict):
+        return False
+    raw = entry.get("raw", {}) or {}
+    instances = raw.get("loaded_instances") or entry.get("loaded_instances") or []
+    if isinstance(instances, list) and instances:
+        return True
+    return bool(entry.get("loaded"))
+
+
 def sync_live_models_to_providers(state: Any) -> int:
     """Write the live-discovered model list for each lmstudio provider into
     ``state.providers`` (which /v1/models + request routing consume). Returns the
@@ -218,6 +231,13 @@ def sync_live_models_to_providers(state: Any) -> int:
         static = {m.provider_model: m for m in provider.models}
         new_models: list[ModelConfig] = []
         for entry in snap.models:
+            # Only advertise models that are actually resident on the endpoint.
+            # LM Studio's model list includes the whole downloaded catalog, so
+            # advertising unloaded models would route requests to empty endpoints
+            # (HTTP 400/500) and trip circuit breakers. Skip anything whose
+            # loaded_instances list is empty.
+            if not _is_model_loaded(entry):
+                continue
             mid = entry.get("id") if isinstance(entry, dict) else str(entry)
             if not mid:
                 continue
