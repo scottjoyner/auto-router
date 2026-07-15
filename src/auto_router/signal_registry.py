@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -446,6 +447,12 @@ class ContextSignalStore:
         self.database_path = self._path_from_url(database_url)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        # `latest_signals` (called on EVERY request via hydrate_context) was a
+        # full table scan + per-row object build that held the event-loop GIL and
+        # wedged the router. Cache it for a short TTL; signals only change on polls.
+        self._latest_cache: list | None = None
+        self._latest_cache_ts: float = 0.0
+        self._latest_ttl: float = float(os.getenv("SIGNAL_LATEST_TTL", "5"))
 
     def save_snapshot(self, snapshot: ContextSnapshot) -> None:
         now = int(time.time())
@@ -481,7 +488,7 @@ class ContextSignalStore:
                     ),
                 )
 
-    def latest_signals(self, limit: int | None = None) -> list[ContextSignal]:
+    def _compute_latest_signals(self) -> list[ContextSignal]:
         now = int(time.time())
         with self._connect() as conn:
             rows = conn.execute(
@@ -490,6 +497,10 @@ class ContextSignalStore:
                 FROM context_signal_events
                 WHERE active = 1
                   AND (expires_at IS NULL OR expires_at > ?)
+                  AND id IN (
+                      SELECT MAX(id) FROM context_signal_events
+                      WHERE active = 1 GROUP BY signal_id
+                  )
                 ORDER BY saved_at DESC, observed_at DESC, id DESC
                 """,
                 (now,),
@@ -501,7 +512,14 @@ class ContextSignalStore:
                 latest_rows[signal_id] = row
         signals = [self._row_to_signal(row) for row in latest_rows.values()]
         signals.sort(key=lambda item: (item.priority, item.source, item.target_type, item.target_id, item.signal_type))
-        return signals[:limit] if limit is not None else signals
+        return signals
+
+    def latest_signals(self, limit: int | None = None) -> list[ContextSignal]:
+        now = time.time()
+        if self._latest_cache is None or (now - self._latest_cache_ts) >= self._latest_ttl:
+            self._latest_cache = self._compute_latest_signals()
+            self._latest_cache_ts = now
+        return self._latest_cache[:limit] if limit is not None else self._latest_cache
 
     def prune(self, retention_seconds: int = 7 * 24 * 60 * 60, now: int | None = None) -> int:
         current_time = int(time.time()) if now is None else int(now)
@@ -603,6 +621,12 @@ class ContextSignalStore:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except Exception:
+            pass
         return conn
 
     def _path_from_url(self, database_url: str) -> Path:

@@ -284,9 +284,31 @@ class UsageLedger:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_created_at ON runtime_samples(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_provider ON runtime_samples(provider_id, model_id)")
 
+    def prune(self, keep: int = 5000) -> None:
+        """Bound the usage/runtime history so the tables can't grow without
+        limit (every routed request writes a row; unbounded growth makes each
+        blocking sqlite write slow and starves the async event loop)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM usage_events WHERE id NOT IN ("
+                "SELECT id FROM usage_events ORDER BY id DESC LIMIT ?)",
+                (keep,),
+            )
+            conn.execute(
+                "DELETE FROM runtime_samples WHERE id NOT IN ("
+                "SELECT id FROM runtime_samples ORDER BY id DESC LIMIT ?)",
+                (keep,),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.OperationalError:
+            pass
         return conn
 
     def _path_from_url(self, database_url: str) -> Path:

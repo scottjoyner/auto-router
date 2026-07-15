@@ -381,9 +381,32 @@ class ModelRegistryStore:
                 "CREATE INDEX IF NOT EXISTS idx_model_registry_probe_fetched ON model_registry_probes(fetched_at)"
             )
 
+    def prune(self, keep_snapshots: int = 5000, keep_probes: int = 5000) -> None:
+        """Bound the history tables so they can't grow without limit (the 5s
+        discovery poll + every routed request writes rows; unbounded growth
+        turns each blocking sqlite write into a slow table scan and starves
+        the async event loop)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM model_registry_snapshots WHERE id NOT IN ("
+                "SELECT id FROM model_registry_snapshots ORDER BY id DESC LIMIT ?)",
+                (keep_snapshots,),
+            )
+            conn.execute(
+                "DELETE FROM model_registry_probes WHERE id NOT IN ("
+                "SELECT id FROM model_registry_probes ORDER BY id DESC LIMIT ?)",
+                (keep_probes,),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.OperationalError:
+            pass
         return conn
 
     def _path_from_url(self, database_url: str) -> Path:

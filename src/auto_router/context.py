@@ -4,7 +4,7 @@ import time
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class ExecutionLane(StrEnum):
@@ -153,6 +153,13 @@ class ContextSnapshot(BaseModel):
     signals: list[ContextSignal] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    # Per-instance caches so request scoring (model_for / signals_for) is O(1)
+    # instead of O(M*N^2). A fresh ContextSnapshot is built on every refresh, so
+    # these are naturally invalidated -- no manual eviction needed.
+    _all_models_cache: Any = PrivateAttr(default=None)
+    _model_index_cache: Any = PrivateAttr(default=None)
+    _signal_index_cache: Any = PrivateAttr(default=None)
+
     def projection_status(self) -> str:
         status = str(self.metadata.get("projection_status") or self.metadata.get("projection_state") or "").strip().lower()
         if status:
@@ -243,26 +250,31 @@ class ContextSnapshot(BaseModel):
                 return provider
         return None
 
+    def _model_index(self) -> dict[str, ContextModel]:
+        idx = self._model_index_cache
+        if idx is None:
+            idx = {}
+            for model in self.all_models():
+                keys = {
+                    self._model_key(model),
+                    model.model_id.lower(),
+                    model.name.lower(),
+                    model.provider_model.lower(),
+                    *(alias.lower() for alias in model.aliases),
+                }
+                provider_prefix = str(model.provider or "").strip().lower()
+                if provider_prefix:
+                    keys.add(f"{provider_prefix}.{model.name.lower()}")
+                    keys.add(f"{provider_prefix}.{model.model_id.lower()}")
+                    keys.update({f"{provider_prefix}.{alias.lower()}" for alias in model.aliases})
+                for key in keys:
+                    idx.setdefault(key, model)
+            self._model_index_cache = idx
+        return idx
+
     def model_for(self, model_id: str) -> ContextModel | None:
         target = model_id.strip().lower()
-        for model in self.all_models():
-            provider_prefix = str(model.provider or "").strip().lower()
-            scoped_candidates = set()
-            if provider_prefix:
-                scoped_candidates.add(f"{provider_prefix}.{model.name.lower()}")
-                scoped_candidates.add(f"{provider_prefix}.{model.model_id.lower()}")
-                scoped_candidates.update({f"{provider_prefix}.{alias.lower()}" for alias in model.aliases})
-            candidates = {
-                self._model_key(model),
-                model.model_id.lower(),
-                model.name.lower(),
-                model.provider_model.lower(),
-                *(alias.lower() for alias in model.aliases),
-                *scoped_candidates,
-            }
-            if target in candidates:
-                return model
-        return None
+        return self._model_index().get(target)
 
     def node_for(self, node_id: str) -> ContextNode | None:
         target = node_id.strip().lower()
@@ -271,16 +283,23 @@ class ContextSnapshot(BaseModel):
                 return node
         return None
 
+    def _signal_index(self) -> dict[tuple, list]:
+        idx = self._signal_index_cache
+        if idx is None:
+            idx = {}
+            for signal in self.signals:
+                if not signal.is_active:
+                    continue
+                tt = signal.target_type.strip().lower()
+                tid = self.canonical_signal_target(tt, signal.target_id)
+                idx.setdefault((tt, tid), []).append(signal)
+            self._signal_index_cache = idx
+        return idx
+
     def signals_for(self, target_type: str, target_id: str) -> list[ContextSignal]:
-        target_type_normalized = target_type.strip().lower()
-        target_id_normalized = self.canonical_signal_target(target_type_normalized, target_id)
-        return [
-            signal
-            for signal in self.signals
-            if signal.is_active
-            and signal.target_type.strip().lower() == target_type_normalized
-            and self.canonical_signal_target(signal.target_type, signal.target_id) == target_id_normalized
-        ]
+        tt = target_type.strip().lower()
+        tid = self.canonical_signal_target(tt, target_id)
+        return list(self._signal_index().get((tt, tid), []))
 
     def all_signals(self) -> list[ContextSignal]:
         return sorted(
@@ -320,13 +339,18 @@ class ContextSnapshot(BaseModel):
         return [node.node_id for node in self.nodes if node.local and node.running and not node.is_blocked]
 
     def all_models(self) -> list[ContextModel]:
-        models: dict[str, ContextModel] = {}
-        for model in self.models:
-            models[self._model_key(model)] = model
-        for provider in self.providers:
-            for model in provider.models:
+        cached = self._all_models_cache
+        if cached is None:
+            models: dict[str, ContextModel] = {}
+            for model in self.models:
                 models[self._model_key(model)] = model
-        return sorted(models.values(), key=lambda item: (item.priority, item.provider or "", item.name.lower()))
+            for provider in self.providers:
+                for model in provider.models:
+                    models[self._model_key(model)] = model
+            self._all_models_cache = sorted(
+                models.values(), key=lambda item: (item.priority, item.provider or "", item.name.lower())
+            )
+        return self._all_models_cache
 
     def local_models(self) -> list[ContextModel]:
         return [model for model in self.all_models() if model.is_local and not model.is_blocked]

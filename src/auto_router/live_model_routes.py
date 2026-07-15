@@ -37,7 +37,7 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
 
     @app.post("/admin/live-models/refresh")
     async def refresh_live_models(provider: str | None = None) -> dict[str, Any]:
-        merge_discovered_lmstudio_providers(state, provider)
+        await merge_discovered_lmstudio_providers(state, provider)
         providers = selected_refresh_providers(state, provider)
         if provider is None:
             providers.extend(item for item in state.providers.enabled() if item.type == "lmstudio")
@@ -54,7 +54,7 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
 
     @app.post("/admin/providers/probe")
     async def probe_provider_models(provider: str | None = None) -> dict[str, Any]:
-        merge_discovered_lmstudio_providers(state, provider)
+        await merge_discovered_lmstudio_providers(state, provider)
         providers = selected_probe_providers(state, provider)
         if provider is None:
             providers.extend(item for item in state.providers.enabled() if item.type == "lmstudio")
@@ -90,6 +90,7 @@ async def fetch_provider_models(provider: ProviderConfig) -> list[dict[str, Any]
 # only re-projects the live models into the routing context when something
 # actually changed (a model set drifted, or a provider came up/went down).
 _LIVE_OK_STATE: dict[str, bool] = {}
+_LIVE_SIG_STATE: dict[str, str | None] = {}
 
 
 async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -> list[dict[str, Any]]:
@@ -97,27 +98,65 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
     the live-model cache + registry. Re-projects the live models into the routing
     context only when something actually changed, so a continuous poll loop stays
     cheap while still propagating model swaps (e.g. a node loading a medium/large
-    model in place of its 3B) into routing instantly."""
+    model in place of its 3B) into routing instantly.
+
+    The sqlite registry is only written when a provider's up/down state or model
+    signature actually changes -- a stable fleet otherwise just updates the
+    in-memory cache, avoiding a blocking DB write every poll cycle."""
 
     async def _refresh_one(item: ProviderConfig) -> dict[str, Any]:
         started = time.perf_counter()
-        previous = state.model_registry.latest_for_provider(item.name)
         snapshot = await state.live_models.refresh_provider(item, fetch_provider_models)
         latency_ms = int((time.perf_counter() - started) * 1000)
+        provider = snapshot.provider
+        ok = bool(snapshot.ok)
+        prior_ok = _LIVE_OK_STATE.get(provider)
+        signature = (
+            state.model_registry._snapshot_signature(snapshot.models)
+            if hasattr(state, "model_registry")
+            else None
+        )
+        prior_sig = _LIVE_SIG_STATE.get(provider)
+        changed = (
+            prior_ok is None
+            or prior_ok != ok
+            or (ok and prior_sig is not None and prior_sig != signature)
+        )
+        _LIVE_OK_STATE[provider] = ok
+        _LIVE_SIG_STATE[provider] = signature
         registry_error: str | None = None
         probe: dict[str, Any] | None = None
-        try:
-            state.model_registry.save_snapshot(snapshot)
-            probe = state.model_registry.save_probe(snapshot, latency_ms=latency_ms, previous_snapshot=previous)
-        except Exception as exc:
-            registry_error = str(exc)
+        if changed and hasattr(state, "model_registry"):
+            try:
+                previous = await asyncio.to_thread(state.model_registry.latest_for_provider, provider)
+                await asyncio.to_thread(state.model_registry.save_snapshot, snapshot)
+                probe = await asyncio.to_thread(
+                    lambda: state.model_registry.save_probe(snapshot, latency_ms=latency_ms, previous_snapshot=previous)
+                )
+            except Exception as exc:
+                registry_error = str(exc)
+        if probe is None:
+            probe = {
+                "provider": provider,
+                "ok": ok,
+                "fetched_at": snapshot.fetched_at,
+                "expires_at": snapshot.expires_at,
+                "latency_ms": latency_ms,
+                "model_count": len(snapshot.models),
+                "drift": False,
+                "signature": signature,
+                "previous_signature": prior_sig,
+                "error": snapshot.error,
+                "models": snapshot.models,
+            }
         if hasattr(state, "signal_registry"):
             try:
                 signals = live_model_signals(snapshot, node_id=item.node_id)
-                state.signal_registry.save_snapshot(signal_snapshot(signals, revision=f"live-model:{item.name}", source="live_models"))
+                sig = signal_snapshot(signals, revision=f"live-model:{item.name}", source="live_models")
+                await asyncio.to_thread(state.signal_registry.save_snapshot, sig)
             except Exception:
                 pass
-        record = snapshot.to_dict() | {"probe": probe or {"provider": snapshot.provider, "error": registry_error, "ok": snapshot.ok}}
+        record = snapshot.to_dict() | {"probe": probe, "drift": probe.get("drift")}
         if registry_error:
             record["registry_error"] = registry_error
         return record
@@ -196,12 +235,14 @@ def sync_live_models_to_providers(state: Any) -> int:
     return changed
 
 
-def discovered_lmstudio_providers(state: Any, provider_name: str | None = None, include_known: bool = False) -> list[ProviderConfig]:
+async def discovered_lmstudio_providers(state: Any, provider_name: str | None = None, include_known: bool = False) -> list[ProviderConfig]:
     candidates: list[ContextService] = []
     context = getattr(state, "context", None)
     if context is not None and hasattr(context, "all_services"):
         candidates.extend(service for service in context.all_services() if is_lmstudio_service(service))
-    candidates.extend(discover_tailnet_lmstudio_services())
+    # `tailscale status` is a blocking subprocess -- run it off the event loop so
+    # the 5s discovery poll can never freeze request handling.
+    candidates.extend(await asyncio.to_thread(discover_tailnet_lmstudio_services))
 
     providers_attr = getattr(state, "providers", None)
     enabled_known = providers_attr.enabled() if providers_attr and hasattr(providers_attr, "enabled") else []
@@ -245,8 +286,8 @@ def dedupe_providers(providers: list[ProviderConfig]) -> list[ProviderConfig]:
     return deduped
 
 
-def merge_discovered_lmstudio_providers(state: Any, provider_name: str | None = None) -> int:
-    discovered = dedupe_providers(discovered_lmstudio_providers(state, provider_name, include_known=True))
+async def merge_discovered_lmstudio_providers(state: Any, provider_name: str | None = None) -> int:
+    discovered = dedupe_providers(await discovered_lmstudio_providers(state, provider_name, include_known=True))
     if not discovered:
         return 0
     registry = getattr(state, "providers", None)

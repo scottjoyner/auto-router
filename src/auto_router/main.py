@@ -71,7 +71,7 @@ state = AppState()
 async def load_state() -> None:
     settings = get_settings()
     state.providers = load_provider_registry(settings.provider_config)
-    merge_discovered_lmstudio_providers(state)
+    await merge_discovered_lmstudio_providers(state)
     state.policies = load_policy_registry(settings.policy_config)
     state.agents = load_agent_worker_registry(settings.agent_config)
 
@@ -121,12 +121,12 @@ async def refresh_tailnet_provider_task() -> None:
         await asyncio.sleep(120)
         try:
             settings = get_settings()
-            changed = merge_discovered_lmstudio_providers(state)
+            changed = await merge_discovered_lmstudio_providers(state)
             if not changed:
                 continue
             state.context = await load_context_snapshot_async(settings.context_config, state.providers, state.agents)
             state.context = _project_live_models(state.context, state.providers, state.model_registry.latest_inventory())
-            state.signal_registry.save_snapshot(state.context)
+            await asyncio.to_thread(state.signal_registry.save_snapshot, state.context)
             state.context = state.signal_registry.hydrate_context(state.context)
             state.policy_engine.context = state.context
         except Exception as exc:  # pragma: no cover
@@ -145,13 +145,30 @@ async def refresh_live_models_task() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            merge_discovered_lmstudio_providers(state)
+            await merge_discovered_lmstudio_providers(state)
             providers = [p for p in state.providers.enabled() if p.type == "lmstudio"]
             if not providers:
                 continue
             await refresh_provider_models(state, providers)
         except Exception as exc:  # pragma: no cover
             print(f"Error polling live models: {exc}")
+
+
+async def prune_task() -> None:
+    """Periodically bound the sqlite history tables (registry snapshots/probes and
+    usage/runtime ledger) so they cannot grow without limit. Unbounded growth makes
+    every blocking sqlite write slow and starves the async event loop."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            if hasattr(state, "model_registry"):
+                await asyncio.to_thread(state.model_registry.prune)
+            if hasattr(state, "ledger"):
+                await asyncio.to_thread(state.ledger.prune)
+            if hasattr(state, "signal_registry"):
+                await asyncio.to_thread(state.signal_registry.prune)
+        except Exception as exc:  # pragma: no cover
+            print(f"Error pruning registry/ledger: {exc}")
 
 
 async def outbox_dispatch_task() -> None:
@@ -197,6 +214,7 @@ async def lifespan(_: FastAPI):
     tailnet_refresh_task = asyncio.create_task(refresh_tailnet_provider_task())
     live_models_poll_task = asyncio.create_task(refresh_live_models_task())
     dispatch_task = asyncio.create_task(outbox_dispatch_task())
+    prune_state_task = asyncio.create_task(prune_task())
     from auto_router.model_placement import RECONCILE_SECONDS, placement_reconcile_task
 
     placement_task = None
@@ -209,6 +227,7 @@ async def lifespan(_: FastAPI):
         tailnet_refresh_task.cancel()
         live_models_poll_task.cancel()
         dispatch_task.cancel()
+        prune_state_task.cancel()
         if placement_task is not None:
             placement_task.cancel()
         try:
@@ -225,6 +244,10 @@ async def lifespan(_: FastAPI):
             pass
         try:
             await dispatch_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await prune_state_task
         except asyncio.CancelledError:
             pass
 
@@ -570,6 +593,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 candidates=stage.candidates,
                 rejections=stage_rejections,
             )
+            state.policy_engine.mark_inflight_start(owner)
             provider = build_provider(candidate.provider, timeout_seconds=get_settings().request_timeout_seconds)
             started_at_ms = int(time.time() * 1000)
             started = time.perf_counter()
@@ -577,6 +601,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 if router_request.stream and router_request.route in {"chat_completions", "responses", "completions"}:
                     gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
                     stream_response = await _dispatch_stream(provider, candidate, router_request, route_plan=gateway_context)
+                    state.policy_engine.mark_inflight_end(owner)
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     ended_at_ms = int(time.time() * 1000)
                     state.circuits.record_success(owner)
@@ -615,6 +640,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                     )
                 gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
                 response = await _dispatch(provider, candidate, router_request, route_plan=gateway_context)
+                state.policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 state.circuits.record_success(owner)
                 gateway_metadata = response.data.get("_gateway_metadata") if isinstance(response.data, dict) else None

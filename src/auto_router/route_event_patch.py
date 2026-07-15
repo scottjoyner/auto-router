@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable
 
 from auto_router.route_events import _provider_node_id, enqueue_route_execution_event
@@ -107,10 +108,20 @@ def install_route_event_patch(main_module: Any) -> None:
                 gateway_metadata=gateway_metadata,
             )
             if signals:
-                main_module.state.signal_registry.save_snapshot(
-                    signal_snapshot(signals, revision=f"route-execution:{request.request_id}:{stage}", source="route_execution")
-                )
-                main_module.state.context = main_module.state.signal_registry.hydrate_context(main_module.state.context)
+                registry = main_module.state.signal_registry
+                snap = signal_snapshot(signals, revision=f"route-execution:{request.request_id}:{stage}", source="route_execution")
+                # Offload the sqlite write (save_snapshot) to a worker thread so it
+                # never blocks the event loop; hydrate_context is now cheap (cached
+                # latest_signals) and stays on-loop to avoid racing request readers.
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.run_in_executor(None, registry.save_snapshot, snap)
+                except Exception:
+                    try:
+                        registry.save_snapshot(snap)
+                    except Exception:
+                        pass
+                main_module.state.context = registry.hydrate_context(main_module.state.context)
                 if hasattr(main_module.state, "policy_engine"):
                     main_module.state.policy_engine.context = main_module.state.context
 
