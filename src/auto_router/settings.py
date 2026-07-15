@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     assistx_event_dispatch_timeout_seconds: float = 10.0
     assistx_event_dispatch_max_attempts: int = 5
     assistx_event_dispatch_interval_seconds: float = 300.0
+    assistx_event_dispatch_batch_max: int = 200
+    assistx_outbox_warning_threshold: int = 25
+    assistx_outbox_critical_threshold: int = 200
     assistx_tasks_url: str | None = None
     assistx_tasks_timeout_seconds: float = 10.0
     assistx_basic_auth_user: str = ""

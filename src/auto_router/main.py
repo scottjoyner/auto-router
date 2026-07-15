@@ -172,26 +172,45 @@ async def prune_task() -> None:
 
 
 async def outbox_dispatch_task() -> None:
+    """Background drain of the AssistX event outbox.
+
+    Throughput is adaptive: when there is a backlog the dispatcher works harder
+    (larger batches, shorter interval) so a large backlog self-clears in minutes
+    instead of sitting at 'critical' pressure for hours; when the queue is empty
+    it idles at the configured base interval. This keeps /health from reporting a
+    spurious 'degraded' state just because telemetry is draining."""
     settings = get_settings()
-    interval = max(float(settings.assistx_event_dispatch_interval_seconds), 1.0)
+    base_interval = max(float(settings.assistx_event_dispatch_interval_seconds), 1.0)
+    batch_max = max(int(getattr(settings, "assistx_event_dispatch_batch_max", 200)), 1)
     while True:
-        await asyncio.sleep(interval)
         try:
             if not hasattr(state, "event_outbox"):
+                await asyncio.sleep(base_interval)
                 continue
-            result = await dispatch_outbox_cycle(state, limit=25, dry_run=False, reason="scheduled")
-            pending = int(result.get("summary", {}).get("pending", 0))
-            retry = int(result.get("summary", {}).get("retry", 0))
-            if pending or retry:
+            summary = state.event_outbox.summary()
+            pending = int(summary.get("pending", 0))
+            retry = int(summary.get("retry", 0))
+            backlog = pending + retry
+            if backlog <= 0:
+                await asyncio.sleep(base_interval)
+                continue
+            # Scale effort with backlog: more pending -> bigger batch, shorter wait.
+            batch = min(batch_max, max(25, backlog))
+            # Back off toward base_interval as the queue empties.
+            interval = base_interval if backlog < batch_max else 1.0
+            result = await dispatch_outbox_cycle(state, limit=batch, dry_run=False, reason="scheduled")
+            if backlog:
                 print(
                     "AssistX outbox dispatch completed: "
                     f"configured={result.get('configured')} pending={pending} retry={retry} "
                     f"delivered={int(result.get('summary', {}).get('delivered', 0))}"
                 )
+            await asyncio.sleep(interval)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # pragma: no cover
             print(f"Error dispatching AssistX outbox: {exc}")
+            await asyncio.sleep(base_interval)
 
 
 def _context_projection_summary() -> dict[str, Any]:
@@ -475,6 +494,20 @@ async def admin_usage(limit: int = 50) -> dict[str, Any]:
 @app.get("/admin/circuits")
 async def admin_circuits() -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
+
+
+@app.post("/admin/circuits/reset")
+async def admin_circuits_reset() -> dict[str, Any]:
+    """Clear all circuit breakers (recover from tripped providers immediately)."""
+    cleared = state.circuits.reset()
+    return {"cleared": cleared}
+
+
+@app.post("/admin/circuits/reset/{owner:path}")
+async def admin_circuits_reset_owner(owner: str) -> dict[str, Any]:
+    """Clear a single circuit breaker by owner (provider/model)."""
+    cleared = state.circuits.reset(owner)
+    return {"owner": owner, "cleared": cleared}
 
 
 @app.get("/admin/agent-jobs")

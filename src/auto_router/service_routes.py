@@ -96,13 +96,23 @@ def build_outbox_dispatch_status(state: Any) -> dict[str, Any]:
 
 
 def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
+    """Classify outbox pressure with hysteresis so a live telemetry trickle
+    (a few events per minute, always draining) never flips health to degraded.
+
+    - ``ok``: nothing queued, or a modest drain below ``warning_threshold``.
+    - ``warning``: a visible-but-settling backlog below ``critical_threshold``.
+    - ``critical``: a genuine sustained backlog (>= ``critical_threshold``) OR
+      any dead-lettered events (permanent delivery failures).
+    """
+    settings = get_settings()
     dispatch_status = build_outbox_dispatch_status(state)
     summary = dispatch_status.get("last_summary") or {}
     pending = int(dispatch_status.get("pending") or summary.get("pending") or 0)
     retry = int(dispatch_status.get("retry") or summary.get("retry") or 0)
     dead_letter = int(dispatch_status.get("dead_letter") or summary.get("dead_letter") or 0)
     total = pending + retry + dead_letter
-    critical_threshold = 25
+    warning_threshold = int(getattr(settings, "assistx_outbox_warning_threshold", 25))
+    critical_threshold = int(getattr(settings, "assistx_outbox_critical_threshold", 200))
     if total == 0:
         level = "ok"
         headline = "Outbox pressure is clear"
@@ -116,7 +126,7 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
             "waiting to move through the AssistX sink path."
         )
         action = "Inspect /admin/outbox and /admin/outbox/dispatch before treating restart health as green."
-    else:
+    elif total >= warning_threshold:
         level = "warning"
         headline = "Outbox pressure is present"
         detail = (
@@ -124,12 +134,20 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
             "waiting to move through the AssistX sink path."
         )
         action = "Clear the small backlog or confirm it is actively draining."
+    else:
+        level = "ok"
+        headline = "Outbox pressure is nominal"
+        detail = (
+            f"The outbox has {total} queued event(s), actively draining; this is normal live throughput."
+        )
+        action = "No action required."
     return {
         **dispatch_status,
         "pressure_total": total,
         "level": level,
         "active": level != "ok",
         "critical_threshold": critical_threshold,
+        "warning_threshold": warning_threshold,
         "headline": headline,
         "detail": detail,
         "action": action,

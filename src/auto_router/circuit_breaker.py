@@ -61,3 +61,18 @@ class CircuitBreakerManager:
                 }
                 for state in self.states.values()
             ]
+
+    def reset(self, owner: str | None = None) -> int:
+        """Clear breaker state. If ``owner`` is given, reset only that owner;
+        otherwise reset all breakers. Returns the number of breakers cleared.
+        This lets an operator recover a tripped breaker immediately instead of
+        waiting out the cooldown."""
+        with self.lock:
+            if owner is None:
+                n = len(self.states)
+                self.states.clear()
+                return n
+            if owner in self.states:
+                del self.states[owner]
+                return 1
+            return 0
