@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+
 from auto_router.config import PolicyRegistry, ProviderRegistry
 from auto_router.context import ContextProvider, ContextSnapshot, ExecutionLane, ContextSignal
 from auto_router.models import (
@@ -29,6 +32,12 @@ class PolicyEngine:
         self.default_profile = default_profile
         self.context = context or ContextSnapshot()
         self._request_context: RouterRequest | None = None
+        # Fleet-wide load balancing: track per-node last-used + in-flight so the
+        # router spreads `auto` requests across the nodes that host a model instead
+        # of hammering the single highest-priority node while peers sit idle.
+        self._lb_last_used: dict[str, float] = {}
+        self._lb_inflight: dict[str, int] = {}
+        self._lb_lock = threading.Lock()
 
     def classify_profile(self, request: RouterRequest) -> str:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
@@ -132,6 +141,7 @@ class PolicyEngine:
                     )
                 )
         candidates.sort(key=lambda candidate: candidate.score)
+        candidates = self._balance_candidates(candidates)
         return ExecutionStage(
             purpose=policy_stage.purpose,
             candidates=candidates,
@@ -139,6 +149,46 @@ class PolicyEngine:
             allow_local_fallback=policy_stage.allow_local_fallback,
             optional=policy_stage.optional,
         )
+
+    def _owner_str(self, candidate: ProviderCandidate) -> str:
+        return f"{candidate.provider.name}/{candidate.model.alias}"
+
+    def _balance_candidates(self, candidates: list[ProviderCandidate]) -> list[ProviderCandidate]:
+        """Spread load across the fleet instead of always picking one node.
+
+        Candidates are grouped by model alias (so requests for a given model rotate
+        across the nodes that actually host it), and within each group the
+        least-recently-used / least-busy node is preferred. Groups are ordered by
+        their best score, so quality still wins overall, but equal-capability nodes
+        share work -- idle machines get pulled in rather than one node being
+        hammered while peers sit idle. This is what makes "so many nodes ready to
+        go" actually get used."""
+        if not candidates:
+            return candidates
+        groups: dict[str, list[ProviderCandidate]] = {}
+        for c in candidates:
+            groups.setdefault(c.model.alias, []).append(c)
+        ordered_groups = sorted(groups.values(), key=lambda g: -max(c.score for c in g))
+        balanced: list[ProviderCandidate] = []
+        for g in ordered_groups:
+            g.sort(
+                key=lambda c: (
+                    self._lb_inflight.get(self._owner_str(c), 0),
+                    self._lb_last_used.get(self._owner_str(c), 0.0),
+                    -c.score,
+                )
+            )
+            balanced.extend(g)
+        return balanced
+
+    def mark_inflight_start(self, owner: str) -> None:
+        with self._lb_lock:
+            self._lb_inflight[owner] = self._lb_inflight.get(owner, 0) + 1
+            self._lb_last_used[owner] = time.time()
+
+    def mark_inflight_end(self, owner: str) -> None:
+        with self._lb_lock:
+            self._lb_inflight[owner] = max(0, self._lb_inflight.get(owner, 0) - 1)
 
     def _request_requires_local_execution(self, request: RouterRequest) -> bool:
         """Return True when the fleet privacy wall forbids cloud/public routes.
