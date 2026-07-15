@@ -11,6 +11,7 @@ from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.route_event_patch import install_route_event_patch
 from auto_router.service_routes import register_service_routes
 from auto_router.assistx_routes import register_assistx_routes
+from auto_router.fleet_routes import router as fleet_router
 from auto_router.settings import get_settings
 
 install_route_event_patch(main_module)
@@ -20,6 +21,7 @@ register_cli_routes(app, state)
 register_backlog_routes(app, state)
 register_ops_dashboard_routes(app, state)
 register_assistx_routes(app, state)
+app.include_router(fleet_router)
 
 
 def run() -> None:

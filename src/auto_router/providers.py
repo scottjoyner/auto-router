@@ -39,9 +39,22 @@ class ProviderStreamResponse:
 class OpenAICompatibleProvider:
     """Minimal OpenAI-compatible provider adapter."""
 
-    def __init__(self, config: ProviderConfig, timeout_seconds: float = 120.0):
+    def __init__(self, config: ProviderConfig, timeout_seconds: float = 120.0, connect_timeout_seconds: float | None = None):
         self.config = config
         self.timeout_seconds = timeout_seconds
+        self.connect_timeout_seconds = connect_timeout_seconds
+        # Connect fast (so dead/unreachable nodes fail immediately) but allow a
+        # longer read window for genuinely slow-but-working generation. Pool/queue
+        # waits stay short so a saturated client doesn't add latency.
+        self._http_timeout = httpx.Timeout(
+            connect=connect_timeout_seconds if connect_timeout_seconds else timeout_seconds,
+            read=timeout_seconds,
+            write=min(timeout_seconds, 30.0),
+            pool=5.0,
+        )
+
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=self._http_timeout)
 
     @property
     def name(self) -> str:
@@ -132,7 +145,7 @@ class OpenAICompatibleProvider:
             raise ProviderError(f"provider {self.name} is not configured", retryable=True)
         url = f"{self.config.base_url.rstrip('/')}{path}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            async with self._client() as client:
                 response = await client.post(url, headers=self._headers(), json=payload)
         except httpx.HTTPError as exc:
             raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
@@ -153,7 +166,7 @@ class OpenAICompatibleProvider:
         if not self.is_configured():
             raise ProviderError(f"provider {self.name} is not configured", retryable=True)
         url = f"{self.config.base_url.rstrip('/')}{path}"
-        client = httpx.AsyncClient(timeout=self.timeout_seconds)
+        client = self._client()
         stream_cm = client.stream("POST", url, headers=self._headers(), json=payload)
         try:
             response = await stream_cm.__aenter__()
@@ -338,12 +351,14 @@ class LMStudioProvider(OpenAICompatibleProvider):
         return base_url
 
 
-def build_provider(config: ProviderConfig, timeout_seconds: float = 120.0) -> OpenAICompatibleProvider:
+def build_provider(config: ProviderConfig, timeout_seconds: float = 120.0, connect_timeout_seconds: float | None = None) -> OpenAICompatibleProvider:
     """Build provider instance with optional gateway sidecar routing.
     
     Args:
         config: Provider configuration.
-        timeout_seconds: Request timeout in seconds.
+        timeout_seconds: Per-attempt request timeout in seconds (fail-fast window).
+        connect_timeout_seconds: Optional short connect timeout for fast failure
+            of unreachable nodes.
     
     Returns:
         Provider instance (direct or through agentgateway).
@@ -359,12 +374,12 @@ def build_provider(config: ProviderConfig, timeout_seconds: float = 120.0) -> Op
     )
     
     if config.type == "lmstudio":
-        return LMStudioProvider(config, timeout_seconds=timeout_seconds)
+        return LMStudioProvider(config, timeout_seconds=timeout_seconds, connect_timeout_seconds=connect_timeout_seconds)
     
     if uses_gateway:
-        return AgentGatewayProviderAdapter(config, timeout_seconds=timeout_seconds)
+        return AgentGatewayProviderAdapter(config, timeout_seconds=timeout_seconds, connect_timeout_seconds=connect_timeout_seconds)
     
-    return OpenAICompatibleProvider(config, timeout_seconds=timeout_seconds)
+    return OpenAICompatibleProvider(config, timeout_seconds=timeout_seconds, connect_timeout_seconds=connect_timeout_seconds)
 
 
 class AgentGatewayProviderAdapter(OpenAICompatibleProvider):

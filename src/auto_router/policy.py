@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import json
+import re
 import threading
 import time
+from pathlib import Path
 
 from auto_router.config import PolicyRegistry, ProviderRegistry
+from auto_router.settings import get_settings
+
+_LATENCY_CACHE = Path(get_settings().latency_cache_path)
+
+# Latency awareness for `auto`: nodes whose measured round-trip latency sits
+# above the baseline are penalized so traffic flows to quick, idle nodes.
+ROUTER_LATENCY_BASELINE_MS = 4000.0
+ROUTER_LATENCY_MAX_PENALTY = 40.0
+# Liveness awareness for `auto`: providers with poor recent health (from the
+# router's probe history) are demoted so traffic avoids flaky/unloaded nodes.
+ROUTER_HEALTH_PENALTY = 0.4
+# Fresh, concrete evidence a provider has zero models loaded (or a very low
+# recent health score) excludes it from routing entirely -- instead of waiting
+# for a circuit breaker to trip after several slow failures.
+ROUTER_LIVENESS_MAX_AGE_SECONDS = 60
+ROUTER_LIVENESS_MIN_HEALTH = 25
 from auto_router.context import ContextProvider, ContextSnapshot, ExecutionLane, ContextSignal
 from auto_router.models import (
     ExecutionPlan,
@@ -37,6 +56,21 @@ class PolicyEngine:
         # of hammering the single highest-priority node while peers sit idle.
         self._lb_last_used: dict[str, float] = {}
         self._lb_inflight: dict[str, int] = {}
+        # Plan-time reservations: the top candidate of each stage is reserved when
+        # plan() runs (atomically on the event loop) so that concurrent requests
+        # planning in parallel don't all pick the same node. Released when the stage
+        # starts executing (main._execute). Acts like a soft in-flight during planning.
+        self._lb_planned: dict[str, int] = {}
+        # Latency awareness: exponential moving average of measured round-trip
+        # latency per owner, so slow nodes are penalized and traffic flows to
+        # quick, idle nodes instead of the single highest-priority one. Seeded
+        # from disk (latency_ema.json) so the learning survives router restarts.
+        self._latency_ema: dict[str, float] = self._load_latency_cache()
+        self._latency_dirty: bool = False
+        self._latency_last_write: float = 0.0
+        # Liveness awareness: recent provider health (from the router's probe
+        # history) keyed by provider name, used to demote/exclude flaky nodes.
+        self.provider_health: dict[str, dict] = {}
         self._lb_lock = threading.Lock()
 
     def classify_profile(self, request: RouterRequest) -> str:
@@ -89,6 +123,14 @@ class PolicyEngine:
         profile_name = self.classify_profile(request)
         profile = self.policies.profiles.get(profile_name) or self._fallback_profile()
         stages = [self._build_stage(stage, request) for stage in profile.stages]
+        # Reserve the intended (top) candidate of each stage at plan time so
+        # concurrent requests planning in parallel don't all pick the same node --
+        # plan() runs atomically on the event loop, so the next request's plan sees
+        # this reservation and balances to a different node. Released when the stage
+        # actually starts executing (see main._execute).
+        for st in stages:
+            if st.candidates:
+                self.mark_planned_start(self._owner_str(st.candidates[0]))
         return ExecutionPlan(profile_name=profile_name, stages=stages)
 
     def _exact_model_plan(self, request: RouterRequest) -> ExecutionPlan | None:
@@ -156,30 +198,70 @@ class PolicyEngine:
     def _balance_candidates(self, candidates: list[ProviderCandidate]) -> list[ProviderCandidate]:
         """Spread load across the fleet instead of always picking one node.
 
-        Candidates are grouped by model alias (so requests for a given model rotate
-        across the nodes that actually host it), and within each group the
-        least-recently-used / least-busy node is preferred. Groups are ordered by
-        their best score, so quality still wins overall, but equal-capability nodes
-        share work -- idle machines get pulled in rather than one node being
-        hammered while peers sit idle. This is what makes "so many nodes ready to
-        go" actually get used."""
+        Candidates are grouped by **capability tier** (modality + size bucket), not
+        by exact model alias. Because every node hosts a *different* set of model
+        keys, exact-alias grouping could never balance -- the single highest-scoring
+        small model would win every time and the rest of the swarm would sit idle.
+        Grouping by tier puts all small chat models (across every node) into one
+        pool that is balanced by in-flight count + last-used, so `auto` traffic
+        rotates across the whole fleet. Tiers are tried cheapest-first (embed <
+        vision < text:small < text:mid < text:large) so quick nodes are preferred
+        and bigger models are only used if the small tier is exhausted or fails."""
         if not candidates:
             return candidates
         groups: dict[str, list[ProviderCandidate]] = {}
         for c in candidates:
-            groups.setdefault(c.model.alias, []).append(c)
-        ordered_groups = sorted(groups.values(), key=lambda g: -max(c.score for c in g))
+            groups.setdefault(self._capability_tier(c.model), []).append(c)
+        # Text tiers first so a generic (capability-less) request prefers chat
+        # models; embed/vision are only tried when nothing text-capable matches
+        # (i.e. when they are explicitly required), never for plain chat.
+        tier_rank = {"text:S": 0, "text:M": 1, "text:L": 2, "vision": 3, "embed": 4}
+        ordered_groups = sorted(
+            groups.values(),
+            key=lambda g: tier_rank.get(self._capability_tier(g[0].model), 5),
+        )
         balanced: list[ProviderCandidate] = []
         for g in ordered_groups:
             g.sort(
                 key=lambda c: (
-                    self._lb_inflight.get(self._owner_str(c), 0),
+                    self._lb_inflight.get(self._owner_str(c), 0)
+                    + self._lb_planned.get(self._owner_str(c), 0),
+                    # Latency dominates the in-tier tiebreak: a busy fast node beats
+                    # an idle SLOW node, so `auto` spreads across the fleet's quick
+                    # nodes instead of parking traffic on a 50s machine.
+                    self._latency_term(self._owner_str(c)),
                     self._lb_last_used.get(self._owner_str(c), 0.0),
                     -c.score,
                 )
             )
             balanced.extend(g)
         return balanced
+
+    def _capability_tier(self, model: ModelConfig) -> str:
+        """Normalized capability bucket so models of similar size/modality on
+        *different* nodes balance against each other: 'embed', 'vision',
+        'text:S' (<3B), 'text:M' (3-14B), 'text:L' (>14B)."""
+        caps = {c.lower() for c in model.capabilities}
+        if {"embed", "embedding"} & caps:
+            modality = "embed"
+        elif {"vision", "image"} & caps:
+            modality = "vision"
+        else:
+            modality = "text"
+        txt = f"{model.alias} {model.provider_model}"
+        m = re.search(r"(\d+(?:\.\d+)?)\s*[Bb]", txt)
+        if m:
+            b = float(m.group(1))
+        else:
+            m2 = re.search(r"(\d+(?:\.\d+)?)\s*[Mm]", txt)
+            b = float(m2.group(1)) / 1000.0 if m2 else 7.0
+        if b < 3:
+            tier = "S"
+        elif b <= 14:
+            tier = "M"
+        else:
+            tier = "L"
+        return f"{modality}:{tier}"
 
     def mark_inflight_start(self, owner: str) -> None:
         with self._lb_lock:
@@ -189,6 +271,88 @@ class PolicyEngine:
     def mark_inflight_end(self, owner: str) -> None:
         with self._lb_lock:
             self._lb_inflight[owner] = max(0, self._lb_inflight.get(owner, 0) - 1)
+
+    def mark_planned_start(self, owner: str) -> None:
+        with self._lb_lock:
+            self._lb_planned[owner] = self._lb_planned.get(owner, 0) + 1
+
+    def mark_planned_end(self, owner: str) -> None:
+        with self._lb_lock:
+            self._lb_planned[owner] = max(0, self._lb_planned.get(owner, 0) - 1)
+
+    def mark_latency(self, owner: str, latency_ms: float) -> None:
+        """Fold a measured round-trip latency into the per-owner EMA.
+
+        Called after every completed (or failed) route so the router learns which
+        nodes are snappy and which are slow without relying on the over-accumulating
+        `preferred` signal boosts that used to strand traffic on laggy nodes."""
+        with self._lb_lock:
+            # Clamp so a transient event-loop-saturation spike (or a stalled slow
+            # node) can't permanently brand a node as unusable -- the EMA recovers
+            # once real measurements flow again.
+            sample = min(float(latency_ms), 25000.0)
+            prev = self._latency_ema.get(owner)
+            if prev is None:
+                self._latency_ema[owner] = sample
+            else:
+                self._latency_ema[owner] = 0.3 * sample + 0.7 * prev
+            self._latency_dirty = True
+
+    # ---- latency EMA persistence (survives router restarts) ----------------- #
+    def _load_latency_cache(self) -> dict[str, float]:
+        try:
+            if _LATENCY_CACHE.exists():
+                with _LATENCY_CACHE.open("r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                return {k: float(v) for k, v in data.items() if isinstance(v, (int, float))}
+        except Exception:
+            pass
+        return {}
+
+    def snapshot_latency(self) -> dict[str, float]:
+        with self._lb_lock:
+            return dict(self._latency_ema)
+
+    def persist_latency(self, force: bool = False) -> None:
+        """Write the latency EMA to disk. Throttled to latency_persist_interval_seconds
+        unless `force` is set. Safe to call from a background task."""
+        now = time.time()
+        with self._lb_lock:
+            if not force and not self._latency_dirty:
+                return
+            if not force and (now - self._latency_last_write) < get_settings().latency_persist_interval_seconds:
+                return
+            snapshot = dict(self._latency_ema)
+            self._latency_dirty = False
+            self._latency_last_write = now
+        try:
+            _LATENCY_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _LATENCY_CACHE.with_suffix(".json.tmp")
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(snapshot, fh)
+            tmp.replace(_LATENCY_CACHE)
+        except Exception:
+            # best-effort persistence; never block routing on a disk error
+            pass
+
+    def _latency_penalty(self, owner: str) -> float:
+        ema = self._latency_ema.get(owner)
+        if ema is None or ema <= ROUTER_LATENCY_BASELINE_MS:
+            return 0.0
+        over = (ema - ROUTER_LATENCY_BASELINE_MS) / ROUTER_LATENCY_BASELINE_MS
+        return min(ROUTER_LATENCY_MAX_PENALTY, over * ROUTER_LATENCY_MAX_PENALTY)
+
+    def _latency_term(self, owner: str) -> float:
+        """Normalized latency used as a balance-sort term: each ~2s of learned
+        round-trip latency adds 1.0 to a node's effective "cost", so a fast node
+        (even if busy) ranks well above an idle but slow node. Unmeasured nodes
+        get a moderate cost (between known-fast and known-slow) so known-fast nodes
+        are preferred, but unknowns are still tried (and measured) before known-slow
+        ones -- never sending cold-start traffic blindly to the slowest machine."""
+        ema = self._latency_ema.get(owner)
+        if ema is None:
+            return 3.0
+        return ema / 2000.0
 
     def _request_requires_local_execution(self, request: RouterRequest) -> bool:
         """Return True when the fleet privacy wall forbids cloud/public routes.
@@ -245,9 +409,37 @@ class PolicyEngine:
         lane = self._provider_lane(provider, context_provider)
         if context_provider and context_provider.is_blocked:
             return False
+        if self._provider_liveness_dead(canonical_provider):
+            return False
         if self._request_requires_local_execution(request):
             return lane == ExecutionLane.local
         return True
+
+    def _provider_liveness_dead(self, canonical_provider: str) -> bool:
+        """Exclude a provider only on fresh, concrete evidence it's unusable.
+
+        We deliberately avoid excluding on missing/stale data (so a cold router
+        or a briefly-flaky probe never wipes the fleet); we only drop a provider
+        when the probe history shows it is currently online-but-empty (models
+        unloaded) within the last ROUTER_LIVENESS_MAX_AGE_SECONDS."""
+        report = self.provider_health.get(canonical_provider)
+        if not report:
+            return False
+        if report.get("stale"):
+            return False
+        if report.get("age_seconds", 9999) > ROUTER_LIVENESS_MAX_AGE_SECONDS:
+            return False
+        ok = report.get("ok")
+        model_count = report.get("model_count", 0) or 0
+        # Online endpoint that reports zero loaded models -> don't route to it.
+        if ok is False and model_count == 0:
+            return True
+        # Consistently-failing provider (very low recent health score) with fresh
+        # probe data -> exclude so we don't burn an attempt on a known-bad node.
+        health_score = report.get("health_score")
+        if health_score is not None and health_score < ROUTER_LIVENESS_MIN_HEALTH:
+            return True
+        return False
 
     def _model_matches(self, model: ModelConfig, required: set[str]) -> bool:
         return not required or required.issubset(model.capabilities)
@@ -325,7 +517,23 @@ class PolicyEngine:
         score += self._signal_score_adjustment(self._context_signals(provider, model), stage)
         if self._provider_signal_blocked(provider, model):
             score += 500
+        # Latency awareness: penalize owners whose measured latency sits above the
+        # baseline so `auto` prefers quick nodes over laggy ones.
+        owner = f"{provider.name}/{model.alias}"
+        score += self._latency_penalty(owner)
+        # Liveness awareness: demote providers with poor recent health so traffic
+        # avoids flaky / frequently-failing nodes even before circuits trip.
+        score += self._health_penalty(provider.name)
         return score
+
+    def _health_penalty(self, provider_name: str) -> float:
+        report = self.provider_health.get(provider_name)
+        if not report:
+            return 0.0
+        score = report.get("health_score")
+        if score is None:
+            return 0.0
+        return max(0.0, (100 - score)) * ROUTER_HEALTH_PENALTY
 
     def _node_preference_adjustment(self, node_capabilities: set[str], model_capabilities: set[str], stage: PolicyStage) -> float:
         adjustment = 0.0

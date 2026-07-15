@@ -187,8 +187,14 @@ class EventOutbox:
                 self._memory_connection = sqlite3.connect(":memory:")
                 self._memory_connection.row_factory = sqlite3.Row
             return self._memory_connection
-        conn = sqlite3.connect(self.database_path)
+        conn = sqlite3.connect(self.database_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.OperationalError:
+            pass
         return conn
 
     def _path_from_url(self, database_url: str) -> Path:

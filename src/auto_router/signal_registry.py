@@ -619,15 +619,16 @@ class ContextSignalStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_context_signal_events_saved ON context_signal_events(saved_at DESC)")
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.database_path)
+        conn = sqlite3.connect(self.database_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-        except Exception:
+            conn.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.OperationalError:
             pass
         return conn
+
 
     def _path_from_url(self, database_url: str) -> Path:
         if database_url.startswith("sqlite:///./"):

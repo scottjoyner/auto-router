@@ -215,6 +215,8 @@ async def lifespan(_: FastAPI):
     live_models_poll_task = asyncio.create_task(refresh_live_models_task())
     dispatch_task = asyncio.create_task(outbox_dispatch_task())
     prune_state_task = asyncio.create_task(prune_task())
+    fleet_health_task = asyncio.create_task(refresh_fleet_health_task())
+    persist_latency_t = asyncio.create_task(persist_latency_task())
     from auto_router.model_placement import RECONCILE_SECONDS, placement_reconcile_task
 
     placement_task = None
@@ -228,6 +230,8 @@ async def lifespan(_: FastAPI):
         live_models_poll_task.cancel()
         dispatch_task.cancel()
         prune_state_task.cancel()
+        fleet_health_task.cancel()
+        persist_latency_t.cancel()
         if placement_task is not None:
             placement_task.cancel()
         try:
@@ -249,6 +253,20 @@ async def lifespan(_: FastAPI):
         try:
             await prune_state_task
         except asyncio.CancelledError:
+            pass
+        try:
+            await fleet_health_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await persist_latency_t
+        except asyncio.CancelledError:
+            pass
+        # Flush learned latency map to disk on shutdown so it survives the restart.
+        try:
+            if hasattr(state, "policy_engine"):
+                await asyncio.to_thread(state.policy_engine.persist_latency, True)
+        except Exception:
             pass
 
 
@@ -280,7 +298,7 @@ async def health() -> dict[str, Any]:
     redis_ok = "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
-            redis_ok = "ok" if state.quota.client.ping() else "down"
+            redis_ok = "ok" if await asyncio.to_thread(state.quota.client.ping) else "down"
         except Exception:
             redis_ok = "down"
     
@@ -561,13 +579,33 @@ async def get_agent_job_artifacts(job_id: str) -> dict[str, Any]:
 
 
 async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingResponse:
+    # Feed the router's probe-history health into the policy engine so routing
+    # can demote/exclude flaky + unloaded nodes (liveness-gated routing).
+    state.policy_engine.provider_health = _fleet_health_map()
     plan = state.policy_engine.plan(router_request)
+    settings = get_settings()
+    # Hard bounds so a fleet full of dead/hung nodes can never make a single
+    # request hang for (attempt_timeout * candidate_count). We stop trying once
+    # the deadline passes or we've burned max_candidate_attempts.
+    deadline = time.monotonic() + settings.request_deadline_seconds
+    attempts = 0
+    timed_out = False
     errors: list[str] = []
     for stage in plan.stages:
         if not stage.candidates and stage.optional:
             continue
         stage_rejections: list[str] = []
+        # Release the plan-time reservation for this stage's top candidate now that
+        # we're committing to executing it (in-flight tracking takes over from here).
+        if stage.candidates:
+            state.policy_engine.mark_planned_end(
+                f"{stage.candidates[0].provider.name}/{stage.candidates[0].model.alias}"
+            )
         for candidate in stage.candidates:
+            if time.monotonic() > deadline or attempts >= settings.max_candidate_attempts:
+                timed_out = True
+                break
+            attempts += 1
             owner = _owner(candidate)
             if not _candidate_allowed(router_request, candidate, state.context):
                 rejection = f"not allowed for {owner}"
@@ -578,13 +616,14 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 stage_rejections.append(rejection)
                 errors.append(rejection)
                 continue
-            estimate = state.quota.estimate(candidate.model, router_request.raw_body)
-            if not state.quota.reserve(candidate.provider, candidate.model, estimate):
+            estimate = await asyncio.to_thread(state.quota.estimate, candidate.model, router_request.raw_body)
+            if not await asyncio.to_thread(state.quota.reserve, candidate.provider, candidate.model, estimate):
                 rejection = f"quota unavailable for {candidate.provider.name}/{candidate.model.alias}"
                 stage_rejections.append(rejection)
                 errors.append(rejection)
                 continue
-            enqueue_route_decision_event(
+            await asyncio.to_thread(
+                enqueue_route_decision_event,
                 state,
                 request=router_request,
                 profile_name=plan.profile_name,
@@ -594,16 +633,24 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 rejections=stage_rejections,
             )
             state.policy_engine.mark_inflight_start(owner)
-            provider = build_provider(candidate.provider, timeout_seconds=get_settings().request_timeout_seconds)
+            provider = build_provider(
+                candidate.provider,
+                timeout_seconds=get_settings().attempt_timeout_seconds,
+                connect_timeout_seconds=get_settings().connect_timeout_seconds,
+            )
             started_at_ms = int(time.time() * 1000)
             started = time.perf_counter()
             try:
                 if router_request.stream and router_request.route in {"chat_completions", "responses", "completions"}:
                     gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
-                    stream_response = await _dispatch_stream(provider, candidate, router_request, route_plan=gateway_context)
+                    stream_response = await asyncio.wait_for(
+                        _dispatch_stream(provider, candidate, router_request, route_plan=gateway_context),
+                        timeout=settings.attempt_timeout_seconds,
+                    )
                     state.policy_engine.mark_inflight_end(owner)
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     ended_at_ms = int(time.time() * 1000)
+                    state.policy_engine.mark_latency(owner, latency_ms)
                     state.circuits.record_success(owner)
                     gateway_metadata = None
                     if stream_response.provider.startswith("agentgateway"):
@@ -615,7 +662,8 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                             "quota_mode": gateway_context.quota_mode,
                             "latency_ms": latency_ms,
                         }
-                    _record_usage(
+                    await asyncio.to_thread(
+                        _record_usage,
                         router_request,
                         stream_response.provider,
                         stream_response.model,
@@ -639,13 +687,18 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                         },
                     )
                 gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
-                response = await _dispatch(provider, candidate, router_request, route_plan=gateway_context)
+                response = await asyncio.wait_for(
+                    _dispatch(provider, candidate, router_request, route_plan=gateway_context),
+                    timeout=settings.attempt_timeout_seconds,
+                )
                 state.policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
+                state.policy_engine.mark_latency(owner, latency_ms)
                 state.circuits.record_success(owner)
                 gateway_metadata = response.data.get("_gateway_metadata") if isinstance(response.data, dict) else None
                 ended_at_ms = int(time.time() * 1000)
-                _record_usage(
+                await asyncio.to_thread(
+                    _record_usage,
                     router_request,
                     response.provider,
                     response.model,
@@ -662,11 +715,13 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
             except ProviderError as exc:
+                state.policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                state.quota.release(candidate.provider, candidate.model, estimate)
+                await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
                 state.circuits.record_failure(owner, str(exc), retry_after=_retry_after_seconds(exc))
                 ended_at_ms = int(time.time() * 1000)
-                _record_usage(
+                await asyncio.to_thread(
+                    _record_usage,
                     router_request,
                     candidate.provider.name,
                     candidate.model.provider_model,
@@ -681,11 +736,13 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 stage_rejections.append(str(exc))
                 errors.append(str(exc))
             except Exception as exc:
+                state.policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                state.quota.release(candidate.provider, candidate.model, estimate)
+                await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
                 state.circuits.record_failure(owner, str(exc))
                 ended_at_ms = int(time.time() * 1000)
-                _record_usage(
+                await asyncio.to_thread(
+                    _record_usage,
                     router_request,
                     candidate.provider.name,
                     candidate.model.provider_model,
@@ -699,6 +756,13 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 )
                 stage_rejections.append(f"unexpected provider error: {exc}")
                 errors.append(f"unexpected provider error: {exc}")
+        if timed_out:
+            break
+    if timed_out:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "request deadline exceeded; too many dead/hung nodes", "details": errors},
+        )
     raise HTTPException(status_code=503, detail={"error": "all providers failed", "details": errors})
 
 
@@ -1041,11 +1105,49 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
         if hasattr(state, "signal_registry"):
             signals = provider_health_signals(provider.name, report, node_id=provider.node_id)
             state.signal_registry.save_snapshot(signal_snapshot(signals, revision=f"provider-health:{provider.name}", source="provider_health"))
-    if hasattr(state, "signal_registry"):
-        state.context = state.signal_registry.hydrate_context(state.context)
-        if hasattr(state, "policy_engine"):
-            state.policy_engine.context = state.context
+        if hasattr(state, "signal_registry"):
+            state.context = state.signal_registry.hydrate_context(state.context)
+            if hasattr(state, "policy_engine"):
+                state.policy_engine.context = state.context
     return reports
+
+
+# Cache the provider-health map used for liveness-gated routing. Refreshed by a
+# background task (off the event loop) so the request path never touches the
+# probe DB directly -- keeping routing O(1) and wedge-free under concurrency.
+_FLEET_HEALTH_CACHE: dict[str, Any] = {"at": 0.0, "map": {}}
+
+
+async def refresh_fleet_health_task() -> None:
+    """Periodically populate _FLEET_HEALTH_CACHE off the event loop."""
+    while True:
+        try:
+            if hasattr(state, "model_registry"):
+                reports = await asyncio.to_thread(state.model_registry.provider_health_reports)
+                _FLEET_HEALTH_CACHE["map"] = {
+                    str(report.get("provider") or ""): report for report in reports
+                }
+                _FLEET_HEALTH_CACHE["at"] = time.time()
+        except Exception:
+            pass
+        await asyncio.sleep(5.0)
+
+
+async def persist_latency_task() -> None:
+    """Periodically flush the learned per-node latency EMA to disk so the router
+    keeps its speed map across restarts (no cold-start re-learning)."""
+    interval = get_settings().latency_persist_interval_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            if hasattr(state, "policy_engine"):
+                await asyncio.to_thread(state.policy_engine.persist_latency)
+        except Exception:
+            pass
+
+
+def _fleet_health_map() -> dict[str, dict[str, Any]]:
+    return _FLEET_HEALTH_CACHE["map"]
 
 
 def _normalize_response_payload(response: ProviderResponse, stage: str, profile_name: str) -> dict[str, Any]:
