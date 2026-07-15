@@ -23,6 +23,14 @@ services:
       AUTO_ROUTER_ASSISTX_TASKS_URL: ${AUTO_ROUTER_ASSISTX_TASKS_URL:-http://assistx-api:8000/api/router/backlog-candidates}
       AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS: ${AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS:-10}
       AUTO_ROUTER_FLEET_DISPATCHER_STATS_PATH: /data/fleet_dispatcher_stats.json
+      # Fleet model-placement controller: keep DESIRED_PLACEMENTS resident so
+      # requests never hit an empty endpoint. Loads only (unloads gated off by
+      # default) so user-loaded models are never evicted.
+      AUTO_ROUTER_AUTOLOAD_ENABLED: ${AUTO_ROUTER_AUTOLOAD_ENABLED:-true}
+      AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS: ${AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS:-60}
+      AUTO_ROUTER_LOAD_TTL_SECONDS: ${AUTO_ROUTER_LOAD_TTL_SECONDS:-0}
+      AUTO_ROUTER_PLACEMENT_UNLOAD: ${AUTO_ROUTER_PLACEMENT_UNLOAD:-false}
+      AUTO_ROUTER_AUTOLOAD_NODES: ${AUTO_ROUTER_AUTOLOAD_NODES:-lmstudio-x1-370,lmstudio-deathstar,lmstudio-xwing,lmstudio-joyner,lmstudio-beelink-ryzen-7-mini-pc,lmstudio-scotts-macbook-air,lmstudio-macbook-air,lmstudio-lenovo-ideapad-330s-15ikb,lmstudio-optiplex-9030-aio}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}

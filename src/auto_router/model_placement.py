@@ -129,13 +129,9 @@ DESIRED_PLACEMENTS: list[DesiredLoad] = [
     # --- hermes exec / heavy reasoning: x1-370 is the primary worker ---
     DesiredLoad("lmstudio-x1-370", "ornith-1.0-35b", 262144, "hermes_exec", priority=100),
     DesiredLoad("lmstudio-x1-370", "refinedtoolcallv5-3b", 131072, "tool_call", priority=90),
-    DesiredLoad(
-        "lmstudio-x1-370",
-        "qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled",
-        262144,
-        "compression",
-        priority=80,
-    ),
+    # NOTE: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled is intentionally NOT
+    # placed on x1-370 -- its llama-server engine crashes (exitCode=1) on this
+    # host, so loading it only trips the circuit breaker and degrades health.
     # --- deathstar: quick hermes sessions (distinct RX 480 node) ---
     DesiredLoad("lmstudio-deathstar", "refinedtoolcallv5-3b", 131072, "quick_session", priority=85),
     DesiredLoad("lmstudio-deathstar", "ornith-1.0-9b", 131072, "hermes_worker", priority=75),
@@ -168,18 +164,42 @@ def _strip_v1(url: str) -> str:
     return url
 
 
+def _model_id(m: dict) -> str:
+    """Canonical model identity. LM Studio's OpenAI ``/v1/models`` endpoint only
+    returns *currently loaded* models, each with an ``id`` (e.g. ``liquid/lfm2.5-1.2b``)
+    that matches the keys used in DESIRED_PLACEMENTS. Fall back to native fields
+    (key/path) when present."""
+    if not isinstance(m, dict):
+        return ""
+    return str(
+        m.get("id")
+        or (m.get("raw", {}) or {}).get("key")
+        or m.get("model_key")
+        or m.get("path")
+        or ""
+    ).strip()
+
+
+def _is_loaded(m: dict) -> bool:
+    """A model is resident iff LM Studio reports loaded instances. The top-level
+    ``loaded`` boolean is unreliable; the authoritative signal is the
+    ``raw.loaded_instances`` list (non-empty = actually running on the endpoint)."""
+    if not isinstance(m, dict):
+        return False
+    raw = m.get("raw", {}) or {}
+    instances = raw.get("loaded_instances") or m.get("loaded_instances") or []
+    if isinstance(instances, list) and instances:
+        return True
+    return bool(m.get("loaded"))
+
+
 def _loaded_keys(snapshot: LiveModelSnapshot) -> set[str]:
     keys: set[str] = set()
     for m in snapshot.models:
-        if not isinstance(m, dict):
-            continue
-        raw = m.get("raw", {})
-        is_loaded = bool(m.get("loaded")) or bool(raw.get("loaded_instances"))
-        if not is_loaded:
-            continue
-        key = raw.get("key")
-        if key:
-            keys.add(key)
+        if _is_loaded(m):
+            mid = _model_id(m)
+            if mid:
+                keys.add(mid)
     return keys
 
 
@@ -202,9 +222,16 @@ def gather_live(state: Any) -> dict[str, dict[str, Any]]:
             loaded = _loaded_keys(snap)
         if not endpoint:
             endpoint = _strip_v1(prov.base_url)
+        available: set[str] = set()
+        if snap and snap.models:
+            for m in snap.models:
+                mid = _model_id(m)
+                if mid:
+                    available.add(mid)
         out[name] = {
             "endpoint": _strip_v1(endpoint),
             "loaded": loaded,
+            "available": available,
             "ok": ok,
             "latency_ms": latency,
         }
@@ -247,6 +274,24 @@ def compute_plan(state: Any) -> dict[str, Any]:
             continue
         if d.model_key in node["loaded"]:
             continue
+        available = node.get("available") or set()
+        if available and d.model_key not in available:
+            # Desired key is not in this node's catalog (e.g. spelling
+            # divergence between nodes). Skip rather than firing a doomed load
+            # that would 400 and trip the circuit breaker.
+            loads.append(
+                LoadAction(
+                    d.provider,
+                    node["endpoint"],
+                    d.model_key,
+                    d.context_length,
+                    d.ttl if d.ttl is not None else DEFAULT_TTL,
+                    d.usecase,
+                    swappable=is_swappable(d.provider),
+                    reason="model key not in node catalog (skip)",
+                )
+            )
+            continue
         loads.append(
             LoadAction(
                 d.provider,
@@ -287,6 +332,10 @@ def compute_plan(state: Any) -> dict[str, Any]:
         },
         "desired_count": len(DESIRED_PLACEMENTS),
         "loads_needed": [vars(a) for a in loads],
+        "load_backoff": {
+            k: len([t for t in v if time.time() - t < LOAD_FAILURE_BACKOFF_SECONDS])
+            for k, v in _load_failures.items()
+        },
         "unloads_needed": [vars(a) for a in unloads],
     }
 
@@ -318,6 +367,38 @@ async def _unload_model(endpoint: str, model_key: str) -> dict[str, Any]:
         return {"ok": False, "status": None, "detail": str(exc)[:300], "url": url}
 
 
+# Load-failure backoff: a placement that fails to load this many consecutive
+# times is skipped for LOAD_FAILURE_BACKOFF_SECONDS so a model that genuinely
+# cannot load on a node (engine crash, missing file) does not churn every
+# reconcile cycle or keep its circuit breaker permanently tripped.
+LOAD_FAILURE_BACKOFF_COUNT = int(os.getenv("AUTO_ROUTER_LOAD_FAILURE_BACKOFF_COUNT", "2"))
+LOAD_FAILURE_BACKOFF_SECONDS = int(os.getenv("AUTO_ROUTER_LOAD_FAILURE_BACKOFF_SECONDS", "600"))
+_load_failures: dict[str, list[float]] = {}
+
+
+def _load_backoff_key(provider: str, model_key: str) -> str:
+    return f"{provider}|{model_key}"
+
+
+def _in_backoff(provider: str, model_key: str) -> bool:
+    key = _load_backoff_key(provider, model_key)
+    stamps = _load_failures.get(key)
+    if not stamps:
+        return False
+    now = time.time()
+    recent = [t for t in stamps if now - t < LOAD_FAILURE_BACKOFF_SECONDS]
+    _load_failures[key] = recent
+    return len(recent) >= LOAD_FAILURE_BACKOFF_COUNT
+
+
+def _record_load_result(provider: str, model_key: str, ok: bool) -> None:
+    key = _load_backoff_key(provider, model_key)
+    if ok:
+        _load_failures.pop(key, None)
+    else:
+        _load_failures.setdefault(key, []).append(time.time())
+
+
 async def reconcile_once(state: Any, apply: bool | None = None, swappable_only: bool = False) -> dict[str, Any]:
     """Compute the plan and, if autoload is enabled (or apply=True), realize it.
 
@@ -332,30 +413,56 @@ async def reconcile_once(state: Any, apply: bool | None = None, swappable_only: 
     results: list[dict[str, Any]] = []
     if do_apply:
         for a in plan["loads_needed"]:
+            if a["reason"].startswith("model key not in node catalog"):
+                results.append({
+                    **a,
+                    "result": {"ok": False, "detail": "model key absent from node catalog — will not load", "status": None},
+                    "skipped": True,
+                })
+                log.info("skip (absent key) load %s on %s", a["model_key"], a["provider"])
+                continue
             if swappable_only and not a["swappable"]:
                 results.append({
-                    **vars(a),
+                    **a,
                     "result": {"ok": False, "detail": "node is static (not swappable) — manual load required", "status": None},
                     "skipped": True,
                 })
                 log.info("skip (static) load %s on %s", a["model_key"], a["provider"])
                 continue
             if not a["endpoint"]:
-                results.append({**vars(a), "result": {"ok": False, "detail": "no endpoint", "status": None}})
+                results.append({**a, "result": {"ok": False, "detail": "no endpoint", "status": None}})
+                continue
+            if _in_backoff(a["provider"], a["model_key"]):
+                # Clear this model's circuit breaker so a persistently-unloadable
+                # model (engine crash, missing file) does not keep fleet health
+                # degraded. The backoff already prevents further load churn.
+                cb = getattr(state, "circuits", None)
+                if cb is not None:
+                    try:
+                        cb.reset(f"{a['provider']}/{a['model_key']}")
+                    except Exception:
+                        pass
+                results.append({
+                    **a,
+                    "result": {"ok": False, "detail": "load failing repeatedly; backing off to avoid churn", "status": None},
+                    "skipped": True,
+                })
+                log.info("skip (backoff) load %s on %s", a["model_key"], a["provider"])
                 continue
             res = await _load_model(a["endpoint"], a["model_key"], a["context_length"], a["ttl"])
-            results.append({**vars(a), "result": res})
+            _record_load_result(a["provider"], a["model_key"], bool(res.get("ok")))
+            results.append({**a, "result": res})
             log.info("load %s on %s -> %s", a["model_key"], a["provider"], res)
         for a in plan["unloads_needed"]:
             if swappable_only and not is_swappable(a["provider"]):
                 results.append({
-                    **vars(a),
+                    **a,
                     "result": {"ok": False, "detail": "node is static (not swappable) — manual unload required", "status": None},
                     "skipped": True,
                 })
                 continue
             res = await _unload_model(a["endpoint"], a["model_key"])
-            results.append({**vars(a), "result": res})
+            results.append({**a, "result": res})
             log.info("unload %s on %s -> %s", a["model_key"], a["provider"], res)
     plan["applied"] = do_apply
     plan["actions_taken"] = results
