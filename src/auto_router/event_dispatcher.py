@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from auto_router.event_outbox import EventOutbox
+from auto_router.contracts_shim import SCHEMA_VERSION
 
 
 @dataclass
@@ -36,7 +38,16 @@ def _build_canonical_envelope(event: dict[str, Any]) -> dict[str, Any]:
     envelope fields that AssistX's POST /api/events endpoint expects.
     """
     payload = event.get("payload", {})
+    # correlation_id is REQUIRED on every emitted envelope (contract enforcement,
+    # LLD §2). Generate a valid UUID if the outbox event did not carry one.
     correlation_id = payload.get("correlation_id")
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())
+    else:
+        try:
+            uuid.UUID(correlation_id)
+        except (ValueError, AttributeError, TypeError):
+            correlation_id = str(uuid.uuid4())
     task_id = payload.get("task_id")
     route_id = payload.get("route_id")
 
@@ -63,7 +74,7 @@ def _build_canonical_envelope(event: dict[str, Any]) -> dict[str, Any]:
         "node_id": str(node_id),
         "occurred_at": occurred_at or int(time.time()),
         "idempotency_key": event["idempotency_key"],
-        "schema_version": "2026-06-08.v1",
+        "schema_version": SCHEMA_VERSION,
         "subject": subject,
         "payload": payload,
         "artifact_refs": [],
