@@ -3,11 +3,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from auto_router.context import ContextService, ContextSnapshot, ServiceStatus
 from auto_router.event_dispatcher import AssistXEventDispatcher
 from auto_router.event_outbox import EventOutbox, OutboxEvent
+from auto_router.security import require_admin
 from auto_router.service_scanner import ServiceProbeResult, ServiceStatusCache, scan_services
 from auto_router.service_store import ServiceStatusStore
 from auto_router.settings import get_settings
@@ -235,6 +236,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
     async def scan_registered_services(
         allow_external: bool = False,
         limit: int | None = None,
+        _: None = Depends(require_admin),
     ) -> dict[str, Any]:
         services = state.context.all_services()
         if not services:
@@ -270,7 +272,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
         }
 
     @app.post("/admin/outbox/dispatch")
-    async def dispatch_outbox(limit: int = 25, dry_run: bool = False) -> dict[str, Any]:
+    async def dispatch_outbox(limit: int = 25, dry_run: bool = False, _: None = Depends(require_admin)) -> dict[str, Any]:
         return await dispatch_outbox_cycle(state, limit=limit, dry_run=dry_run, reason="manual")
 
     @app.post("/admin/outbox/{event_id}/delivered")

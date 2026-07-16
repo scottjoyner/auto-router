@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # OpenTelemetry tracing. Engaged only when true (LLD §3.5 W-60); requires the
     # optional opentelemetry-api SDK to be installed.
     otel_enabled: bool = False
+    # Admin/ops endpoint protection (LLD §3.5 W-64). When set, the /admin/* and
+    # /jobs/agent endpoints require this shared token via the X-Admin-Token header
+    # or HTTP Basic auth (user "admin", this token as password). Empty = locked down
+    # (requests rejected until a token is configured).
+    admin_token: str = ""
 
 
 

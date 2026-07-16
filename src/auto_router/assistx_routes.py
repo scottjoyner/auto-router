@@ -21,24 +21,33 @@ def _build_route_decision(
     provider: str,
     model: str,
     target_service: str | None = None,
+    target_model: str | None = None,
     target_node_id: str | None = None,
     target_job_id: str | None = None,
     target_worker: str | None = None,
+    dispatch_id: str | None = None,
     rationale: str = "",
     confidence: float = 0.9,
     status: str = "selected",
 ) -> dict[str, Any]:
     route_id = f"route:{uuid.uuid4().hex[:12]}"
+    # Align with the swarm-contracts RouteDecision shape (LLD §3.5 W-65):
+    # include a stable dispatch_id + correlation_id + target_model so auto-assist
+    # can match the decision to its Dispatch node.
+    if dispatch_id is None:
+        dispatch_id = f"dispatch:{uuid.uuid4().hex[:16]}"
     return RouteDecision(
         event_type="router.route_decision",
         status=status,
         correlation_id=request.correlation_id,
+        dispatch_id=dispatch_id,
         route_id=route_id,
         task_id=request.task_id,
         lane=lane,
         provider=provider,
         model=model,
         target_service=target_service,
+        target_model=target_model or model,
         target_node_id=target_node_id,
         target_job_id=target_job_id,
         target_worker=target_worker,

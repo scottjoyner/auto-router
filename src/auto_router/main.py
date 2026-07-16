@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -38,6 +38,7 @@ from auto_router.live_model_routes import merge_discovered_lmstudio_providers, r
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
+from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
 from auto_router.ui_pages import get_ui_page_sections
@@ -449,7 +450,7 @@ async def dashboard_summary(request: Request) -> Any:
 
 
 @app.get("/admin/quota")
-async def admin_quota() -> dict[str, Any]:
+async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [snapshot.model_dump() for snapshot in state.quota.snapshots(state.providers.enabled())]}
 
 
@@ -596,7 +597,7 @@ async def completions(request: Request) -> JSONResponse | StreamingResponse:
 
 
 @app.post("/jobs/agent")
-async def create_agent_job(request: Request) -> dict[str, Any]:
+async def create_agent_job(request: Request, _: None = Depends(require_admin)) -> dict[str, Any]:
     job_request = build_agent_job_request(await request.json())
     record = state.agent_jobs.submit(job_request)
     return {

@@ -189,12 +189,14 @@ class RouteDecision(BaseModel):
     event_type: str = "router.route_decision"
     status: str = "selected"
     correlation_id: str
+    dispatch_id: str | None = None
     route_id: str
     task_id: str | None = None
     lane: str
     provider: str
     model: str
     target_service: str | None = None
+    target_model: str | None = None
     target_node_id: str | None = None
     target_job_id: str | None = None
     target_worker: str | None = None
