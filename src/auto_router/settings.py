@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     assistx_tasks_timeout_seconds: float = 10.0
     assistx_basic_auth_user: str = ""
     assistx_basic_auth_pass: str = ""
+    # In-process agent execution. This is TRANSITIONAL: the canonical execution
+    # authority is (Paperclip via) auto-assist. When disabled (default), tool-capable
+    # route decisions still produce a RouteDecision + job record metadata but the
+    # router does NOT launch in-process workers; callers should dispatch to Paperclip.
+    fleet_dispatcher_enabled: bool = False
+    # OpenTelemetry tracing. Engaged only when true (LLD §3.5 W-60); requires the
+    # optional opentelemetry-api SDK to be installed.
+    otel_enabled: bool = False
+
+
 
 
 @lru_cache

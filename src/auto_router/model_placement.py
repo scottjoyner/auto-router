@@ -122,9 +122,9 @@ class UnloadAction:
     reason: str = ""
 
 
-# Desired fleet state. Model keys must match each node's LM Studio catalog key
-# (note the spelling divergence: joyner uses "ornith-1.0-9b", xwing/x1-370 use
-# "orinth-1.0-9b"). Context lengths are the effective KV cache size to load with.
+# Desired fleet state. Model keys must match each node's LM Studio catalog key.
+# All nodes standardize on the "ornith" spelling for the 9B worker model.
+# Context lengths are the effective KV cache size to load with.
 DESIRED_PLACEMENTS: list[DesiredLoad] = [
     # --- hermes exec / heavy reasoning: x1-370 is the primary worker ---
     DesiredLoad("lmstudio-x1-370", "ornith-1.0-35b", 262144, "hermes_exec", priority=100),
@@ -136,7 +136,7 @@ DESIRED_PLACEMENTS: list[DesiredLoad] = [
     DesiredLoad("lmstudio-deathstar", "refinedtoolcallv5-3b", 131072, "quick_session", priority=85),
     DesiredLoad("lmstudio-deathstar", "ornith-1.0-9b", 131072, "hermes_worker", priority=75),
     # --- xwing: secondary hermes worker (9B) ---
-    DesiredLoad("lmstudio-xwing", "orinth-1.0-9b", 131072, "hermes_worker_secondary", priority=85),
+    DesiredLoad("lmstudio-xwing", "ornith-1.0-9b", 131072, "hermes_worker_secondary", priority=85),
     DesiredLoad("lmstudio-xwing", "refinedtoolcallv5-3b-ablated-i1", 131072, "tool_call", priority=70),
     # --- joyner: 9B worker ---
     DesiredLoad("lmstudio-joyner", "ornith-1.0-9b", 131072, "hermes_worker", priority=70),

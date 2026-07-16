@@ -37,7 +37,6 @@ from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
-from auto_router.route_event_patch import install_route_event_patch
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
@@ -236,6 +235,9 @@ def _context_projection_summary() -> dict[str, Any]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await load_state()
+    from auto_router.otel import init_otel
+
+    init_otel()
     refresh_task = asyncio.create_task(refresh_context_task())
     tailnet_refresh_task = asyncio.create_task(refresh_tailnet_provider_task())
     live_models_poll_task = asyncio.create_task(refresh_live_models_task())

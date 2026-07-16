@@ -1,0 +1,10 @@
+context.yaml moved to archive/context.yaml.static-fallback on 2026-07-16 (LLD §3.5 W-58).
+
+This file is a STATIC FALLBACK SNAPSHOT ONLY. The canonical fleet/context
+truth is owned by AssistX/Neo4j and is projected over HTTP via
+AUTO_ROUTER_CONTEXT_CONFIG (e.g. http://assistx:8000/api/router/context-projection).
+
+The router boots fine without this file (it falls back to a bootstrap snapshot),
+so this local duplicate should not be relied upon. If you need a local copy, use
+config/context.example.yaml plus AUTO_ROUTER_CONTEXT_CONFIG pointing at the
+AssistX projection endpoint.

@@ -242,6 +242,16 @@ def _select_lane_and_provider(
 
 
 def register_assistx_routes(app: Any, state: Any) -> None:
+    from auto_router.settings import get_settings
+
+    settings = get_settings()
+    if not settings.fleet_dispatcher_enabled:
+        print(
+            "WARNING: in-process fleet/agent execution is TRANSITIONAL and currently "
+            "DISABLED (AUTO_ROUTER_FLEET_DISPATCHER_ENABLED=false). Tool-capable route "
+            "decisions will be marked for Paperclip dispatch, not executed in-process."
+        )
+
     @app.post("/api/routes/request")
     async def route_request(body: RouteRequest) -> dict[str, Any]:
         selection = _select_lane_and_provider(body, state)
@@ -273,15 +283,23 @@ def register_assistx_routes(app: Any, state: Any) -> None:
             job_request = selection.get("job_request")
             if job_request is None:
                 job_request = build_agent_job_request(_build_tool_job_body(body, selection))
-            record = state.agent_jobs.submit(job_request)
+            # In-process execution is transitional and gated. When disabled, we
+            # still build the RouteDecision with target_service=/jobs/agent so the
+            # canonical Paperclip execution path can pick it up, but we do NOT launch
+            # a worker in this process (LLD §3.5 W-56).
+            target_job_id = None
+            target_worker = selection.get("target_worker")
+            if settings.fleet_dispatcher_enabled:
+                record = state.agent_jobs.submit(job_request)
+                target_job_id = record.request.job_id
             decision = _build_route_decision(
                 body,
                 lane=lane,
                 provider=selection["provider"],
                 model=selection["model"],
                 target_service=selection.get("target_service"),
-                target_job_id=record.request.job_id,
-                target_worker=selection.get("target_worker"),
+                target_job_id=target_job_id,
+                target_worker=target_worker,
                 rationale=selection["rationale"],
                 confidence=selection["confidence"],
                 status="selected",

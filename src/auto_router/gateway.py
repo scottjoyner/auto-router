@@ -185,26 +185,37 @@ async def check_agentgateway_health(base_url: str, timeout_seconds: float = 5.0)
     
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            # Try health endpoint first, fall back to root
+            # Try health endpoint first, fall back to root. A 2xx response from
+            # either means the gateway is actually serving HTTP (not just a TCP
+            # connect). Anything else is treated as down (LLD §3.5 W-62).
+            last_exc: Exception | None = None
             for path in ["/health", "/"]:
                 try:
                     response = await client.get(f"{base_url.rstrip('/')}{path}")
-                    if 200 <= response.status_code < 400:
-                        return ProviderHealth(
-                            provider="agentgateway",
-                            ok=True,
-                            detail=f"HTTP {response.status_code}",
-                            metadata={"base_url": base_url},
-                        )
-                except Exception:
+                except Exception as exc:
+                    last_exc = exc
                     continue
-            
-            # If no endpoint responds, try TCP connectivity check
-            await client.get(f"{base_url.rstrip('/')}/")
+                if 200 <= response.status_code < 400:
+                    return ProviderHealth(
+                        provider="agentgateway",
+                        ok=True,
+                        detail=f"HTTP {response.status_code}",
+                        metadata={"base_url": base_url},
+                    )
+                last_exc = RuntimeError(f"HTTP {response.status_code}")
+            # No endpoint returned success. If we got a response (non-2xx) or a
+            # connect error, the gateway is NOT healthy -- do not report ok=True.
+            if last_exc is not None:
+                return ProviderHealth(
+                    provider="agentgateway",
+                    ok=False,
+                    detail=str(last_exc),
+                    metadata={"base_url": base_url},
+                )
             return ProviderHealth(
                 provider="agentgateway",
-                ok=True,
-                detail="TCP connection successful",
+                ok=False,
+                detail="no response from gateway",
                 metadata={"base_url": base_url},
             )
     except httpx.ConnectTimeout:
