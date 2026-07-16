@@ -104,7 +104,7 @@ providers:
   quota_class: local
   type: lmstudio
 - base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
-  enabled: true
+  enabled: false
   models: []
   name: lmstudio-joyner
   node_id: joyner

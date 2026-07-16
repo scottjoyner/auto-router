@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import FastAPI
@@ -58,6 +59,7 @@ def enqueue_cli_discovery_events(state: Any, results: list[dict[str, Any]]) -> l
             idempotency_key=idempotency_key,
             payload={
                 **result,
+                "correlation_id": str(uuid.uuid4()),
                 "context_revision": context_revision,
                 "context_source": context_source,
             },

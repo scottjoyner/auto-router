@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from auto_router.event_outbox import EventOutbox, OutboxEvent
@@ -76,6 +77,14 @@ def enqueue_route_execution_event(
     request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
     task_id = getattr(request, "task_id", None) or request_metadata.get("task_id")
     agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get("agent_run_id")
+    # Propagate correlation_id so AssistX can link this TraceEvent back to the
+    # originating trace group. The hub rejects envelopes without correlation_id;
+    # the dispatcher supplies a uuid4 fallback but we prefer the real trace id.
+    correlation_id = (
+        getattr(request, "correlation_id", None)
+        or request_metadata.get("correlation_id")
+        or str(uuid.uuid4())
+    )
     node_id = (
         getattr(request, "node_id", None)
         or request_metadata.get("node_id")
@@ -85,6 +94,7 @@ def enqueue_route_execution_event(
 
     payload = {
         "request_id": request.request_id,
+        "correlation_id": correlation_id,
         "route": request.route,
         "requested_model": request.model,
         "priority": request.priority.value,
@@ -150,6 +160,13 @@ def enqueue_route_decision_event(
     request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
     task_id = getattr(request, "task_id", None) or request_metadata.get("task_id")
     agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get("agent_run_id")
+    # Propagate correlation_id for end-to-end trace linkage (hub rejects envelopes
+    # without it; dispatcher supplies a uuid4 fallback but the real id is better).
+    correlation_id = (
+        getattr(request, "correlation_id", None)
+        or request_metadata.get("correlation_id")
+        or str(uuid.uuid4())
+    )
     node_id = (
         getattr(request, "node_id", None)
         or request_metadata.get("node_id")
@@ -158,6 +175,7 @@ def enqueue_route_decision_event(
     )
     payload = {
         "request_id": request.request_id,
+        "correlation_id": correlation_id,
         "route": request.route,
         "requested_model": request.model,
         "profile": profile_name,

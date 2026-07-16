@@ -138,9 +138,6 @@ DESIRED_PLACEMENTS: list[DesiredLoad] = [
     # --- xwing: secondary hermes worker (9B) ---
     DesiredLoad("lmstudio-xwing", "ornith-1.0-9b", 131072, "hermes_worker_secondary", priority=85),
     DesiredLoad("lmstudio-xwing", "refinedtoolcallv5-3b-ablated-i1", 131072, "tool_call", priority=70),
-    # --- joyner: 9B worker ---
-    DesiredLoad("lmstudio-joyner", "ornith-1.0-9b", 131072, "hermes_worker", priority=70),
-    DesiredLoad("lmstudio-joyner", "refinedtoolcallv5-3b", 131072, "tool_call", priority=60),
     # --- macbook air (scotts): review / summarization ---
     DesiredLoad("lmstudio-scotts-macbook-air", "liquid/lfm2.5-1.2b", 128000, "review_summarize", priority=60),
     DesiredLoad("lmstudio-scotts-macbook-air", "refinedtoolcallv5-3b", 131072, "tool_call", priority=55),

@@ -93,6 +93,7 @@ def enqueue_backlog_decision_event(
     )
     payload = {
         "task_id": decision.task_id,
+        "correlation_id": str(uuid.uuid4()),
         "title": decision.title,
         "status": decision.status,
         "reason": decision.reason,

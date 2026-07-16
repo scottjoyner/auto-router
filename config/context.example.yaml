@@ -218,10 +218,10 @@ providers:
     local: true
     can_use_free_api: false
     free_api_credits: null
-    blocked: false
+    blocked: true
     aliases: [local/tailnet-joyner]
     capabilities: [chat, streaming, code, json, local_only, hermes_worker]
-    detail: Tailnet LM Studio node; live model inventory is discovered on refresh and may change over time
+    detail: Tailnet LM Studio node currently offline; keep blocked until the host is reachable again
     services:
       - service_id: provider.lmstudio-joyner.api
         name: LM Studio Joyner API

@@ -322,6 +322,7 @@ async def health() -> dict[str, Any]:
     open_circuits = [circuit for circuit in state.circuits.snapshot() if circuit["open"]]
     gateway_status = await build_agentgateway_status()
     context_projection = _context_projection_summary()
+    model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     outbox_pressure = build_outbox_pressure_status(state)
     # A live telemetry trickle sits at 'warning' (draining, below the critical
     # threshold) during normal operation; only 'critical' backlog or dead-letters
@@ -353,6 +354,8 @@ async def health() -> dict[str, Any]:
         "local_providers": state.context.local_provider_names(),
         "free_api_providers": state.context.free_api_provider_names(),
         "blocked_providers": state.context.blocked_provider_names(),
+        "model_registry_stale_providers": model_registry_summary.get("stale_providers", []) if hasattr(state, "model_registry") else [],
+        "model_registry_error_providers": model_registry_summary.get("error_providers", []) if hasattr(state, "model_registry") else [],
         "running_local_nodes": state.context.running_local_node_names(),
         "agent_workers_configured": len(state.agents.agent_workers),
         "open_circuits": len(open_circuits),
@@ -410,6 +413,7 @@ async def dashboard(request: Request) -> Any:
 async def dashboard_summary(request: Request) -> Any:
     settings = get_settings()
     provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
+    model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     fleet_dispatcher_stats = _fleet_dispatcher_stats()
     workflow_contract_summary = _workflow_contract_summary(fleet_dispatcher_stats)
     event_outbox = getattr(state, "event_outbox", None)
@@ -422,6 +426,7 @@ async def dashboard_summary(request: Request) -> Any:
             "snapshots": state.quota.snapshots(state.providers.enabled()),
             "provider_probe_summary": state.model_registry.probe_summary() if hasattr(state, "model_registry") else {},
             "provider_health_summary": provider_health_summary,
+            "model_registry_summary": model_registry_summary,
             "agents": state.agents.agent_workers,
             "jobs": list(state.agent_jobs.jobs.values()),
             "recent_usage": state.ledger.recent_events(limit=20),

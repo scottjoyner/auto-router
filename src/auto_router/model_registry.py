@@ -210,7 +210,7 @@ class ModelRegistryStore:
             for row in rows
         ]
 
-    def summary(self) -> dict[str, int]:
+    def summary(self) -> dict[str, object]:
         latest = self.latest_inventory()
         return {
             "providers": len(latest),
@@ -218,6 +218,8 @@ class ModelRegistryStore:
             "error": sum(1 for snapshot in latest if not snapshot.ok),
             "models": sum(len(snapshot.models) for snapshot in latest),
             "stale": sum(1 for snapshot in latest if snapshot.stale),
+            "stale_providers": [snapshot.provider for snapshot in latest if snapshot.stale],
+            "error_providers": [snapshot.provider for snapshot in latest if not snapshot.ok],
         }
 
     def probe_summary(self) -> dict[str, int]:

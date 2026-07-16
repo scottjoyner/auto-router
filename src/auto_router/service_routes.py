@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -102,8 +103,8 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
 
     - ``ok``: nothing queued, or a modest drain below ``warning_threshold``.
     - ``warning``: a visible-but-settling backlog below ``critical_threshold``.
-    - ``critical``: a genuine sustained backlog (>= ``critical_threshold``) OR
-      any dead-lettered events (permanent delivery failures).
+    - ``critical``: a genuine sustained backlog (>= ``critical_threshold``).
+      Dead-letter rows are terminal history and are reported separately.
     """
     settings = get_settings()
     dispatch_status = build_outbox_dispatch_status(state)
@@ -111,15 +112,15 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
     pending = int(dispatch_status.get("pending") or summary.get("pending") or 0)
     retry = int(dispatch_status.get("retry") or summary.get("retry") or 0)
     dead_letter = int(dispatch_status.get("dead_letter") or summary.get("dead_letter") or 0)
-    total = pending + retry + dead_letter
+    total = pending + retry
     warning_threshold = int(getattr(settings, "assistx_outbox_warning_threshold", 25))
     critical_threshold = int(getattr(settings, "assistx_outbox_critical_threshold", 200))
-    if total == 0:
+    if total == 0 and dead_letter == 0:
         level = "ok"
         headline = "Outbox pressure is clear"
         detail = "No pending, retry, or dead-letter outbox events are waiting to be processed."
         action = "No action required."
-    elif dead_letter > 0 or total >= critical_threshold:
+    elif total >= critical_threshold:
         level = "critical"
         headline = "Outbox pressure is high"
         detail = (
@@ -127,7 +128,7 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
             "waiting to move through the AssistX sink path."
         )
         action = "Inspect /admin/outbox and /admin/outbox/dispatch before treating restart health as green."
-    elif total >= warning_threshold:
+    elif total > 0 or dead_letter > 0:
         level = "warning"
         headline = "Outbox pressure is present"
         detail = (
@@ -285,6 +286,18 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
         state.event_outbox.mark_failed(event_id, error=error, retry=retry)
         return {"event_id": event_id, "status": "retry" if retry else "dead_letter", "summary": state.event_outbox.summary()}
 
+    @app.post("/admin/outbox/prune")
+    async def prune_outbox(
+        keep_delivered: int = 1000,
+        keep_dead_letter: int = 0,
+        _: None = Depends(require_admin),
+    ) -> dict[str, Any]:
+        pruned = state.event_outbox.prune_terminal(
+            keep_delivered=max(keep_delivered, 0),
+            keep_dead_letter=max(keep_dead_letter, 0),
+        )
+        return {"pruned": pruned, "summary": state.event_outbox.summary()}
+
 
 def hydrate_service_cache_from_store(state: Any) -> None:
     latest = state.service_store.latest_results()
@@ -307,6 +320,7 @@ def enqueue_service_snapshot_events(state: Any, results: list[ServiceProbeResult
             idempotency_key=idempotency_key,
             payload={
                 "service_id": result.service_id,
+                "correlation_id": str(uuid.uuid4()),
                 "name": result.name,
                 "url": result.url,
                 "status": result.status.value,

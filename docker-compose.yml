@@ -30,7 +30,7 @@ services:
       AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS: ${AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS:-60}
       AUTO_ROUTER_LOAD_TTL_SECONDS: ${AUTO_ROUTER_LOAD_TTL_SECONDS:-0}
       AUTO_ROUTER_PLACEMENT_UNLOAD: ${AUTO_ROUTER_PLACEMENT_UNLOAD:-false}
-      AUTO_ROUTER_AUTOLOAD_NODES: ${AUTO_ROUTER_AUTOLOAD_NODES:-lmstudio-x1-370,lmstudio-deathstar,lmstudio-xwing,lmstudio-joyner,lmstudio-beelink-ryzen-7-mini-pc,lmstudio-scotts-macbook-air,lmstudio-macbook-air,lmstudio-lenovo-ideapad-330s-15ikb,lmstudio-optiplex-9030-aio}
+      AUTO_ROUTER_AUTOLOAD_NODES: ${AUTO_ROUTER_AUTOLOAD_NODES:-lmstudio-x1-370,lmstudio-deathstar,lmstudio-xwing,lmstudio-beelink-ryzen-7-mini-pc,lmstudio-scotts-macbook-air,lmstudio-macbook-air,lmstudio-lenovo-ideapad-330s-15ikb,lmstudio-optiplex-9030-aio}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}

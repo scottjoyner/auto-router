@@ -93,7 +93,7 @@ providers:
 
   - name: lmstudio-joyner
     type: lmstudio
-    enabled: true
+    enabled: false
     base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
     priority: 5
     capabilities: [chat, streaming, code, json, local_only, hermes_worker]

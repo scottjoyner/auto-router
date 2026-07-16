@@ -117,6 +117,7 @@ def test_model_registry_marks_expired_probe_as_stale_and_degraded(tmp_path) -> N
 
     report = store.provider_health_reports()[0]
     probe_summary = store.probe_summary()
+    summary = store.summary()
 
     assert report["provider"] == "lmstudio-xwing"
     assert report["stale"] is True
@@ -124,3 +125,5 @@ def test_model_registry_marks_expired_probe_as_stale_and_degraded(tmp_path) -> N
     assert int(cast(int, report["health_score"])) <= 59
     assert probe_summary["stale"] == 1
     assert probe_summary["healthy"] == 0
+    assert summary["stale_providers"] == ["lmstudio-xwing"]
+    assert summary["error_providers"] == []

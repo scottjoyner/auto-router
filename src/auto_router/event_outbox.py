@@ -139,6 +139,52 @@ class EventOutbox:
         summary["total"] = sum(summary.values())
         return summary
 
+    def prune_terminal(self, keep_delivered: int = 1000, keep_dead_letter: int = 0) -> dict[str, int]:
+        """Trim terminal outbox rows while preserving active backlog.
+
+        Pending/retry rows are never removed here. Delivered and dead-letter rows
+        are historical once the dispatch outcome is known, so keeping a bounded
+        tail prevents the outbox from growing forever after a burst of failures.
+        """
+        with self._connect() as conn:
+            delivered_deleted = 0
+            dead_letter_deleted = 0
+            if keep_delivered >= 0:
+                delivered_deleted = int(
+                    conn.execute(
+                        """
+                        DELETE FROM event_outbox
+                        WHERE status = 'delivered'
+                          AND id NOT IN (
+                              SELECT id FROM event_outbox
+                              WHERE status = 'delivered'
+                              ORDER BY updated_at DESC, id DESC
+                              LIMIT ?
+                          )
+                        """,
+                        (keep_delivered,),
+                    ).rowcount
+                    or 0
+                )
+            if keep_dead_letter >= 0:
+                dead_letter_deleted = int(
+                    conn.execute(
+                        """
+                        DELETE FROM event_outbox
+                        WHERE status = 'dead_letter'
+                          AND id NOT IN (
+                              SELECT id FROM event_outbox
+                              WHERE status = 'dead_letter'
+                              ORDER BY updated_at DESC, id DESC
+                              LIMIT ?
+                          )
+                        """,
+                        (keep_dead_letter,),
+                    ).rowcount
+                    or 0
+                )
+        return {"delivered_deleted": delivered_deleted, "dead_letter_deleted": dead_letter_deleted}
+
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "event_id": row["event_id"],
