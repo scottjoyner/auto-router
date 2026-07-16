@@ -59,13 +59,15 @@ async def node_report(request: Request) -> dict[str, Any]:
     }
     _node_reports[hostname] = report
     _publish(report)
-    # Best-effort redis pubsub fan-out for external consumers.
-    try:
-        redis = getattr(request.app.state, "redis", None)
-        if redis is not None:
+    # Best-effort redis pubsub fan-out for external consumers. ``app.state.redis``
+    # is only set when a redis client is configured (see lifespan); guard against
+    # it being absent so an in-process-only deployment never crashes (LLD §3.5 W-54).
+    redis = getattr(request.app.state, "redis", None)
+    if redis is not None:
+        try:
             await redis.publish("fleet:node-report", _json_dumps(report))
-    except Exception:
-        pass
+        except Exception:
+            pass
     return {"ok": True, "hostname": hostname}
 
 

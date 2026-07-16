@@ -98,6 +98,13 @@ async def load_state() -> None:
     state.agent_jobs = AgentJobManager(state.agents.agent_workers)
     state.outbox_dispatch_lock = asyncio.Lock()
     state.outbox_dispatch_status = {}
+    # Initialize the AssistX event outbox up front so the background
+    # outbox dispatcher (outbox_dispatch_task) can run from startup rather
+    # than waiting for the first /api/routes/request or admin dispatch to
+    # lazily create it. See LLD §3.5 W-52.
+    from auto_router.route_events import ensure_event_outbox
+
+    state.event_outbox = ensure_event_outbox(state)
 
 
 async def refresh_context_task() -> None:

@@ -604,3 +604,59 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             headers=headers_dict,
             body=body_stream(),
         )
+
+    async def responses(
+        self,
+        request: RouterRequest,
+        provider_model: str,
+        route_plan: Any | None = None,
+    ) -> ProviderResponse:
+        """Gateway-routed responses request.
+
+        The agentgateway sidecar only brokers chat-completions today; map
+        ``/responses`` onto the chat-completions endpoint so non-chat
+        requests fail *closed* with a clear error instead of raising an
+        AttributeError 500 (LLD §3.5 W-53).
+        """
+        return await self.chat_completions(request, provider_model, route_plan=route_plan)
+
+    async def embeddings(
+        self,
+        request: RouterRequest,
+        provider_model: str,
+    ) -> ProviderResponse:
+        raise ProviderError(
+            "agentgateway does not support embeddings routing (AUTO_ROUTER_AGENTGATEWAY_ENABLED)",
+            status_code=501,
+            retryable=False,
+        )
+
+    async def completions(
+        self,
+        request: RouterRequest,
+        provider_model: str,
+        route_plan: Any | None = None,
+    ) -> ProviderResponse:
+        """Gateway-routed legacy completions request.
+
+        Map onto the chat-completions endpoint if the sidecar can proxy it;
+        otherwise fail closed. We proxy through chat_completions because the
+        gateway's OpenAI-compatible endpoint does not expose /completions.
+        """
+        return await self.chat_completions(request, provider_model, route_plan=route_plan)
+
+    async def stream_responses(
+        self,
+        request: RouterRequest,
+        provider_model: str,
+        route_plan: Any | None = None,
+    ) -> ProviderStreamResponse:
+        return await self.stream_chat_completions(request, provider_model, route_plan=route_plan)
+
+    async def stream_completions(
+        self,
+        request: RouterRequest,
+        provider_model: str,
+        route_plan: Any | None = None,
+    ) -> ProviderStreamResponse:
+        return await self.stream_chat_completions(request, provider_model, route_plan=route_plan)

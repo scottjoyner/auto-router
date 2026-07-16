@@ -4,7 +4,7 @@ install:
 	python -m pip install -e '.[dev]'
 
 dev:
-	uvicorn auto_router.main:app --host 0.0.0.0 --port 8088 --reload
+	uvicorn auto_router.main_live:app --host 0.0.0.0 --port 8088 --reload
 
 test:
 	pytest -q

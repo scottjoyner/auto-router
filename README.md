@@ -132,6 +132,10 @@ make install
 make dev
 ```
 
+`make dev` serves the full application (`auto_router.main_live:app`), which
+includes the admin, fleet, ops, and AssistX routes. The minimal `main:app`
+entrypoint omits those and is only used for lightweight import/health checks.
+
 Open:
 
 ```text
