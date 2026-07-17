@@ -52,6 +52,7 @@ async def node_report(request: Request) -> dict[str, Any]:
         "ip": src_ip or body.get("ip"),
         "library": body.get("library") or [],
         "loaded": body.get("loaded") or [],
+        "capabilities": body.get("capabilities") or [],
         "specs": body.get("specs") or {},
         "health": body.get("health") or {},
         "os": body.get("os"),

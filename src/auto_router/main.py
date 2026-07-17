@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+
+logger = logging.getLogger(__name__)
 
 from auto_router import __version__
 from auto_router.agent_jobs import AgentJobManager, build_agent_job_request, record_as_dict
@@ -233,7 +237,38 @@ def _context_projection_summary() -> dict[str, Any]:
     }
 
 
-@asynccontextmanager
+async def _backlog_burn_loop() -> None:
+    """Autonomously burn AssistX backlog so idle fleet compute is used.
+
+    Calls the same burn-down path an operator would, on a timer. Gated by
+    AUTO_ROUTER_ASSISTX_TASKS_URL being configured (otherwise no-op).
+    """
+    from auto_router.settings import get_settings as _settings
+
+    await asyncio.sleep(15)
+    interval = int(getattr(_settings(), "backlog_burn_interval_seconds", 60) or 60)
+    while True:
+        try:
+            url = f"http://127.0.0.1:{_settings().port}/admin/backlog/burn-down"
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    url,
+                    json={"tasks": []},
+                    params={"source": "assistx", "limit": 25, "queue": "backlog", "dispatch_limit": 25},
+                    timeout=60,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    sel = data.get("summary", {}).get("selected", 0)
+                    if sel:
+                        logger.info("backlog-burn selected %s task(s)", sel)
+                else:
+                    logger.warning("backlog-burn returned %s", r.status_code)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("backlog-burn loop error: %s", exc)
+        await asyncio.sleep(interval)
+
+
 async def lifespan(_: FastAPI):
     await load_state()
     from auto_router.otel import init_otel
@@ -251,6 +286,10 @@ async def lifespan(_: FastAPI):
     placement_task = None
     if RECONCILE_SECONDS > 0:
         placement_task = asyncio.create_task(placement_reconcile_task())
+    # Autonomous backlog-burn: periodically pull AssistX backlog candidates and
+    # burn them down so idle fleet compute is consumed without manual triggers.
+    # Reuses the same /admin/backlog/burn-down logic via self-POST.
+    backlog_burn_task = asyncio.create_task(_backlog_burn_loop())
     try:
         yield
     finally:
@@ -263,6 +302,8 @@ async def lifespan(_: FastAPI):
         persist_latency_t.cancel()
         if placement_task is not None:
             placement_task.cancel()
+        if backlog_burn_task is not None:
+            backlog_burn_task.cancel()
         try:
             await refresh_task
         except asyncio.CancelledError:
