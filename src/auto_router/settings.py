@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # path is derived from the database location so it lands in the same (mounted,
     # durable) directory as router.sqlite3 in both docker and local runs.
     latency_persist_interval_seconds: int = 30
+    # Weight applied to the latency term in fleet load-balancing. 1.0 = default
+    # (latency-aware: slow nodes are deprioritized). 0.0 = ignore latency entirely
+    # and spread `auto` traffic evenly across all healthy nodes by in-flight load.
+    # Set ROUTER_LATENCY_TERM_WEIGHT=0 to force full fleet utilization.
+    latency_term_weight: float = 0.0
 
     @property
     def latency_cache_path(self) -> str:

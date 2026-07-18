@@ -146,7 +146,7 @@ providers:
     provider_model: refinedtoolcallv5-3b
   name: lmstudio-deathstar
   node_id: deathstar-XPS-8920
-  priority: 180
+  priority: 145
   quota_class: local
   type: lmstudio
 - base_url: http://host.docker.internal:1234/v1
@@ -219,7 +219,7 @@ providers:
     provider_model: liquid/lfm2.5-1.2b
   name: lmstudio-lenovo-ideapad-330s-15ikb
   node_id: scott-lenovo-ideapad-330s-15ikb
-  priority: 240
+  priority: 165
   quota_class: local
   type: lmstudio
 - base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
@@ -237,7 +237,7 @@ providers:
     provider_model: liquid/lfm2.5-1.2b
   name: lmstudio-optiplex-9030-aio
   node_id: scott-optiplex-9030-aio
-  priority: 220
+  priority: 155
   quota_class: local
   type: lmstudio
 - base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}

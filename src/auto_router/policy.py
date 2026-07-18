@@ -61,6 +61,10 @@ class PolicyEngine:
         # planning in parallel don't all pick the same node. Released when the stage
         # starts executing (main._execute). Acts like a soft in-flight during planning.
         self._lb_planned: dict[str, int] = {}
+        # Explicit round-robin counter so `auto` traffic rotates across the whole
+        # fleet instead of stranding on a single node (latency/priority ties or
+        # plan-batch races can otherwise park everything on one machine).
+        self._rr_counter: int = 0
         # Latency awareness: exponential moving average of measured round-trip
         # latency per owner, so slow nodes are penalized and traffic flows to
         # quick, idle nodes instead of the single highest-priority one. Seeded
@@ -221,19 +225,28 @@ class PolicyEngine:
             key=lambda g: tier_rank.get(self._capability_tier(g[0].model), 5),
         )
         balanced: list[ProviderCandidate] = []
-        for g in ordered_groups:
+        with self._lb_lock:
+            self._rr_counter += 1
+            rr = self._rr_counter
+        for gi, g in enumerate(ordered_groups):
             g.sort(
                 key=lambda c: (
                     self._lb_inflight.get(self._owner_str(c), 0)
                     + self._lb_planned.get(self._owner_str(c), 0),
-                    # Latency dominates the in-tier tiebreak: a busy fast node beats
-                    # an idle SLOW node, so `auto` spreads across the fleet's quick
-                    # nodes instead of parking traffic on a 50s machine.
-                    self._latency_term(self._owner_str(c)),
+                    # Least-recently-used wins so `auto` spreads across the fleet
+                    # instead of parking on the highest-priority node. Latency and
+                    # priority are weak secondary tiebreakers.
                     self._lb_last_used.get(self._owner_str(c), 0.0),
+                    self._latency_term(self._owner_str(c)),
                     -c.score,
                 )
             )
+            # Rotate the tier by the round-robin counter so each request starts at a
+            # different node -- guarantees even fleet utilization instead of stranding
+            # on one machine when inflight/planned tie (parallel plan batches).
+            if len(g) > 1:
+                rot = rr % len(g)
+                g = g[rot:] + g[:rot]
             balanced.extend(g)
         return balanced
 
@@ -348,11 +361,17 @@ class PolicyEngine:
         (even if busy) ranks well above an idle but slow node. Unmeasured nodes
         get a moderate cost (between known-fast and known-slow) so known-fast nodes
         are preferred, but unknowns are still tried (and measured) before known-slow
-        ones -- never sending cold-start traffic blindly to the slowest machine."""
+        ones -- never sending cold-start traffic blindly to the slowest machine.
+
+        Scaled by settings.latency_term_weight so operators can disable latency
+        bias (weight=0) and force even spread across the whole fleet.
+        """
         ema = self._latency_ema.get(owner)
         if ema is None:
-            return 3.0
-        return ema / 2000.0
+            raw = 3.0
+        else:
+            raw = ema / 2000.0
+        return raw * get_settings().latency_term_weight
 
     def _request_requires_local_execution(self, request: RouterRequest) -> bool:
         """Return True when the fleet privacy wall forbids cloud/public routes.
