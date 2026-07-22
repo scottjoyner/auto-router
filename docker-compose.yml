@@ -94,7 +94,7 @@ services:
 networks:
   assistx:
     external: true
-    name: auto-assist_default
+    name: home_scott_git_auto-assist_default
 
 volumes:
   redis-data:
