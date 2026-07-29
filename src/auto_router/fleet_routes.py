@@ -25,6 +25,7 @@ from auto_router.model_value import build_value_matrix
 from auto_router.benchmark_planner import build_benchmark_plan
 from auto_router.quality_evidence import aggregate_quality
 from auto_router.loadout_optimizer import simulate_loadout
+from auto_router.fleet_health import build_health_plan
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 
@@ -218,6 +219,18 @@ async def loadout_simulation(request: Request, limit: int = 1000) -> dict[str, A
     quality = aggregate_quality(memory_store.recent_outcomes(limit=limit) if memory_store else [])
     matrix = build_value_matrix(_node_reports.values(), samples, quality)
     return simulate_loadout(_node_reports.values(), matrix, quality)
+
+
+@router.get("/health-plan")
+async def health_plan(request: Request, limit: int = 500) -> dict[str, Any]:
+    router_state = getattr(request.app.state, "router_state", None)
+    ledger = getattr(router_state, "ledger", None)
+    memory_store = getattr(router_state, "memory_store", None)
+    samples = ledger.recent_runtime_samples(limit=limit) if ledger else []
+    quality = aggregate_quality(memory_store.recent_outcomes(limit=limit) if memory_store else [])
+    matrix = build_value_matrix(_node_reports.values(), samples, quality)
+    topology = await network_map(request)
+    return build_health_plan(topology, matrix, samples)
 
 
 def _json_dumps(obj: Any) -> str:
