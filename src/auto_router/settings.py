@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     assistx_outbox_critical_threshold: int = 200
     assistx_tasks_url: str | None = None
     assistx_tasks_timeout_seconds: float = 10.0
+    # Fleet experience memory. The remote endpoint is expected to be backed by
+    # AssistX/Neo4j. Empty keeps the router in local degraded mode so memory
+    # never becomes a hard dependency for routing.
+    memory_enabled: bool = True
+    memory_service_url: str | None = None
+    memory_timeout_seconds: float = 5.0
+    memory_context_budget_tokens: int = 3000
+    memory_query_limit: int = 8
     backlog_burn_interval_seconds: int = 60
     assistx_basic_auth_user: str = ""
     assistx_basic_auth_pass: str = ""

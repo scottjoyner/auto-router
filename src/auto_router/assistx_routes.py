@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 from auto_router.agent_jobs import build_agent_job_request
 from auto_router.event_outbox import EventOutbox, OutboxEvent
+from auto_router.memory_models import MemoryQuery
 from auto_router.models import RouteDecision, RouteRequest
 from auto_router.route_events import ensure_event_outbox
 from auto_router.task_contract import build_task_contract
@@ -126,6 +127,7 @@ def _select_lane_and_provider(
     state: Any,
 ) -> dict[str, Any]:
     """Use existing PolicyEngine context to select lane/model/provider."""
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
     context = getattr(state, "context", None)
     providers = getattr(state, "providers", None)
     if not context or not providers:
@@ -263,6 +265,42 @@ def register_assistx_routes(app: Any, state: Any) -> None:
 
     @app.post("/api/routes/request")
     async def route_request(body: RouteRequest) -> dict[str, Any]:
+        if settings.memory_enabled and hasattr(state, "memory_client"):
+            metadata = body.metadata if isinstance(body.metadata, dict) else {}
+            repository = metadata.get("repository") or metadata.get("repo")
+            query_text = str(
+                body.intent.text
+                or metadata.get("task")
+                or metadata.get("prompt")
+                or body.task_id
+                or ""
+            ).strip()
+            if query_text:
+                raw_tags = metadata.get("tags", [])
+                tags = raw_tags if isinstance(raw_tags, list) else []
+                memory_context = await state.memory_client.assemble(
+                    MemoryQuery(
+                        query=query_text,
+                        repository=str(repository) if repository else None,
+                        task_id=body.task_id,
+                        commit_sha=metadata.get("commit_sha"),
+                        tags=[str(tag) for tag in tags],
+                        limit=settings.memory_query_limit,
+                        budget_tokens=settings.memory_context_budget_tokens,
+                        privacy_class=str(metadata.get("privacy") or "local_only"),
+                    )
+                )
+                body.metadata = {
+                    **metadata,
+                    "fleet_memory": {
+                        "context": memory_context.context_text,
+                        "match_count": len(memory_context.matches),
+                        "estimated_tokens": memory_context.estimated_tokens,
+                        "backend": memory_context.backend,
+                        "degraded": memory_context.degraded,
+                        "warnings": memory_context.warnings,
+                    },
+                }
         selection = _select_lane_and_provider(body, state)
         lane = selection["lane"]
 

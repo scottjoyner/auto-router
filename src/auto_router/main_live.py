@@ -6,6 +6,7 @@ import auto_router.main as main_module
 from auto_router.backlog_routes import register_backlog_routes
 from auto_router.cli_routes import register_cli_routes
 from auto_router.live_model_routes import register_live_model_routes
+from auto_router.memory_routes import register_memory_routes
 from auto_router.main import app, state
 from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.route_event_patch import install_route_event_patch
@@ -15,12 +16,14 @@ from auto_router.fleet_routes import router as fleet_router
 from auto_router.settings import get_settings
 
 install_route_event_patch(main_module)
+app.state.router_state = state
 register_live_model_routes(app, state)
 register_service_routes(app, state)
 register_cli_routes(app, state)
 register_backlog_routes(app, state)
 register_ops_dashboard_routes(app, state)
 register_assistx_routes(app, state)
+register_memory_routes(app, state)
 app.include_router(fleet_router)
 
 

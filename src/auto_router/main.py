@@ -39,6 +39,8 @@ from auto_router.policy import PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
+from auto_router.memory_client import MemoryClient
+from auto_router.memory_store import MemoryStore
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
@@ -92,6 +94,12 @@ async def load_state() -> None:
     state.ledger = UsageLedger(settings.database_url)
     state.model_registry = ModelRegistryStore(settings.database_url)
     state.signal_registry = ContextSignalStore(settings.database_url)
+    state.memory_store = MemoryStore(settings.database_url)
+    state.memory_client = MemoryClient(
+        state.memory_store,
+        base_url=settings.memory_service_url if settings.memory_enabled else None,
+        timeout_seconds=settings.memory_timeout_seconds,
+    )
     state.context = _project_live_models(state.context, state.providers, state.model_registry.latest_inventory())
     state.signal_registry.save_snapshot(state.context)
     state.context = state.signal_registry.hydrate_context(state.context)

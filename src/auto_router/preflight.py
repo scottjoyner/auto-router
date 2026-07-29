@@ -33,6 +33,7 @@ def build_preflight_report(state: Any, settings: Settings) -> dict[str, Any]:
         _check_service_registry(state),
         _check_model_registry(state),
         _check_outbox(state),
+        _check_memory(state, settings),
         _check_assistx(settings),
         _check_cli_discovery(state),
         _check_dry_run_posture(state),
@@ -173,6 +174,41 @@ def _check_outbox(state: Any) -> PreflightCheck:
     if status == "warn":
         message = "Outbox has dead-letter events that need operator review."
     return PreflightCheck("outbox", status, message, "warning" if status == "warn" else "info", summary)
+
+
+def _check_memory(state: Any, settings: Settings) -> PreflightCheck:
+    store = getattr(state, "memory_store", None)
+    if not settings.memory_enabled:
+        return PreflightCheck(
+            "fleet_memory",
+            "info",
+            "Fleet experience memory is disabled.",
+            details={"enabled": False},
+        )
+    if store is None:
+        return PreflightCheck(
+            "fleet_memory",
+            "warn",
+            "Fleet memory is enabled but the local degraded-mode store is unavailable.",
+            "warning",
+        )
+    summary = store.summary()
+    summary["remote_url_configured"] = bool(settings.memory_service_url)
+    if not settings.memory_service_url:
+        return PreflightCheck(
+            "fleet_memory",
+            "warn",
+            "Fleet memory is using the local cache; configure AUTO_ROUTER_MEMORY_SERVICE_URL "
+            "for canonical AssistX/Neo4j retrieval.",
+            "warning",
+            summary,
+        )
+    return PreflightCheck(
+        "fleet_memory",
+        "pass",
+        "Fleet memory remote backend and degraded-mode cache are configured.",
+        details=summary,
+    )
 
 
 def _check_assistx(settings: Settings) -> PreflightCheck:
