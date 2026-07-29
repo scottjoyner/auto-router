@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from auto_router.model_value import build_value_matrix
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 
@@ -161,6 +162,17 @@ async def network_map(request: Request) -> dict[str, Any]:
         },
         "nodes": nodes,
     }
+
+
+@router.get("/value-matrix")
+async def value_matrix(request: Request, limit: int = 1000) -> dict[str, Any]:
+    """Return advisory model economics based on live reports and runtime evidence."""
+    router_state = getattr(request.app.state, "router_state", None)
+    ledger = getattr(router_state, "ledger", None)
+    samples = ledger.recent_runtime_samples(limit=max(1, min(limit, 5000))) if ledger else []
+    result = build_value_matrix(_node_reports.values(), samples)
+    result["generated_at"] = datetime.now(UTC).isoformat()
+    return result
 
 
 def _json_dumps(obj: Any) -> str:
