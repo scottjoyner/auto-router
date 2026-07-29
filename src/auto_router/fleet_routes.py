@@ -199,6 +199,15 @@ async def benchmark_plan(request: Request, limit: int = 1000) -> dict[str, Any]:
     return build_benchmark_plan(matrix, quality)
 
 
+@router.get("/routing-regret")
+async def routing_regret(request: Request, limit: int = 100) -> dict[str, Any]:
+    router_state = getattr(request.app.state, "router_state", None)
+    ledger = getattr(router_state, "ledger", None)
+    if ledger is None:
+        return {"summary": {"decisions": 0, "completed": 0}, "items": []}
+    return ledger.counterfactual_summary(limit=limit)
+
+
 def _json_dumps(obj: Any) -> str:
     import json
     return json.dumps(obj, default=str)
