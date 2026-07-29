@@ -36,3 +36,25 @@ def test_failures_reduce_effective_value_and_trigger_candidate() -> None:
 
     assert result["entries"][0]["success_rate"] == 0.5
     assert result["entries"][0]["recommendation"] == "unload_candidate"
+
+
+def test_evaluator_quality_changes_effective_value() -> None:
+    runtime = [sample("node", "model", 20.0) for _ in range(12)]
+    high = build_value_matrix(
+        [{"hostname": "node", "loaded": ["model"]}],
+        runtime,
+        {"entries": [{
+            "node_id": "node", "model_id": "model", "task_family": "coding",
+            "quality_score": 0.95, "confidence": 1.0, "sample_count": 8,
+        }]},
+    )
+    low = build_value_matrix(
+        [{"hostname": "node", "loaded": ["model"]}],
+        runtime,
+        {"entries": [{
+            "node_id": "node", "model_id": "model", "task_family": "coding",
+            "quality_score": 0.25, "confidence": 1.0, "sample_count": 8,
+        }]},
+    )
+
+    assert high["entries"][0]["effective_rvu_per_hour"] > low["entries"][0]["effective_rvu_per_hour"]
