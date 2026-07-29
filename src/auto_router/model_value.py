@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from typing import Any, Iterable
+from auto_router.quality_evidence import model_quality_index
 
 TARGET_OUTPUT_TOKENS = 2048
 UTILITY_SCALE = 100.0
@@ -17,6 +18,7 @@ def response_utility(tokens: int = TARGET_OUTPUT_TOKENS) -> float:
 def build_value_matrix(
     node_reports: Iterable[dict[str, Any]],
     runtime_samples: Iterable[dict[str, Any]],
+    quality_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an advisory opportunity-cost matrix from reports and measurements.
 
@@ -46,6 +48,7 @@ def build_value_matrix(
 
     utility = response_utility()
     rows: list[dict[str, Any]] = []
+    quality_by_model = model_quality_index(quality_evidence or {})
     for (node, model), samples in grouped.items():
         successes = [
             row for row in samples
@@ -75,8 +78,14 @@ def build_value_matrix(
             sum(value_values) / len(value_values) if value_values else raw_rvu_hour
         )
         reliability = success_rate if success_rate is not None else 0.5
+        quality = quality_by_model.get((node, model), {})
+        quality_score = float(quality.get("quality_score", reliability))
+        quality_confidence = float(quality.get("quality_confidence", 0.0))
+        blended_quality = (
+            quality_score * quality_confidence + reliability * (1.0 - quality_confidence)
+        )
         effective = (
-            measured_rvu_hour * reliability * (0.5 + 0.5 * confidence)
+            measured_rvu_hour * blended_quality * (0.5 + 0.5 * confidence)
             if measured_rvu_hour is not None else None
         )
         report = inventory.get(node, {})
@@ -89,6 +98,10 @@ def build_value_matrix(
             "sample_count": count,
             "confidence": round(confidence, 3),
             "success_rate": round(success_rate, 3) if success_rate is not None else None,
+            "quality_score": round(quality_score, 3),
+            "quality_confidence": round(quality_confidence, 3),
+            "quality_sample_count": int(quality.get("quality_sample_count", 0)),
+            "task_families": quality.get("task_families", []),
             "tokens_per_second": round(tps, 3) if tps is not None else None,
             "rvu_per_hour": round(measured_rvu_hour, 2) if measured_rvu_hour is not None else None,
             "effective_rvu_per_hour": round(effective, 2) if effective is not None else None,
