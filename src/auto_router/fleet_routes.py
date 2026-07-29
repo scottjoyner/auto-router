@@ -22,6 +22,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from auto_router.model_value import build_value_matrix
+from auto_router.benchmark_planner import build_benchmark_plan
+from auto_router.quality_evidence import aggregate_quality
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 
@@ -170,9 +172,31 @@ async def value_matrix(request: Request, limit: int = 1000) -> dict[str, Any]:
     router_state = getattr(request.app.state, "router_state", None)
     ledger = getattr(router_state, "ledger", None)
     samples = ledger.recent_runtime_samples(limit=max(1, min(limit, 5000))) if ledger else []
-    result = build_value_matrix(_node_reports.values(), samples)
+    memory_store = getattr(router_state, "memory_store", None)
+    outcomes = memory_store.recent_outcomes(limit=limit) if memory_store else []
+    quality = aggregate_quality(outcomes)
+    result = build_value_matrix(_node_reports.values(), samples, quality)
     result["generated_at"] = datetime.now(UTC).isoformat()
     return result
+
+
+@router.get("/quality-evidence")
+async def quality_evidence(request: Request, limit: int = 1000) -> dict[str, Any]:
+    router_state = getattr(request.app.state, "router_state", None)
+    memory_store = getattr(router_state, "memory_store", None)
+    outcomes = memory_store.recent_outcomes(limit=limit) if memory_store else []
+    return aggregate_quality(outcomes)
+
+
+@router.get("/benchmark-plan")
+async def benchmark_plan(request: Request, limit: int = 1000) -> dict[str, Any]:
+    router_state = getattr(request.app.state, "router_state", None)
+    ledger = getattr(router_state, "ledger", None)
+    memory_store = getattr(router_state, "memory_store", None)
+    samples = ledger.recent_runtime_samples(limit=limit) if ledger else []
+    quality = aggregate_quality(memory_store.recent_outcomes(limit=limit) if memory_store else [])
+    matrix = build_value_matrix(_node_reports.values(), samples, quality)
+    return build_benchmark_plan(matrix, quality)
 
 
 def _json_dumps(obj: Any) -> str:
