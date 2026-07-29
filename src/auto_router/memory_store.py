@@ -312,6 +312,20 @@ class MemoryStore:
             ),
         }
 
+    def recent_outcomes(self, limit: int = 1000) -> list[dict[str, object]]:
+        """Return metadata-only outcome payloads for operational quality scoring."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload
+                FROM memory_outcome_events
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 5000)),),
+            ).fetchall()
+        return [json.loads(str(row["payload"])) for row in rows]
+
     def _score(
         self, record: MemoryRecord, query: MemoryQuery, query_terms: set[str]
     ) -> tuple[float, list[str]]:
