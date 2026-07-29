@@ -131,6 +131,99 @@ class UsageLedger:
                     now,
                 ),
             )
+            self._complete_counterfactual(conn, sample)
+
+    def record_counterfactual_decision(
+        self,
+        *,
+        decision_id: str,
+        request_id: str,
+        stage: str,
+        chosen: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        rejections: list[str],
+    ) -> None:
+        enriched = [self._candidate_prediction(row) for row in candidates]
+        chosen_prediction = next(
+            (
+                row for row in enriched
+                if row.get("provider") == chosen.get("provider")
+                and row.get("provider_model") == chosen.get("provider_model")
+            ),
+            self._candidate_prediction(chosen),
+        )
+        predicted_values = [
+            float(row["predicted_value_per_hour"])
+            for row in enriched
+            if row.get("predicted_value_per_hour") is not None
+        ]
+        chosen_value = chosen_prediction.get("predicted_value_per_hour")
+        predicted_regret = (
+            max(predicted_values) - float(chosen_value)
+            if predicted_values and chosen_value is not None else None
+        )
+        now = int(time.time())
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO counterfactual_decisions (
+                    decision_id, request_id, stage, chosen_provider, chosen_model,
+                    chosen_json, candidates_json, rejections_json,
+                    predicted_regret, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'selected', ?, ?)
+                """,
+                (
+                    decision_id,
+                    request_id,
+                    stage,
+                    chosen.get("provider"),
+                    chosen.get("provider_model") or chosen.get("model"),
+                    json.dumps(chosen_prediction, sort_keys=True),
+                    json.dumps(enriched, sort_keys=True),
+                    json.dumps(rejections, sort_keys=True),
+                    round(predicted_regret, 3) if predicted_regret is not None else None,
+                    now,
+                    now,
+                ),
+            )
+
+    def counterfactual_summary(self, limit: int = 100) -> dict[str, Any]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT decision_id, request_id, stage, chosen_provider, chosen_model,
+                       chosen_json, candidates_json, rejections_json,
+                       predicted_regret, realized_value_per_hour, realized_regret,
+                       status, latency_ms, error_type, created_at, updated_at
+                FROM counterfactual_decisions
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 1000)),),
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            for field in ("chosen_json", "candidates_json", "rejections_json"):
+                raw = item.pop(field)
+                fallback = "{}" if field == "chosen_json" else "[]"
+                item[field.removesuffix("_json")] = json.loads(raw or fallback)
+            items.append(item)
+        completed = [row for row in items if row["status"] in {"completed", "failed"}]
+        regrets = [float(row["realized_regret"]) for row in completed if row["realized_regret"] is not None]
+        return {
+            "summary": {
+                "decisions": len(items),
+                "completed": len(completed),
+                "failed": sum(row["status"] == "failed" for row in completed),
+                "avg_realized_regret": round(mean(regrets), 3) if regrets else None,
+                "zero_regret_rate": (
+                    round(sum(regret <= 0 for regret in regrets) / len(regrets), 3)
+                    if regrets else None
+                ),
+            },
+            "items": items,
+        }
 
     def recent_events(self, limit: int = 50) -> list[dict]:
         with self._connect() as conn:
@@ -283,6 +376,33 @@ class UsageLedger:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_created_at ON runtime_samples(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_provider ON runtime_samples(provider_id, model_id)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS counterfactual_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    decision_id TEXT NOT NULL UNIQUE,
+                    request_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    chosen_provider TEXT,
+                    chosen_model TEXT,
+                    chosen_json TEXT NOT NULL DEFAULT '{}',
+                    candidates_json TEXT NOT NULL DEFAULT '[]',
+                    rejections_json TEXT NOT NULL DEFAULT '[]',
+                    predicted_regret REAL,
+                    realized_value_per_hour REAL,
+                    realized_regret REAL,
+                    status TEXT NOT NULL DEFAULT 'selected',
+                    latency_ms INTEGER,
+                    error_type TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_counterfactual_request "
+                "ON counterfactual_decisions(request_id, created_at)"
+            )
 
     def prune(self, keep: int = 5000) -> None:
         """Bound the usage/runtime history so the tables can't grow without
@@ -299,6 +419,82 @@ class UsageLedger:
                 "SELECT id FROM runtime_samples ORDER BY id DESC LIMIT ?)",
                 (keep,),
             )
+            conn.execute(
+                "DELETE FROM counterfactual_decisions WHERE id NOT IN ("
+                "SELECT id FROM counterfactual_decisions ORDER BY id DESC LIMIT ?)",
+                (keep,),
+            )
+
+    def _candidate_prediction(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        provider = str(candidate.get("provider") or "")
+        model = str(candidate.get("provider_model") or candidate.get("model") or "")
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT AVG(latency_ms) AS latency_ms,
+                       AVG(value_per_second) * 3600.0 AS value_per_hour,
+                       AVG(CASE WHEN error_type IS NULL
+                                 AND (status_code IS NULL OR status_code < 400)
+                                THEN 1.0 ELSE 0.0 END) AS success_rate,
+                       COUNT(*) AS samples
+                FROM runtime_samples
+                WHERE provider_id=? AND model_id=?
+                """,
+                (provider, model),
+            ).fetchone()
+        result = dict(candidate)
+        result.update({
+            "predicted_latency_ms": round(float(row["latency_ms"]), 1) if row and row["latency_ms"] is not None else None,
+            "predicted_value_per_hour": round(float(row["value_per_hour"]), 3) if row and row["value_per_hour"] is not None else None,
+            "predicted_success_rate": round(float(row["success_rate"]), 3) if row and row["success_rate"] is not None else None,
+            "prediction_samples": int(row["samples"] or 0) if row else 0,
+        })
+        return result
+
+    def _complete_counterfactual(self, conn: sqlite3.Connection, sample: RuntimeSample) -> None:
+        row = conn.execute(
+            """
+            SELECT id, candidates_json
+            FROM counterfactual_decisions
+            WHERE request_id=? AND chosen_provider=? AND chosen_model=?
+              AND status='selected'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (sample.request_id, sample.provider_id, sample.model_id),
+        ).fetchone()
+        if row is None:
+            return
+        candidates = json.loads(row["candidates_json"] or "[]")
+        alternatives = [
+            float(item["predicted_value_per_hour"])
+            for item in candidates
+            if item.get("predicted_value_per_hour") is not None
+        ]
+        realized = (
+            float(sample.value_per_second) * 3600.0
+            if sample.value_per_second is not None else None
+        )
+        regret = max(alternatives) - realized if alternatives and realized is not None else None
+        ok = not sample.error_type and (
+            sample.status_code is None or 200 <= int(sample.status_code) < 400
+        )
+        conn.execute(
+            """
+            UPDATE counterfactual_decisions
+            SET realized_value_per_hour=?, realized_regret=?, status=?,
+                latency_ms=?, error_type=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                round(realized, 3) if realized is not None else None,
+                round(regret, 3) if regret is not None else None,
+                "completed" if ok else "failed",
+                sample.latency_ms,
+                sample.error_type,
+                int(time.time()),
+                row["id"],
+            ),
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database_path, timeout=30.0)
