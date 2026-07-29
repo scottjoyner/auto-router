@@ -107,6 +107,84 @@ async def stream() -> StreamingResponse:
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+@router.get("/network-map")
+async def network_map() -> dict[str, Any]:
+    """Dynamic network map from Neo4j FleetNodeState — serves fresh topology on every request."""
+    import json
+    from datetime import datetime, timezone
+    
+    try:
+        # Query Neo4j for current fleet state
+        query = """
+        MATCH (n:FleetNodeState)
+        WHERE n.online IS NOT NULL
+        RETURN 
+            elementId(n) as id,
+            coalesce(n.canonical_id, n.node_name, 'unknown') as canonical_id,
+            n.tailscale_ip as ip,
+            n.role as role,
+            n.online as online,
+            n.ssh_user as ssh_user,
+            n.access_note as access_note,
+            n.ram_gib as ram_gib,
+            n.cpu as cpu,
+            n.all_models as all_models,
+            n.loaded_models as loaded_models,
+            coalesce(n.latency_ms, 0) as latency_ms
+        ORDER BY n.online DESC, canonical_id ASC
+        """
+        
+        from neo4j import GraphDatabase
+        driver = GraphDatabase.driver(
+            "bolt://100.64.43.123:7687",
+            auth=("neo4j", None)  # Password handled by env or system
+        )
+        
+        with driver.session() as session:
+            result = session.run(query)
+            nodes = []
+            for record in result:
+                node_data = {
+                    "id": record["canonical_id"],
+                    "ip": record["ip"],
+                    "role": record["role"],
+                    "online": record["online"],
+                    "ssh_user": record.get("ssh_user"),
+                    "access_note": record.get("access_note") or "",
+                    "ram_gib": record.get("ram_gib"),
+                    "cpu": record.get("cpu"),
+                    "all_models": record.get("all_models") or [],
+                    "loaded_models": record.get("loaded_models") or [],
+                    "latency_ms": record.get("latency_ms", 0)
+                }
+                nodes.append(node_data)
+        
+        driver.close()
+        
+        # Calculate summary stats
+        online_count = sum(1 for n in nodes if n["online"])
+        offline_count = len(nodes) - online_count
+        
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "summary": {
+                "node_count": len(nodes),
+                "online_count": online_count,
+                "offline_count": offline_count,
+                "tailnet": "tailcb8954.ts.net"
+            },
+            "nodes": nodes
+        }
+        
+    except Exception as e:
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "error": str(e),
+            "nodes": [],
+            "summary": {"node_count": 0, "online_count": 0, "offline_count": 0}
+        }
+
+
 def _json_dumps(obj: Any) -> str:
     import json
     return json.dumps(obj, default=str)

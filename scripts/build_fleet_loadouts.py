@@ -418,6 +418,11 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
             )
 
     with driver.session(database=DEFAULT_NEO4J_DB) as session:
+        # Clean up any stale FleetNodeState/FleetModelState data from prior runs
+        # before persisting a fresh snapshot (ephemeral per-run nodes).
+        session.run("MATCH (n:FleetNodeState) DETACH DELETE n")
+        session.run("MATCH (m:FleetModelState) DETACH DELETE m")
+
         session.run(
             """
             MERGE (s:FleetSnapshot {snapshot_id: $snapshot_id})
