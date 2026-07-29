@@ -49,3 +49,34 @@ def test_network_map_uses_context_projection_and_fresh_reports(monkeypatch) -> N
     assert payload["nodes"][0]["id"] == "x1-370"
     assert payload["nodes"][0]["loaded_models"] == ["qwen-35b"]
 
+
+def test_benchmark_plan_uses_outcomes_and_remains_advisory(monkeypatch) -> None:
+    class Ledger:
+        def recent_runtime_samples(self, limit):
+            return []
+
+    class Memory:
+        def recent_outcomes(self, limit):
+            return []
+
+    app = FastAPI()
+    app.include_router(fleet_routes.router)
+    app.state.router_state = SimpleNamespace(ledger=Ledger(), memory_store=Memory())
+    monkeypatch.setattr(
+        fleet_routes,
+        "_node_reports",
+        {
+            "x1-370": {
+                "hostname": "x1-370",
+                "loaded": ["qwen-35b"],
+                "received_at": int(time.time()),
+            }
+        },
+    )
+
+    payload = TestClient(app).get("/api/fleet/benchmark-plan").json()
+
+    assert payload["advisory_only"] is True
+    assert payload["auto_load_allowed"] is False
+    assert payload["requests"]
+    assert {row["model_id"] for row in payload["requests"]} == {"qwen-35b"}
