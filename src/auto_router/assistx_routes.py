@@ -294,6 +294,9 @@ def register_assistx_routes(app: Any, state: Any) -> None:
                     **metadata,
                     "fleet_memory": {
                         "context": memory_context.context_text,
+                        "memory_ids": [
+                            match.record.memory_id for match in memory_context.matches
+                        ],
                         "match_count": len(memory_context.matches),
                         "estimated_tokens": memory_context.estimated_tokens,
                         "backend": memory_context.backend,

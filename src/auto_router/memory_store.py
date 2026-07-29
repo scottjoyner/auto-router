@@ -4,15 +4,21 @@ import hashlib
 import json
 import re
 import sqlite3
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
 from auto_router.memory_models import (
     MemoryContext,
     MemoryIngestRequest,
+    MemoryLifecycleAction,
+    MemoryLifecycleRequest,
     MemoryMatch,
+    MemoryOutcomeRequest,
     MemoryQuery,
     MemoryRecord,
+    MemoryRetrievalTrace,
 )
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_./:-]+")
@@ -97,10 +103,81 @@ class MemoryStore:
             )
         return True
 
+    def record_lifecycle(self, request: MemoryLifecycleRequest) -> bool:
+        payload = request.model_dump_json()
+        digest = self._event_digest(
+            request.source,
+            request.event_id,
+            request.model_dump(mode="json", exclude={"created_at"}),
+        )
+        with self._connect() as conn:
+            if not self._insert_event(
+                conn, "memory_lifecycle_events", request.source, request.event_id, digest, payload
+            ):
+                return False
+            row = conn.execute(
+                "SELECT payload FROM memories WHERE memory_id=?", (request.memory_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown memory_id: {request.memory_id}")
+            record = MemoryRecord.model_validate_json(row["payload"])
+            if request.action == MemoryLifecycleAction.reused:
+                record.successful_reuses += 1
+                record.confidence = min(record.confidence + 0.03, 1.0)
+            elif request.action == MemoryLifecycleAction.contradicted:
+                record.contradictions += 1
+                record.confidence = max(record.confidence - 0.15, 0.0)
+            elif request.action in {
+                MemoryLifecycleAction.deactivated,
+                MemoryLifecycleAction.superseded,
+            }:
+                record.active = False
+            record.metadata["last_lifecycle_action"] = request.action.value
+            if request.superseded_by:
+                record.metadata["superseded_by"] = request.superseded_by
+            self._update_record(conn, record)
+        return True
+
+    def record_outcome(self, request: MemoryOutcomeRequest) -> bool:
+        payload_data = request.model_dump(mode="json")
+        digest = self._event_digest(
+            request.source,
+            request.event_id,
+            request.model_dump(mode="json", exclude={"created_at"}),
+        )
+        with self._connect() as conn:
+            if not self._insert_event(
+                conn,
+                "memory_outcome_events",
+                request.source,
+                request.event_id,
+                digest,
+                json.dumps(payload_data, sort_keys=True),
+            ):
+                return False
+            for memory_id in dict.fromkeys(request.memory_ids):
+                row = conn.execute(
+                    "SELECT payload FROM memories WHERE memory_id=?", (memory_id,)
+                ).fetchone()
+                if row is None:
+                    continue
+                record = MemoryRecord.model_validate_json(row["payload"])
+                confirmed = request.success and request.validation_passed is not False
+                if confirmed:
+                    record.successful_reuses += 1
+                    record.confidence = min(record.confidence + 0.03, 1.0)
+                else:
+                    record.contradictions += 1
+                    record.confidence = max(record.confidence - 0.15, 0.0)
+                record.metadata["last_outcome_event_id"] = request.event_id
+                self._update_record(conn, record)
+        return True
+
     def query(self, query: MemoryQuery) -> MemoryContext:
+        started = time.perf_counter()
         clauses = ["active=1"]
         values: list[object] = []
-        if query.repository:
+        if query.repository and not query.allow_cross_repository:
             clauses.append("repository=?")
             values.append(query.repository)
         if query.task_id:
@@ -116,11 +193,35 @@ class MemoryStore:
 
         query_terms = self._terms(query.query)
         matches: list[MemoryMatch] = []
+        trace: list[MemoryRetrievalTrace] = []
+        cutoff = (
+            datetime.now(UTC) - timedelta(days=query.max_age_days) if query.max_age_days else None
+        )
         for row in rows:
             record = MemoryRecord.model_validate_json(row["payload"])
+            created_at = self._parse_datetime(record.created_at)
+            if cutoff and created_at and created_at < cutoff:
+                trace.append(
+                    MemoryRetrievalTrace(
+                        memory_id=record.memory_id,
+                        score=0.0,
+                        selected=False,
+                        reasons=["excluded by max_age_days"],
+                    )
+                )
+                continue
             score, reasons = self._score(record, query, query_terms)
-            if score > 0:
+            if score >= query.min_score:
                 matches.append(MemoryMatch(record=record, score=score, reasons=reasons))
+            else:
+                trace.append(
+                    MemoryRetrievalTrace(
+                        memory_id=record.memory_id,
+                        score=score,
+                        selected=False,
+                        reasons=[*reasons, "below minimum score"],
+                    )
+                )
         matches.sort(
             key=lambda item: (
                 item.score,
@@ -129,8 +230,28 @@ class MemoryStore:
             ),
             reverse=True,
         )
-        matches = matches[: query.limit]
-        text, estimated_tokens = self._render(matches, query.budget_tokens)
+        ranked_matches = matches
+        matches = ranked_matches[: query.limit]
+        for match in ranked_matches[query.limit :]:
+            trace.append(
+                MemoryRetrievalTrace(
+                    memory_id=match.record.memory_id,
+                    score=match.score,
+                    selected=False,
+                    reasons=[*match.reasons, "excluded by result limit"],
+                )
+            )
+        text, estimated_tokens, selected_tokens = self._render(matches, query.budget_tokens)
+        for match in matches:
+            trace.append(
+                MemoryRetrievalTrace(
+                    memory_id=match.record.memory_id,
+                    score=match.score,
+                    selected=True,
+                    reasons=match.reasons,
+                    estimated_tokens=selected_tokens.get(match.record.memory_id, 0),
+                )
+            )
         return MemoryContext(
             query=query,
             matches=matches,
@@ -141,6 +262,8 @@ class MemoryStore:
             warnings=[
                 "Using router-local lexical memory; canonical AssistX/Neo4j retrieval was not used."
             ],
+            retrieval_ms=round((time.perf_counter() - started) * 1000, 3),
+            retrieval_trace=trace,
         )
 
     def summary(self) -> dict[str, object]:
@@ -154,11 +277,39 @@ class MemoryStore:
             rows = conn.execute(
                 "SELECT kind, COUNT(*) AS count FROM memories GROUP BY kind ORDER BY kind"
             ).fetchall()
+            lifecycle_events = int(
+                conn.execute("SELECT COUNT(*) AS count FROM memory_lifecycle_events").fetchone()[
+                    "count"
+                ]
+            )
+            outcome_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count,
+                       SUM(CASE
+                           WHEN json_array_length(json_extract(payload, '$.memory_ids')) > 0
+                           THEN 1 ELSE 0 END) AS assisted,
+                       SUM(CASE
+                           WHEN json_array_length(json_extract(payload, '$.memory_ids')) > 0
+                            AND json_extract(payload, '$.success') = 1
+                           THEN 1 ELSE 0 END) AS assisted_successes
+                FROM memory_outcome_events
+                """
+            ).fetchone()
+            outcome_events = int(outcome_row["count"] or 0)
+            assisted_outcomes = int(outcome_row["assisted"] or 0)
+            assisted_successes = int(outcome_row["assisted_successes"] or 0)
         return {
             "backend": "sqlite-lexical",
             "total": total,
             "active": active,
             "by_kind": {str(row["kind"]): int(row["count"]) for row in rows},
+            "lifecycle_events": lifecycle_events,
+            "outcome_events": outcome_events,
+            "memory_assisted_outcomes": assisted_outcomes,
+            "memory_assisted_successes": assisted_successes,
+            "memory_assisted_success_rate": (
+                assisted_successes / assisted_outcomes if assisted_outcomes else 0.0
+            ),
         }
 
     def _score(
@@ -176,6 +327,9 @@ class MemoryStore:
         if query.repository and record.repository == query.repository:
             score += 0.35
             reasons.append("repository matched")
+        elif query.repository and query.allow_cross_repository:
+            score -= 0.1
+            reasons.append("cross-repository fallback")
         if query.task_id and record.task_id == query.task_id:
             score += 0.45
             reasons.append("task matched")
@@ -189,16 +343,28 @@ class MemoryStore:
         score += record.confidence * 0.15
         score += min(record.successful_reuses * 0.03, 0.15)
         score -= min(record.contradictions * 0.15, 0.6)
+        created_at = self._parse_datetime(record.created_at)
+        if created_at:
+            age_days = max((datetime.now(UTC) - created_at).days, 0)
+            recency = max(0.0, 0.1 * (1.0 - min(age_days, 365) / 365))
+            score += recency
+            if recency:
+                reasons.append("recent memory")
         return max(score, 0.0), reasons
 
-    def _render(self, matches: list[MemoryMatch], budget_tokens: int) -> tuple[str, int]:
+    def _render(
+        self, matches: list[MemoryMatch], budget_tokens: int
+    ) -> tuple[str, int, dict[str, int]]:
         char_budget = budget_tokens * 4
         lines = ["Relevant fleet experience memory:"]
+        token_counts: dict[str, int] = {}
         for match in matches:
-            evidence = ", ".join(item.reference for item in match.record.evidence[:3])
+            evidence = ", ".join(
+                item.reference for item in match.record.evidence[:3] if item.trusted
+            )
             line = (
                 f"- [{match.record.kind.value}; confidence={match.record.confidence:.2f}] "
-                f"{match.record.summary}"
+                f"{self._safe_context_text(match.record.summary)}"
             )
             if evidence:
                 line += f" Evidence: {evidence}."
@@ -206,8 +372,9 @@ class MemoryStore:
             if len(candidate) > char_budget:
                 break
             lines.append(line)
+            token_counts[match.record.memory_id] = (len(line) + 3) // 4
         text = "\n".join(lines) if len(lines) > 1 else ""
-        return text, (len(text) + 3) // 4
+        return text, (len(text) + 3) // 4, token_counts
 
     @staticmethod
     def _terms(value: str) -> set[str]:
@@ -229,6 +396,20 @@ class MemoryStore:
                 )
                 """
             )
+            for table_name in ("memory_lifecycle_events", "memory_outcome_events"):
+                conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {table_name} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source TEXT NOT NULL,
+                        event_id TEXT NOT NULL,
+                        payload_hash TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(source, event_id)
+                    )
+                    """
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memories (
@@ -258,6 +439,66 @@ class MemoryStore:
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    @staticmethod
+    def _event_digest(source: str, event_id: str, payload: dict[str, object]) -> str:
+        stable = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(f"{source}:{event_id}:{stable}".encode()).hexdigest()
+
+    @staticmethod
+    def _insert_event(
+        conn: sqlite3.Connection,
+        table: str,
+        source: str,
+        event_id: str,
+        digest: str,
+        payload: str,
+    ) -> bool:
+        existing = conn.execute(
+            f"SELECT payload_hash FROM {table} WHERE source=? AND event_id=?",
+            (source, event_id),
+        ).fetchone()
+        if existing:
+            if existing["payload_hash"] != digest:
+                raise DuplicateMemoryEventError("event_id already exists with different content")
+            return False
+        conn.execute(
+            f"INSERT INTO {table}(source, event_id, payload_hash, payload) VALUES (?, ?, ?, ?)",
+            (source, event_id, digest, payload),
+        )
+        return True
+
+    @staticmethod
+    def _update_record(conn: sqlite3.Connection, record: MemoryRecord) -> None:
+        conn.execute(
+            """
+            UPDATE memories
+            SET confidence=?, active=?, payload=?, updated_at=CURRENT_TIMESTAMP
+            WHERE memory_id=?
+            """,
+            (
+                record.confidence,
+                1 if record.active else 0,
+                record.model_dump_json(),
+                record.memory_id,
+            ),
+        )
+
+    @staticmethod
+    def _parse_datetime(value: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _safe_context_text(value: str) -> str:
+        suspicious = re.compile(
+            r"(?i)(ignore (all|any|the) (previous|prior) instructions|system prompt|"
+            r"developer message|do not follow)"
+        )
+        return suspicious.sub("[untrusted instruction removed]", value)
 
     @staticmethod
     def _path_from_url(database_url: str) -> Path:

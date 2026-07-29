@@ -107,7 +107,10 @@ async def load_state() -> None:
     state.quota = build_quota_manager(settings.redis_url)
     state.quota_backend = state.quota.__class__.__name__
     state.circuits = CircuitBreakerManager()
-    state.agent_jobs = AgentJobManager(state.agents.agent_workers)
+    state.agent_jobs = AgentJobManager(
+        state.agents.agent_workers,
+        outcome_recorder=state.memory_client.record_agent_job_outcome,
+    )
     state.outbox_dispatch_lock = asyncio.Lock()
     state.outbox_dispatch_status = {}
     # Initialize the AssistX event outbox up front so the background

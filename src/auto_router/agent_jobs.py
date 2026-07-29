@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -32,12 +34,21 @@ class AgentJobRecord:
 
 
 class AgentJobManager:
-    def __init__(self, agents: list[AgentWorkerConfig], base_dir: str | Path = "data/agent-jobs"):
+    def __init__(
+        self,
+        agents: list[AgentWorkerConfig],
+        base_dir: str | Path = "data/agent-jobs",
+        outcome_recorder: Callable[
+            [AgentJobRequest, AgentJobResult | None, int, str | None], Awaitable[None]
+        ]
+        | None = None,
+    ):
         self.adapters = [AgentWorkerAdapter(config) for config in agents]
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, AgentJobRecord] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self.outcome_recorder = outcome_recorder
 
     def submit(self, request: AgentJobRequest) -> AgentJobRecord:
         record = AgentJobRecord(request=request)
@@ -53,6 +64,7 @@ class AgentJobManager:
         return self.jobs.get(job_id)
 
     async def _run_job(self, job_id: str) -> None:
+        started = time.perf_counter()
         record = self.jobs[job_id]
         request = record.request
         record.status = "running"
@@ -65,6 +77,7 @@ class AgentJobManager:
             record.status = "failed"
             record.error = "No available worker matched the request."
             self._write_json(workdir / "result.json", record_as_dict(record))
+            await self._record_outcome(request, None, started, record.error)
             return
 
         record.worker_name = adapter.config.name
@@ -75,6 +88,23 @@ class AgentJobManager:
         self._write_text(workdir / "stdout.txt", result.stdout)
         self._write_text(workdir / "stderr.txt", result.stderr)
         self._write_json(workdir / "result.json", result.model_dump())
+        await self._record_outcome(request, result, started, None)
+
+    async def _record_outcome(
+        self,
+        request: AgentJobRequest,
+        result: AgentJobResult | None,
+        started: float,
+        error: str | None,
+    ) -> None:
+        if self.outcome_recorder is None:
+            return
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            await self.outcome_recorder(request, result, latency_ms, error)
+        except Exception:
+            # Outcome telemetry must never change the execution result.
+            return
 
     def _choose_adapter(self, request: AgentJobRequest) -> AgentWorkerAdapter | None:
         preferred = [name for name in request.preferred_workers if name]
