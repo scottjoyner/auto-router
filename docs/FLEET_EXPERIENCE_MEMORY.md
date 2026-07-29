@@ -27,6 +27,9 @@ AssistX route request
 
 Memory lookup cannot block routing indefinitely. Remote failures degrade to
 the local store and are exposed in the returned warnings and preflight report.
+Completed executions feed outcomes back into memory, allowing successful reuse,
+contradictions, and route-specific reliability to accumulate while the fleet
+runs.
 
 ## API
 
@@ -50,7 +53,8 @@ the local store and are exposed in the returned warnings and preflight report.
     "evidence": [
       {
         "evidence_type": "repository_document",
-        "reference": "docs/ROUTER_ASSISTX_AUTO_ASSIGN_BOUNDARIES.md"
+        "reference": "docs/ROUTER_ASSISTX_AUTO_ASSIGN_BOUNDARIES.md",
+        "trusted": true
       }
     ]
   }
@@ -78,10 +82,60 @@ duplicating it; reusing the same identifier with different content returns 409.
 The response includes ranked records, evidence, the bounded text intended for
 agent context, backend identity, degraded state, and warnings.
 
+Retrieval supports a minimum relevance score, optional age bounds, and an
+explicit cross-repository fallback. Its trace reports selection reasons and
+per-memory token estimates. Evidence is injected only when marked trusted, and
+known instruction-like text is neutralized before entering agent context.
+
+### Record an execution outcome
+
+`POST /api/memory/outcomes` requires admin authentication:
+
+```json
+{
+  "event_id": "paperclip:task-42:attempt-1",
+  "source": "paperclip",
+  "task_id": "task-42",
+  "repository": "scottjoyner/auto-router",
+  "commit_sha": "abc123",
+  "success": true,
+  "validation_passed": true,
+  "provider": "lmstudio",
+  "model": "qwen3.5",
+  "node_id": "x1-370",
+  "latency_ms": 8400,
+  "tokens_per_second": 17.2,
+  "retry_path": [],
+  "memory_ids": ["lesson:auto-router:assistx-ownership"]
+}
+```
+
+Successful validated outcomes increase reuse and confidence for the memories
+that informed execution. Failed or invalid outcomes record contradictions and
+reduce confidence. Outcome events are idempotent by `source + event_id`.
+
+### Record a lifecycle event
+
+`POST /api/memory/lifecycle` appends a `reused`, `contradicted`, `deactivated`,
+or `superseded` event:
+
+```json
+{
+  "event_id": "codex:lesson-review-7",
+  "source": "codex",
+  "memory_id": "lesson:auto-router:assistx-ownership",
+  "action": "superseded",
+  "reason": "The authority boundary was replaced by ADR-14.",
+  "superseded_by": "lesson:auto-router:adr-14"
+}
+```
+
 ### Operator summary
 
 `GET /admin/memory` requires admin authentication and reports local cache
-counts plus remote configuration state.
+counts, outcome success, runtime retrieval metrics, and remote configuration.
+`/metrics/ops` exports retrieval latency, fallback and remote-failure counts,
+injected token totals, recorded outcomes, and memory-assisted success rate.
 
 ## Configuration
 
@@ -97,12 +151,16 @@ Leave `AUTO_ROUTER_MEMORY_SERVICE_URL` empty for local degraded mode.
 Queries classified `local_only` are forwarded only when this URL resolves to
 localhost, a private IP, a single-label container hostname, `.lan`, `.local`,
 or `.ts.net`; otherwise the router uses its local cache and emits a warning.
+The same rule applies to ingestion, lifecycle, and outcome events, which
+default to `local_only`.
 
 The configured remote service must implement:
 
 ```text
 POST /v1/memory/events
 POST /v1/memory/context
+POST /v1/memory/outcomes
+POST /v1/memory/lifecycle
 ```
 
 These `/v1` contracts are the extraction seam for the future `auto-memory`
