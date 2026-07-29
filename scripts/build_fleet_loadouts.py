@@ -418,11 +418,6 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
             )
 
     with driver.session(database=DEFAULT_NEO4J_DB) as session:
-        # Clean up any stale FleetNodeState/FleetModelState data from prior runs
-        # before persisting a fresh snapshot (ephemeral per-run nodes).
-        session.run("MATCH (n:FleetNodeState) DETACH DELETE n")
-        session.run("MATCH (m:FleetModelState) DETACH DELETE m")
-
         session.run(
             """
             MERGE (s:FleetSnapshot {snapshot_id: $snapshot_id})
@@ -499,10 +494,12 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
             )
 
         for row in model_rows:
+            state_id = f"{row['node_name']}:{row['model_id']}"
             session.run(
                 """
-                MERGE (m:FleetModelState {model_id: $model_id})
-                SET m.snapshot_id = $snapshot_id,
+                MERGE (m:FleetModelState {state_id: $state_id})
+                SET m.model_id = $model_id,
+                    m.snapshot_id = $snapshot_id,
                     m.captured_at = datetime($captured_at_iso),
                     m.node_name = $node_name,
                     m.online = $online,
@@ -519,6 +516,7 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
                 """,
                 {
                     "snapshot_id": snapshot_id,
+                    "state_id": state_id,
                     "captured_at_iso": captured_at.isoformat(),
                     "model_id": row["model_id"],
                     "node_name": row["node_name"],
@@ -596,7 +594,7 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
                     WITH a
                     MATCH (l:FleetLoadout {loadout_id: $loadout_id})
                     MATCH (n:FleetNodeState {node_name: $node_name})
-                    MATCH (m:FleetModelState {model_id: $model_id})
+                    MATCH (m:FleetModelState {state_id: $model_state_id})
                     MERGE (l)-[:HAS_ASSIGNMENT]->(a)
                     MERGE (a)-[:USES_NODE]->(n)
                     MERGE (a)-[:USES_MODEL]->(m)
@@ -610,6 +608,9 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
                         "rank": rank,
                         "node_name": candidate.node_name,
                         "model_id": candidate.model_id,
+                        "model_state_id": (
+                            f"{candidate.node_name}:{candidate.model_id}"
+                        ),
                         "role": candidate.role,
                         "score": candidate.score,
                         "reasons": candidate.reasons,
@@ -644,6 +645,26 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
                 "previous_snapshot_id": previous_snapshot_id,
                 "delta_json": json.dumps(delta_summary, sort_keys=True),
             },
+        )
+
+        # Remove states absent from the completed snapshot only after all new
+        # state has been written. This avoids an empty topology window and keeps
+        # same-model deployments on different nodes distinct.
+        session.run(
+            """
+            MATCH (n:FleetNodeState)
+            WHERE n.snapshot_id IS NULL OR n.snapshot_id <> $snapshot_id
+            DETACH DELETE n
+            """,
+            {"snapshot_id": snapshot_id},
+        )
+        session.run(
+            """
+            MATCH (m:FleetModelState)
+            WHERE m.snapshot_id IS NULL OR m.snapshot_id <> $snapshot_id
+            DETACH DELETE m
+            """,
+            {"snapshot_id": snapshot_id},
         )
 
     return {

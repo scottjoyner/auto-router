@@ -200,6 +200,15 @@ def enqueue_route_decision_event(
             payload=payload,
         )
     )
+    if hasattr(state, "ledger"):
+        state.ledger.record_counterfactual_decision(
+            decision_id=event_id,
+            request_id=request.request_id,
+            stage=stage,
+            chosen=chosen_payload,
+            candidates=candidate_payloads,
+            rejections=list(rejections or []),
+        )
     if hasattr(state, "signal_registry"):
         node_id = _provider_node_id(state, chosen_payload.get("provider_id") or chosen_payload.get("provider"))
         signals = route_decision_signals(

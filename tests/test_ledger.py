@@ -86,3 +86,55 @@ def test_runtime_sample_without_status_code_is_failure_when_error_present(tmp_pa
     summary = ledger.runtime_summary()
     assert summary["successful"] == 0
     assert summary["failed"] == 1
+
+
+def test_counterfactual_decision_is_completed_by_runtime_sample(tmp_path):
+    db_path = tmp_path / "router.sqlite3"
+    ledger = UsageLedger(f"sqlite:///{db_path}")
+    # Seed historical evidence used to predict candidate value.
+    for provider, model, value in (("fast", "model-a", 10.0), ("slow", "model-b", 3.0)):
+        ledger.record_runtime_sample(
+            RuntimeSample(
+                request_id=f"seed-{provider}",
+                provider_id=provider,
+                model_id=model,
+                route="chat_completions",
+                priority="interactive",
+                stage="final",
+                value_per_second=value,
+                status_code=200,
+                latency_ms=100,
+            )
+        )
+    candidates = [
+        {"provider": "fast", "provider_model": "model-a", "score": 1},
+        {"provider": "slow", "provider_model": "model-b", "score": 2},
+    ]
+    ledger.record_counterfactual_decision(
+        decision_id="decision-1",
+        request_id="req-1",
+        stage="final",
+        chosen=candidates[1],
+        candidates=candidates,
+        rejections=[],
+    )
+    ledger.record_runtime_sample(
+        RuntimeSample(
+            request_id="req-1",
+            provider_id="slow",
+            model_id="model-b",
+            route="chat_completions",
+            priority="interactive",
+            stage="final",
+            value_per_second=2.0,
+            status_code=200,
+            latency_ms=500,
+        )
+    )
+
+    result = ledger.counterfactual_summary()
+    item = result["items"][0]
+    assert item["status"] == "completed"
+    assert item["realized_value_per_hour"] == 7200.0
+    assert item["realized_regret"] == 28800.0
+    assert result["summary"]["avg_realized_regret"] == 28800.0

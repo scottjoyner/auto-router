@@ -74,6 +74,8 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
     circuit_breaker_summary = _circuit_breaker_summary(circuits)
     dead_letter_summary = _dead_letter_summary(state, outbox_summary)
     live_model_freshness = _live_model_freshness_summary(live_models, provider_health_summary)
+    memory_summary = state.memory_store.summary() if hasattr(state, "memory_store") else {}
+    memory_runtime = state.memory_client.metrics() if hasattr(state, "memory_client") else {}
     return {
         "outbox_summary": outbox_summary,
         "outbox_dispatch_summary": outbox_dispatch_summary,
@@ -86,6 +88,8 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
         "dead_letter_events": dead_letter_summary.get("events", []),
         "dead_letter_reasons": dead_letter_summary.get("top_reasons", []),
         "live_model_freshness": live_model_freshness,
+        "memory_summary": memory_summary,
+        "memory_runtime": memory_runtime,
         "provider_probe_summary": provider_probe_summary,
         "provider_tap_summary": provider_tap_summary,
         "provider_health_summary": provider_health_summary,
@@ -668,11 +672,46 @@ def render_ops_metrics(summary: dict[str, Any]) -> str:
     fleet_slots = fleet.get("slots") or []
     workflow_contract = summary.get("workflow_contract_summary") or {}
     workflow_contract_alert = summary.get("workflow_contract_alert") or {}
+    memory_summary = summary.get("memory_summary") or {}
+    memory_runtime = summary.get("memory_runtime") or {}
 
     lines = [
         "# HELP auto_router_outbox_events Number of outbox events by state.",
         "# TYPE auto_router_outbox_events gauge",
     ]
+    lines.extend(
+        [
+            "# HELP auto_router_memory_total Number of locally cached memories.",
+            "# TYPE auto_router_memory_total gauge",
+            f"auto_router_memory_total {int(memory_summary.get('total') or 0)}",
+            "# HELP auto_router_memory_outcome_events Recorded memory-assisted outcomes.",
+            "# TYPE auto_router_memory_outcome_events counter",
+            f"auto_router_memory_outcome_events {int(memory_summary.get('outcome_events') or 0)}",
+            "# HELP auto_router_memory_assisted_success_rate Memory-assisted success rate.",
+            "# TYPE auto_router_memory_assisted_success_rate gauge",
+            "auto_router_memory_assisted_success_rate "
+            f"{float(memory_summary.get('memory_assisted_success_rate') or 0)}",
+            "# HELP auto_router_memory_retrievals Memory context retrievals.",
+            "# TYPE auto_router_memory_retrievals counter",
+            f"auto_router_memory_retrievals {int(memory_runtime.get('retrievals') or 0)}",
+            "# HELP auto_router_memory_local_fallbacks Locally served memory lookups.",
+            "# TYPE auto_router_memory_local_fallbacks counter",
+            "auto_router_memory_local_fallbacks "
+            f"{int(memory_runtime.get('local_fallbacks') or 0)}",
+            "# HELP auto_router_memory_remote_failures Remote memory lookup failures.",
+            "# TYPE auto_router_memory_remote_failures counter",
+            "auto_router_memory_remote_failures "
+            f"{int(memory_runtime.get('remote_failures') or 0)}",
+            "# HELP auto_router_memory_avg_retrieval_ms Mean memory retrieval latency.",
+            "# TYPE auto_router_memory_avg_retrieval_ms gauge",
+            "auto_router_memory_avg_retrieval_ms "
+            f"{float(memory_runtime.get('avg_retrieval_ms') or 0)}",
+            "# HELP auto_router_memory_context_tokens Estimated injected context tokens.",
+            "# TYPE auto_router_memory_context_tokens counter",
+            "auto_router_memory_context_tokens "
+            f"{int(memory_runtime.get('context_tokens') or 0)}",
+        ]
+    )
     for state_name in ("pending", "retry", "delivered", "dead_letter"):
         lines.append(f'auto_router_outbox_events{{state="{state_name}"}} {int(outbox.get(state_name) or 0)}')
     lines.extend(

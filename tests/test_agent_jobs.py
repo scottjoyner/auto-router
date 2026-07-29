@@ -92,6 +92,39 @@ def test_agent_job_manager_lists_records(tmp_path) -> None:
     assert len(manager.list_records()) == 1
 
 
+def test_agent_job_manager_records_terminal_outcome_without_changing_status(
+    tmp_path,
+) -> None:
+    captured = []
+
+    async def record_outcome(request, result, latency_ms, error):
+        captured.append((request, result, latency_ms, error))
+
+    manager = AgentJobManager(
+        [
+            AgentWorkerConfig(
+                name="noop",
+                type="custom",
+                command="definitely-not-installed",
+                enabled=False,
+            )
+        ],
+        base_dir=tmp_path,
+        outcome_recorder=record_outcome,
+    )
+    request = build_agent_job_request({"task": "inspect this repo"})
+    record = manager.submit(request)
+
+    asyncio.run(manager._run_job(request.job_id))
+
+    assert record.status == "failed"
+    assert len(captured) == 1
+    assert captured[0][0].job_id == request.job_id
+    assert captured[0][1] is None
+    assert captured[0][2] >= 0
+    assert "No available worker" in captured[0][3]
+
+
 
 def test_agent_worker_prompt_requests_coordination() -> None:
     adapter = AgentWorkerAdapter(

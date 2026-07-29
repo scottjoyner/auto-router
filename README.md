@@ -20,6 +20,8 @@ Local-first OpenAI-compatible router for model requests, free-quota burn-down, s
 - Queues service, model, agent discovery, backlog dry-run, and route execution provenance into a durable SQLite outbox for AssistX/Neo4j write-back.
 - Dispatches pending outbox events to a configured AssistX event sink with retry/dead-letter handling.
 - Accepts AssistX route requests and returns lane/model/provider decisions via `POST /api/routes/request`.
+- Retrieves evidence-backed fleet experience memory before AssistX route decisions,
+  with a durable local fallback and an extraction seam for a Neo4j-backed service.
 
 ## Design principles
 
@@ -45,6 +47,8 @@ OpenAI-compatible:
 AssistX route integration:
 
 - `POST /api/routes/request` — Accept a route request from AssistX and return a lane/model/provider decision
+- `POST /api/memory/events` — Idempotently ingest an observation, failure, resolution, or lesson
+- `POST /api/memory/context` — Assemble bounded task/repository memory context
 
 Operations:
 
@@ -66,6 +70,7 @@ Operations:
 - `GET /admin/backlog/assistx/config`
 - `POST /admin/backlog/dry-run`
 - `POST /jobs/agent`
+- `GET /admin/memory`
 
 ## Logical model aliases
 
@@ -202,6 +207,7 @@ curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10'
 - [`docs/PROVIDER_MATRIX.md`](docs/PROVIDER_MATRIX.md) — provider notes and volatile limits
 - [`docs/SECURITY_PRIVACY.md`](docs/SECURITY_PRIVACY.md) — privacy and key-handling constraints
 - [`docs/FLEET_ROUTING_POLICY.md`](docs/FLEET_ROUTING_POLICY.md) — fleet routing policy, privacy classes, and node/model selection guardrails
+- [`docs/FLEET_EXPERIENCE_MEMORY.md`](docs/FLEET_EXPERIENCE_MEMORY.md) — memory contracts, degraded operation, and extraction plan
 - [`docs/plans/2026-06-08-xwing-agent-development-handoff.md`](docs/plans/2026-06-08-xwing-agent-development-handoff.md) — verified xwing-first worker readiness and agent kickoff sequence
 
 ## Next implementation priorities
