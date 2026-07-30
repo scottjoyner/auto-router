@@ -8,6 +8,7 @@ services:
     environment:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
+      AUTO_ROUTER_ADMIN_TOKEN: ${AUTO_ROUTER_ADMIN_TOKEN:?set AUTO_ROUTER_ADMIN_TOKEN in the reconciliation environment}
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.reconciliation.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
