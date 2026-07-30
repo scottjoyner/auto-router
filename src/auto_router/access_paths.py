@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -156,8 +157,8 @@ def classify_access_transport(base_url: str) -> str:
         return "local_dns"
     if address in _TAILSCALE_CGNAT:
         return "tailscale"
-    if address.is_private or address.is_link_local:
-        return "lan"
     if address.is_loopback:
         return "loopback"
+    if address.is_private or address.is_link_local:
+        return "lan"
     return "unknown"
