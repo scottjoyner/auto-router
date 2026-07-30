@@ -44,6 +44,10 @@ class ProviderConfig(BaseModel):
     name: str
     type: str
     node_id: str | None = None
+    runtime_instance_id: str | None = None
+    parallel_slots: int = Field(default=0, ge=0)
+    queue_limit: int = Field(default=0, ge=0)
+    queue_timeout_seconds: float = Field(default=0.0, ge=0)
     enabled: bool = True
     base_url: str
     api_key_env: str | None = None
