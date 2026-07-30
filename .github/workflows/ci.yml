@@ -22,13 +22,16 @@ jobs:
             src/auto_router/access_paths.py \
             src/auto_router/admission.py \
             src/auto_router/main_live.py \
+            src/auto_router/models.py \
             src/auto_router/offline_guard.py \
+            src/auto_router/route_events.py \
             scripts/verify_reconciliation_network.py \
             tests/test_access_paths.py \
             tests/test_admission.py \
             tests/test_offline_guard.py \
             tests/test_reconciliation_config.py \
             tests/test_reconciliation_runtime.py \
+            tests/test_runtime_telemetry.py \
             tests/test_flash_start.py \
             tests/test_main_health.py
       - name: Audit legacy repository lint backlog
