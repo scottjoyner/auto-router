@@ -29,18 +29,25 @@ services:
       AUTO_ROUTER_MAX_CANDIDATE_ATTEMPTS: "1"
       AUTO_ROUTER_ATTEMPT_TIMEOUT_SECONDS: "60"
       AUTO_ROUTER_REQUEST_DEADLINE_SECONDS: "75"
+      AUTO_ROUTER_ACCESS_PATH_TTL_SECONDS: ${AUTO_ROUTER_ACCESS_PATH_TTL_SECONDS:-15}
+      AUTO_ROUTER_ACCESS_PATH_PROBE_TIMEOUT_SECONDS: ${AUTO_ROUTER_ACCESS_PATH_PROBE_TIMEOUT_SECONDS:-2}
       RECONCILIATION_RUNTIME_NODE_ID: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
       RECONCILIATION_RUNTIME_INSTANCE_ID: ${RECONCILIATION_RUNTIME_INSTANCE_ID:-lmstudio-reconciliation-1234}
       RECONCILIATION_PARALLEL_SLOTS: ${RECONCILIATION_PARALLEL_SLOTS:-1}
       RECONCILIATION_QUEUE_LIMIT: ${RECONCILIATION_QUEUE_LIMIT:-4}
       RECONCILIATION_QUEUE_TIMEOUT_SECONDS: ${RECONCILIATION_QUEUE_TIMEOUT_SECONDS:-30}
+      RECONCILIATION_LAN_BASE_URL: ${RECONCILIATION_LAN_BASE_URL:-}
       RECONCILIATION_LMSTUDIO_BASE_URL: ${RECONCILIATION_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      RECONCILIATION_TAILSCALE_BASE_URL: ${RECONCILIATION_TAILSCALE_BASE_URL:-}
       RECONCILIATION_MODEL_ID: ${RECONCILIATION_MODEL_ID:-refinedtoolcallv5-3b}
       RECONCILIATION_CONTEXT_WINDOW: ${RECONCILIATION_CONTEXT_WINDOW:-32768}
     volumes: !override
       - ./config:/app/config:ro
       - ./data-reconciliation:/data
       - ./artifacts-reconciliation:/artifacts
+    # Normal bridge networking intentionally remains in use: it preserves loopback-only
+    # host publication while allowing outbound LAN and 100.64.0.0/10 traffic through
+    # the host's routes. The cutover verifier must prove both paths from this container.
     networks: !override
       - default
       - assistx
