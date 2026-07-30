@@ -6,7 +6,11 @@ def test_reconciled_entrypoint_is_strict_offline() -> None:
 
 
 def test_reconciled_entrypoint_does_not_mount_duplicate_authority_routes() -> None:
-    paths = {route.path for route in app.routes}
+    paths = {
+        path
+        for route in app.routes
+        if (path := getattr(route, "path", None)) is not None
+    }
 
     assert "/health" in paths
     assert "/v1/models" in paths
