@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -27,6 +28,7 @@ if not strict_offline_enabled():
 enforce_strict_offline_provider_config()
 
 import auto_router.main as main_module
+from auto_router.access_paths import RuntimeAccessPathSelector
 from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
 from auto_router.assistx_routes import register_assistx_routes
 from auto_router.fleet_routes import router as fleet_router
@@ -35,7 +37,7 @@ from auto_router.memory_routes import register_memory_routes
 from auto_router.models import ProviderCandidate, ProviderResponse, RouterRequest
 from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.otel import init_otel
-from auto_router.providers import ProviderStreamResponse
+from auto_router.providers import ProviderStreamResponse, build_provider
 from auto_router.route_event_patch import install_route_event_patch
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
@@ -73,17 +75,42 @@ def _admission_controller() -> RuntimeAdmissionController:
     return controller
 
 
+def _access_path_selector() -> RuntimeAccessPathSelector:
+    selector = getattr(state, "access_paths", None)
+    if not isinstance(selector, RuntimeAccessPathSelector):
+        raise RuntimeError("runtime access path selector is not initialized")
+    return selector
+
+
+async def _select_provider(
+    candidate: ProviderCandidate,
+) -> tuple[Any, ProviderCandidate]:
+    """Select an approved path while preserving the physical runtime identity."""
+
+    choice = await _access_path_selector().select(candidate)
+    selected_config = candidate.provider.model_copy(update={"base_url": choice.base_url})
+    selected_candidate = candidate.model_copy(update={"provider": selected_config})
+    settings = get_settings()
+    selected_provider = build_provider(
+        selected_config,
+        timeout_seconds=settings.attempt_timeout_seconds,
+        connect_timeout_seconds=settings.connect_timeout_seconds,
+    )
+    return selected_provider, selected_candidate
+
+
 async def _admitted_dispatch(
-    provider: Any,
+    _provider: Any,
     candidate: ProviderCandidate,
     request: RouterRequest,
     route_plan: Any | None = None,
 ) -> ProviderResponse:
     lease = await _admission_controller().acquire(candidate)
     try:
+        provider, selected_candidate = await _select_provider(candidate)
         return await _ORIGINAL_DISPATCH(
             provider,
-            candidate,
+            selected_candidate,
             request,
             route_plan=route_plan,
         )
@@ -103,16 +130,17 @@ async def _release_stream_lease(
 
 
 async def _admitted_dispatch_stream(
-    provider: Any,
+    _provider: Any,
     candidate: ProviderCandidate,
     request: RouterRequest,
     route_plan: Any | None = None,
 ) -> ProviderStreamResponse:
     lease = await _admission_controller().acquire(candidate)
     try:
+        provider, selected_candidate = await _select_provider(candidate)
         response = await _ORIGINAL_DISPATCH_STREAM(
             provider,
-            candidate,
+            selected_candidate,
             request,
             route_plan=route_plan,
         )
@@ -128,13 +156,23 @@ async def _admitted_dispatch_stream(
 async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Start only AssistX projection, admission control, and local housekeeping loops.
 
-    The reconciled router does not start Tailnet/service/CLI discovery, live-provider
-    registry mutation, model placement, fleet execution, or autonomous backlog
-    scheduling. AssistX owns those decisions and supplies canonical context.
+    The reconciled router does not discover providers or mutate inventory. AssistX
+    supplies approved LAN and Tailscale access paths for one physical runtime record;
+    the router only selects the first reachable approved path and forwards requests.
     """
 
     await main_module.load_state()
-    state.admission = RuntimeAdmissionController(state.providers.enabled())
+    providers = state.providers.enabled()
+    state.admission = RuntimeAdmissionController(providers)
+    state.access_paths = RuntimeAccessPathSelector(
+        providers,
+        cache_ttl_seconds=float(
+            os.getenv("AUTO_ROUTER_ACCESS_PATH_TTL_SECONDS", "15")
+        ),
+        probe_timeout_seconds=float(
+            os.getenv("AUTO_ROUTER_ACCESS_PATH_PROBE_TIMEOUT_SECONDS", "2")
+        ),
+    )
     init_otel()
     tasks: list[asyncio.Task[object]] = [
         asyncio.create_task(main_module.refresh_context_task()),
@@ -173,9 +211,12 @@ app.include_router(fleet_router)
 async def admission_status(
     _: None = Depends(require_admin),
 ) -> dict[str, list[dict[str, Any]]]:
-    """Expose bounded admission state without becoming a durable fleet authority."""
+    """Expose ephemeral capacity and access-path state for operator verification."""
 
-    return {"runtimes": _admission_controller().snapshot()}
+    return {
+        "runtimes": _admission_controller().snapshot(),
+        "access_paths": _access_path_selector().snapshot(),
+    }
 
 
 def run() -> None:
