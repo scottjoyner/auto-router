@@ -15,7 +15,10 @@ venv/
 
 # Runtime data
 data/
+data-reconciliation/
+data-integration/
 artifacts/
+artifacts-reconciliation/
 worktrees/
 *.db
 *.sqlite
