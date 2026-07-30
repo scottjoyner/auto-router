@@ -12,7 +12,9 @@ def test_reconciliation_registry_is_single_runtime_and_offline() -> None:
         "RECONCILIATION_PARALLEL_SLOTS": "1",
         "RECONCILIATION_QUEUE_LIMIT": "4",
         "RECONCILIATION_QUEUE_TIMEOUT_SECONDS": "30",
+        "RECONCILIATION_LAN_BASE_URL": "http://192.168.1.50:1234/v1",
         "RECONCILIATION_LMSTUDIO_BASE_URL": "http://host.docker.internal:1234/v1",
+        "RECONCILIATION_TAILSCALE_BASE_URL": "http://100.64.43.123:1234/v1",
         "RECONCILIATION_MODEL_ID": "refinedtoolcallv5-3b",
         "RECONCILIATION_CONTEXT_WINDOW": "32768",
     }
@@ -30,6 +32,7 @@ def test_reconciliation_registry_is_single_runtime_and_offline() -> None:
     assert provider.parallel_slots == 1
     assert provider.queue_limit == 4
     assert provider.queue_timeout_seconds == 30
+    assert "http://host.docker.internal:1234/v1" in provider.access_urls
     assert str(provider.quota_class) == "local"
     assert provider.gateway_managed is False
     assert provider.models[0].alias == "local/reconciliation-default"
