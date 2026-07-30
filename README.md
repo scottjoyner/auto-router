@@ -2,7 +2,7 @@
 
 Strict-offline OpenAI-compatible inference gateway for the AssistX fleet.
 
-On branch `full-auto-reconciliation-20260730`, `auto-router` is deliberately narrower than its earlier design. It no longer treats hosted quota, backlog scheduling, worker placement, or broad service discovery as production responsibilities.
+On branch `full-auto-reconciliation-20260730`, `auto-router` is deliberately narrower than its earlier design. It no longer treats hosted quota, backlog scheduling, worker placement, model placement, or broad service discovery as production responsibilities.
 
 ## Role
 
@@ -13,13 +13,15 @@ Hermes / OpenCode / local workloads
       auto-router protocol gateway
       - OpenAI-compatible normalization
       - local-provider validation
-      - request forwarding/fallback
-      - admission/backpressure seam
+      - LAN-first / Tailscale path selection
+      - per-runtime admission and backpressure
+      - request forwarding
       - route provenance
                 |
                 v
          AssistX / Neo4j authority
       - physical node/runtime identity
+      - approved runtime access paths
       - loaded-model observations
       - priority and capability evidence
       - allocation/reservation/claims
@@ -29,7 +31,7 @@ Hermes / OpenCode / local workloads
       LM Studio / LM Studio Link / llama-server
 ```
 
-AssistX owns decisions. The router forwards requests only to enabled local providers and must not become another scheduler or inventory authority.
+AssistX owns decisions. The router forwards requests only to enabled local runtimes and must not become another scheduler or inventory authority.
 
 ## Strict offline mode
 
@@ -37,11 +39,12 @@ AssistX owns decisions. The router forwards requests only to enabled local provi
 
 Before application state is built, the router validates every enabled provider and fails startup when it finds:
 
-- a public or unresolved provider hostname;
+- a public or unresolved provider hostname in `base_url` or `access_urls`;
 - a non-local quota class;
 - a broker/gateway-managed provider;
 - an unsupported provider type;
 - an invalid provider URL;
+- positive slot capacity without a physical `runtime_instance_id`;
 - no enabled local runtime.
 
 Allowed hosts include loopback, RFC1918 LAN addresses, Tailscale CGNAT addresses, approved `.ts.net`/`.lan`/`.local`/`.internal` names, and local Docker service names.
@@ -53,14 +56,17 @@ Public inference providers—including Groq, Cerebras, OpenRouter, Grok, OpenAI,
 - OpenAI-compatible endpoints for chat, responses, embeddings, completions, and model listing.
 - Logical aliases such as `auto/fast`, `auto/high-quality`, `auto/code`, and `auto/local`.
 - Request normalization and local-provider candidate selection.
-- Short-lived circuit, latency, and request-attempt state.
+- A bounded admission gate per physical `runtime_instance_id`.
+- Queue limits, queue timeout, cancellation-safe permit release, and explicit 429/503 responses.
+- Selection among AssistX-approved access paths for the same runtime.
+- Short-lived circuit, latency, path-choice, and request-attempt state.
 - Route decision/provenance emission back to AssistX.
-- A future per-physical-runtime admission semaphore supplied by AssistX capacity state.
 
 ## What the router does not own
 
 - canonical node/model/service inventory;
 - physical runtime identity;
+- discovery or approval of new access paths;
 - task priority or assignment;
 - reservations, claims, leases, or heartbeats;
 - worker placement or execution;
@@ -69,7 +75,32 @@ Public inference providers—including Groq, Cerebras, OpenRouter, Grok, OpenAI,
 - hosted quota scheduling;
 - a second durable task or assignment database.
 
-Local SQLite/Redis data is cache, circuit, queue, and outbox state only. Deleting it must not change the canonical next assignment.
+Local SQLite/Redis data is cache, circuit, queue, path-choice, and outbox state only. Deleting it must not change the canonical next assignment.
+
+## LAN and Tailscale access-path rule
+
+One physical runtime may have several private access paths, for example:
+
+```yaml
+runtime_instance_id: lmstudio-xwing-1234
+parallel_slots: 1
+access_urls:
+  - http://192.168.1.51:1234/v1
+  - http://100.90.80.70:1234/v1
+  - http://xwing.example.ts.net:1234/v1
+```
+
+The paths are ordered. The router probes the same-LAN URL first and falls back to the approved Tailscale IP or MagicDNS URL when the node is away from the local network. All paths retain one runtime identity, one model-process identity, and one shared slot pool.
+
+Path selection is not discovery. AssistX must first create or approve the candidate paths from host-side inventory and Tailscale observations.
+
+The reconciliation container remains on a normal Docker bridge network so host-published APIs can stay on `127.0.0.1`. Cutover validation must prove from inside the router container that:
+
+- the preferred RFC1918 endpoint is reachable while the node is local;
+- the Tailscale `100.64.0.0/10` endpoint is reachable when the LAN path is unavailable;
+- the selected path shown by `GET /admin/admission` matches the expected transport.
+
+Use the discovered Tailscale IP when Docker does not inherit host split-DNS behavior. MagicDNS names remain supported when they resolve inside the container.
 
 ## LM Studio Link rule
 
@@ -94,9 +125,17 @@ cp config/providers.example.yaml config/providers.local.yaml
 export AUTO_ROUTER_PROVIDER_CONFIG=config/providers.local.yaml
 ```
 
-Each provider should include a stable physical `node_id`, local `quota_class`, and an access URL that resolves only inside the approved network.
+Each admitted provider should include:
 
-For the live migration shadow deployment, use `config/providers.reconciliation.yaml`. It admits one operator-confirmed physical runtime only. Do not add another node until its physical owner, loaded process, completion health, and slot count are proven.
+- a stable physical `node_id`;
+- a stable `runtime_instance_id`;
+- explicit `parallel_slots`;
+- a bounded `queue_limit` and `queue_timeout_seconds`;
+- ordered private `access_urls`, with LAN before Tailscale;
+- local `quota_class`;
+- one or more model aliases.
+
+For the live migration shadow deployment, use `config/providers.reconciliation.yaml`. It admits one operator-confirmed physical runtime only. Do not add another node until its physical owner, loaded process, completion health, container network reachability, and slot count are proven.
 
 ## Routing policy
 
@@ -126,7 +165,11 @@ AssistX integration:
 - `POST /api/memory/context`
 - metadata-only event outbox dispatch to AssistX
 
-Operations endpoints remain available for local diagnostics, but their snapshots are not canonical when they differ from AssistX/Neo4j.
+Operator diagnostics:
+
+- `GET /admin/admission` — authenticated ephemeral slot, queue, approved-path, and selected-path state.
+
+Operations snapshots are not canonical when they differ from AssistX/Neo4j.
 
 ## Normal local start
 
@@ -146,7 +189,7 @@ The default Compose deployment is strict-offline, has autoload/unload and the in
 
 ## Side-by-side migration start
 
-When the old router is still running, do **not** run the base Compose file alone. The reconciliation overlay creates separate container names, Redis/data, Docker network, and loopback port `18088`:
+When the old router is still running, do **not** run the base Compose file alone. The reconciliation overlay creates separate container names, Redis/data, Docker networks, and loopback port `18088`:
 
 ```bash
 mkdir -p data-reconciliation artifacts-reconciliation
@@ -163,9 +206,11 @@ docker compose \
 
 curl -fsS http://127.0.0.1:18088/health | jq
 curl -fsS http://127.0.0.1:18088/v1/models | jq
+curl -fsS -H "X-Admin-Token: $AUTO_ROUTER_ADMIN_TOKEN" \
+  http://127.0.0.1:18088/admin/admission | jq
 ```
 
-The shadow router expects the reconciliation AssistX API on `127.0.0.1:18000` through `host.docker.internal`. Follow the complete runbook in `auto-assist/docs/LOCAL_AGENT_LIVE_MIGRATION_RUNBOOK_20260730.md` on the matching branch.
+The router and shadow AssistX API communicate over the dedicated `assistx_reconciliation_shared` Docker network. Their host-published ports remain bound to `127.0.0.1`.
 
 Point shadow clients at:
 
@@ -179,21 +224,21 @@ AssistX must use the router-only overlay. `auto-assign` is retired and must not 
 ## Verification
 
 ```bash
+pytest -q tests/test_access_paths.py
+pytest -q tests/test_admission.py
 pytest -q tests/test_offline_guard.py
 pytest -q
 curl http://127.0.0.1:8088/health | jq
 curl http://127.0.0.1:8088/v1/models | jq
 ```
 
-A deployment is not admitted merely because `/v1/models` succeeds. Each physical model instance also needs a completion canary, fresh health/capacity observation, and benchmark evidence before AssistX routes real work.
+A deployment is not admitted merely because `/v1/models` succeeds. Each physical model instance also needs a completion canary, fresh health/capacity observation, explicit container reachability evidence, and benchmark evidence before AssistX routes real work.
 
-## Next required implementation
+## Remaining integration work
 
-1. Add the physical runtime/model-instance observation contract shared with AssistX.
-2. Ingest LM Studio `ps --host` observations without confusing Link access paths with runtime owners.
-3. Add per-runtime slot admission and queue limits; unknown capacity defaults to zero.
-4. Remove or disable legacy hosted-provider discovery/admin paths.
-5. Remove scheduler/backlog semantics that overlap AssistX.
-6. Make all workload routes consume an AssistX reservation or signed route decision.
+1. Ingest approved multi-path runtime observations directly from the AssistX context projection rather than only the reconciliation provider file.
+2. Require an AssistX reservation or signed route decision for workload routes that need durable assignment semantics.
+3. Continue removing legacy hosted-provider discovery/admin code that is no longer mounted by `main_live`.
+4. Promote live LAN/Tailscale failover evidence into the migration ledger before cutover.
 
 The authoritative cross-repository decision and live migration package are in `auto-assist` on the matching branch.
