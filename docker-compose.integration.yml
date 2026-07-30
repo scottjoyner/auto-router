@@ -1,32 +1,38 @@
-# Integration smoke overlay for CI (LLD §3.5 W-66).
+# Integration smoke overlay for CI.
 #
-# Stands up just enough to verify the router boots, the background outbox
-# dispatcher runs, and /health responds -- without requiring the full AssistX
-# control plane. The router reads a local static context projection
-# (config/context.example.yaml) and falls back to a bootstrap snapshot, so no
-# external service is needed. Redis is included to exercise the quota/redis path.
+# Stands up just enough to verify the strict-offline router boots, its local
+# background services initialize, and /health responds without requiring the
+# homelab AssistX network or any external inference provider.
 services:
   llm-router:
     build: .
     container_name: auto-router-smoke
-    ports:
-      - "8088:8088"
+    ports: !override
+      - "127.0.0.1:8088:8088"
     environment:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
+      AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.reconciliation.yaml
       AUTO_ROUTER_CONTEXT_CONFIG: /app/config/context.example.yaml
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
       AUTO_ROUTER_ASSISTX_EVENT_SINK_URL: ""
+      AUTO_ROUTER_ASSISTX_TASKS_URL: ""
+      AUTO_ROUTER_STRICT_OFFLINE: "true"
+      AUTO_ROUTER_AUTOLOAD_ENABLED: "false"
+      AUTO_ROUTER_PLACEMENT_UNLOAD: "false"
       AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "false"
       AUTO_ROUTER_AGENTGATEWAY_ENABLED: "false"
       AUTO_ROUTER_GATEWAY_MODE: direct
       AUTO_ROUTER_OTEL_ENABLED: "false"
       AUTO_ROUTER_ADMIN_TOKEN: "smoke-admin-token"
-      HERMES_HOME: /root/.hermes
-    volumes:
+      RECONCILIATION_RUNTIME_NODE_ID: ci-local-runtime
+      RECONCILIATION_LMSTUDIO_BASE_URL: http://host.docker.internal:1234/v1
+      RECONCILIATION_MODEL_ID: ci-not-loaded
+      RECONCILIATION_CONTEXT_WINDOW: "4096"
+    volumes: !override
       - ./config:/app/config:ro
-      - ./data:/data
+      - ./data-integration:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -37,20 +43,27 @@ services:
       retries: 10
       start_period: 20s
     restart: "no"
-    networks:
+    networks: !override
       - default
 
   redis:
     image: redis:7-alpine
     container_name: auto-router-smoke-redis
     command: ["redis-server", "--appendonly", "yes"]
+    volumes: !override
+      - redis-smoke-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
     restart: "no"
+    networks: !override
+      - default
 
 networks:
   default:
     name: auto-router-smoke
+
+volumes:
+  redis-smoke-data: {}
