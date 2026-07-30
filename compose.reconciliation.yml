@@ -1,0 +1,55 @@
+# Layer after docker-compose.yml for a side-by-side shadow router.
+# Requires Docker Compose 2.24.4+ for !override.
+services:
+  llm-router:
+    container_name: auto-router-reconciliation
+    ports: !override
+      - "127.0.0.1:${RECONCILIATION_ROUTER_PORT:-18088}:8088"
+    environment:
+      AUTO_ROUTER_HOST: 0.0.0.0
+      AUTO_ROUTER_PORT: 8088
+      AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.reconciliation.yaml
+      AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
+      AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
+      AUTO_ROUTER_CONTEXT_CONFIG: http://host.docker.internal:18000/api/router/context-projection
+      AUTO_ROUTER_ASSISTX_EVENT_SINK_URL: http://host.docker.internal:18000/api/events
+      AUTO_ROUTER_ASSISTX_TASKS_URL: http://host.docker.internal:18000/api/router/backlog-candidates
+      AUTO_ROUTER_ASSISTX_BASIC_AUTH_USER: ${AUTO_ROUTER_ASSISTX_BASIC_AUTH_USER:-reconciliation-admin}
+      AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS: ${AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS:-change-me-shadow-api}
+      AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
+      AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
+      AUTO_ROUTER_STRICT_OFFLINE: "true"
+      AUTO_ROUTER_AUTOLOAD_ENABLED: "false"
+      AUTO_ROUTER_PLACEMENT_UNLOAD: "false"
+      AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "false"
+      AUTO_ROUTER_AGENTGATEWAY_ENABLED: "false"
+      AUTO_ROUTER_GATEWAY_MODE: direct
+      AUTO_ROUTER_LOG_PROMPTS: "false"
+      AUTO_ROUTER_DEFAULT_PROFILE: local_only
+      AUTO_ROUTER_MAX_CANDIDATE_ATTEMPTS: "1"
+      AUTO_ROUTER_ATTEMPT_TIMEOUT_SECONDS: "60"
+      AUTO_ROUTER_REQUEST_DEADLINE_SECONDS: "75"
+      RECONCILIATION_RUNTIME_NODE_ID: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
+      RECONCILIATION_LMSTUDIO_BASE_URL: ${RECONCILIATION_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      RECONCILIATION_MODEL_ID: ${RECONCILIATION_MODEL_ID:-refinedtoolcallv5-3b}
+      RECONCILIATION_CONTEXT_WINDOW: ${RECONCILIATION_CONTEXT_WINDOW:-32768}
+    volumes: !override
+      - ./config:/app/config:ro
+      - ./data-reconciliation:/data
+      - ./artifacts-reconciliation:/artifacts
+    networks: !override
+      - default
+
+  redis:
+    container_name: auto-router-reconciliation-redis
+    volumes: !override
+      - redis-reconciliation-data:/data
+    networks: !override
+      - default
+
+networks:
+  default:
+    name: auto_router_reconciliation_default
+
+volumes:
+  redis-reconciliation-data: {}
