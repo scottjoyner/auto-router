@@ -19,8 +19,10 @@ jobs:
       - name: Lint reconciliation paths
         run: |
           ruff check \
+            src/auto_router/admission.py \
             src/auto_router/main_live.py \
             src/auto_router/offline_guard.py \
+            tests/test_admission.py \
             tests/test_offline_guard.py \
             tests/test_reconciliation_config.py \
             tests/test_reconciliation_runtime.py \
@@ -57,7 +59,7 @@ jobs:
             sleep 3
           done
           test "$healthy" = "true"
-      - name: Verify health, offline models, route surface, and admin auth gate
+      - name: Verify health, offline models, route surface, admission, and admin auth gate
         run: |
           curl -sf http://127.0.0.1:8088/health > /tmp/router-health.json
           curl -sf http://127.0.0.1:8088/openapi.json > /tmp/router-openapi.json
@@ -69,7 +71,7 @@ jobs:
           assert health.get("service") == "auto-router", health
 
           paths = set(json.loads(Path("/tmp/router-openapi.json").read_text())["paths"])
-          required = {"/health", "/v1/models", "/api/routes/request"}
+          required = {"/health", "/v1/models", "/api/routes/request", "/admin/admission"}
           forbidden = {
               "/admin/backlog/burn-down",
               "/admin/backlog/dry-run",
@@ -103,18 +105,37 @@ jobs:
           assert not any(name in serialized for name in forbidden), payload
           PY
 
-          # /admin/quota must require the admin token (401 without it).
+          # Administrative status must require the local admin token.
           code=$(curl -s -o /dev/null -w '%{http_code}' \
             http://127.0.0.1:8088/admin/quota)
           echo "unauthenticated admin status: $code"
           test "$code" = "401"
 
-          # The same endpoint succeeds with the local admin token.
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            http://127.0.0.1:8088/admin/admission)
+          echo "unauthenticated admission status: $code"
+          test "$code" = "401"
+
+          # The same endpoints succeed with the local admin token.
           code=$(curl -s -o /dev/null -w '%{http_code}' \
             -H 'X-Admin-Token: smoke-admin-token' \
             http://127.0.0.1:8088/admin/quota)
           echo "authenticated admin status: $code"
           test "$code" = "200"
+
+          curl -sf \
+            -H 'X-Admin-Token: smoke-admin-token' \
+            http://127.0.0.1:8088/admin/admission > /tmp/router-admission.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/router-admission.json").read_text())
+          assert isinstance(payload.get("runtimes"), list), payload
+          for runtime in payload["runtimes"]:
+              required = {"runtime_instance_id", "parallel_slots", "active", "queued"}
+              assert required <= set(runtime), runtime
+          PY
       - name: Capture diagnostics on failure
         if: failure()
         run: |
