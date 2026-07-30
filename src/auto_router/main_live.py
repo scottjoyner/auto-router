@@ -4,9 +4,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from auto_router.offline_guard import (
     enforce_strict_offline_provider_config,
@@ -26,18 +27,25 @@ if not strict_offline_enabled():
 enforce_strict_offline_provider_config()
 
 import auto_router.main as main_module
+from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
 from auto_router.assistx_routes import register_assistx_routes
 from auto_router.fleet_routes import router as fleet_router
 from auto_router.main import app, state
 from auto_router.memory_routes import register_memory_routes
+from auto_router.models import ProviderCandidate, ProviderResponse, RouterRequest
 from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.otel import init_otel
+from auto_router.providers import ProviderStreamResponse
 from auto_router.route_event_patch import install_route_event_patch
+from auto_router.security import require_admin
 from auto_router.settings import get_settings
 
 _RETIRED_INHERITED_PATHS = {
     "/jobs/agent",
 }
+
+_ORIGINAL_DISPATCH = main_module._dispatch
+_ORIGINAL_DISPATCH_STREAM = main_module._dispatch_stream
 
 
 async def _cancel_tasks(tasks: list[asyncio.Task[object]]) -> None:
@@ -58,9 +66,67 @@ def _remove_retired_inherited_routes() -> None:
     ]
 
 
+def _admission_controller() -> RuntimeAdmissionController:
+    controller = getattr(state, "admission", None)
+    if not isinstance(controller, RuntimeAdmissionController):
+        raise RuntimeError("runtime admission controller is not initialized")
+    return controller
+
+
+async def _admitted_dispatch(
+    provider: Any,
+    candidate: ProviderCandidate,
+    request: RouterRequest,
+    route_plan: Any | None = None,
+) -> ProviderResponse:
+    lease = await _admission_controller().acquire(candidate)
+    try:
+        return await _ORIGINAL_DISPATCH(
+            provider,
+            candidate,
+            request,
+            route_plan=route_plan,
+        )
+    finally:
+        await lease.release()
+
+
+async def _release_stream_lease(
+    body: AsyncIterator[bytes],
+    lease: RuntimeAdmissionLease,
+) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in body:
+            yield chunk
+    finally:
+        await lease.release()
+
+
+async def _admitted_dispatch_stream(
+    provider: Any,
+    candidate: ProviderCandidate,
+    request: RouterRequest,
+    route_plan: Any | None = None,
+) -> ProviderStreamResponse:
+    lease = await _admission_controller().acquire(candidate)
+    try:
+        response = await _ORIGINAL_DISPATCH_STREAM(
+            provider,
+            candidate,
+            request,
+            route_plan=route_plan,
+        )
+    except BaseException:
+        await lease.release()
+        raise
+
+    response.body = _release_stream_lease(response.body, lease)
+    return response
+
+
 @asynccontextmanager
 async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Start only AssistX projection and local housekeeping loops.
+    """Start only AssistX projection, admission control, and local housekeeping loops.
 
     The reconciled router does not start Tailnet/service/CLI discovery, live-provider
     registry mutation, model placement, fleet execution, or autonomous backlog
@@ -68,6 +134,7 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
     """
 
     await main_module.load_state()
+    state.admission = RuntimeAdmissionController(state.providers.enabled())
     init_otel()
     tasks: list[asyncio.Task[object]] = [
         asyncio.create_task(main_module.refresh_context_task()),
@@ -86,6 +153,8 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
             pass
 
 
+main_module._dispatch = _admitted_dispatch
+main_module._dispatch_stream = _admitted_dispatch_stream
 install_route_event_patch(main_module)
 _remove_retired_inherited_routes()
 app.router.lifespan_context = strict_offline_lifespan
@@ -98,6 +167,15 @@ register_ops_dashboard_routes(app, state)
 register_assistx_routes(app, state)
 register_memory_routes(app, state)
 app.include_router(fleet_router)
+
+
+@app.get("/admin/admission")
+async def admission_status(
+    _: None = Depends(require_admin),
+) -> dict[str, list[dict[str, Any]]]:
+    """Expose bounded admission state without becoming a durable fleet authority."""
+
+    return {"runtimes": _admission_controller().snapshot()}
 
 
 def run() -> None:
