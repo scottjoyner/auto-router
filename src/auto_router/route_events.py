@@ -86,7 +86,8 @@ def enqueue_route_execution_event(
         or str(uuid.uuid4())
     )
     node_id = (
-        getattr(request, "node_id", None)
+        request_metadata.get("runtime_node_id")
+        or getattr(request, "node_id", None)
         or request_metadata.get("node_id")
         or _provider_node_id(state, provider)
         or str(request_metadata.get("provider_id") or provider or "unknown")
@@ -100,13 +101,33 @@ def enqueue_route_execution_event(
         "priority": request.priority.value,
         "profile": request_metadata.get("profile"),
         "task_id": task_id,
+        "task_title": request_metadata.get("task_title") or request_metadata.get("title"),
+        "task_kind": request_metadata.get("task_kind") or request_metadata.get("kind"),
+        "repository": request_metadata.get("repository") or request_metadata.get("repo"),
         "agent_run_id": agent_run_id,
+        "agent": request_metadata.get("agent") or request_metadata.get("executor"),
         "node_id": node_id,
+        "runtime_node_id": request_metadata.get("runtime_node_id") or node_id,
+        "runtime_instance_id": request_metadata.get("runtime_instance_id"),
+        "runtime_kind": request_metadata.get("runtime_kind"),
+        "runtime_version": request_metadata.get("runtime_version"),
+        "headless": request_metadata.get("headless"),
+        "selected_transport": request_metadata.get("selected_transport"),
+        "selected_access_url": request_metadata.get("selected_access_url"),
+        "parallel_slots": request_metadata.get("parallel_slots"),
+        "queue_limit": request_metadata.get("queue_limit"),
+        "queue_timeout_seconds": request_metadata.get("queue_timeout_seconds"),
         "stage": stage,
         "provider": provider,
         "provider_id": canonical_provider,
         "model": model,
+        "model_key": request_metadata.get("model_key") or canonical_model,
+        "model_instance_id": request_metadata.get("model_instance_id"),
+        "provider_model": request_metadata.get("provider_model") or model,
         "provider_model_id": provider_model_id,
+        "artifact_fingerprint": request_metadata.get("artifact_fingerprint"),
+        "quantization": request_metadata.get("quantization"),
+        "context_length": request_metadata.get("context_length"),
         "status": status,
         "status_code": status_code,
         "latency_ms": latency_ms,
@@ -114,6 +135,7 @@ def enqueue_route_execution_event(
         "ended_at_ms": ended_at_ms,
         "queue_wait_ms": queue_wait_ms,
         "load_time_ms": load_time_ms,
+        "time_to_first_token_ms": request_metadata.get("time_to_first_token_ms") or load_time_ms,
         "tokens_per_second": tokens_per_second,
         "value_units": value_units,
         "value_per_second": value_per_second,
@@ -168,7 +190,8 @@ def enqueue_route_decision_event(
         or str(uuid.uuid4())
     )
     node_id = (
-        getattr(request, "node_id", None)
+        request_metadata.get("runtime_node_id")
+        or getattr(request, "node_id", None)
         or request_metadata.get("node_id")
         or _provider_node_id(state, chosen_payload.get("provider_id") or chosen_payload.get("provider"))
         or str(chosen_payload.get("provider_id") or chosen_payload.get("provider") or "unknown")
@@ -182,6 +205,12 @@ def enqueue_route_decision_event(
         "task_id": task_id,
         "agent_run_id": agent_run_id,
         "node_id": node_id,
+        "runtime_node_id": request_metadata.get("runtime_node_id") or node_id,
+        "runtime_instance_id": request_metadata.get("runtime_instance_id"),
+        "runtime_kind": request_metadata.get("runtime_kind"),
+        "runtime_version": request_metadata.get("runtime_version"),
+        "selected_transport": request_metadata.get("selected_transport"),
+        "selected_access_url": request_metadata.get("selected_access_url"),
         "stage": stage,
         "priority": request.priority.value,
         "local_only": request.local_only,
