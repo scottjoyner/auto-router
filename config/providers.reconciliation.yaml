@@ -5,6 +5,10 @@ providers:
   - name: reconciliation-local-runtime
     type: lmstudio
     node_id: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
+    runtime_instance_id: ${RECONCILIATION_RUNTIME_INSTANCE_ID:-lmstudio-reconciliation-1234}
+    parallel_slots: ${RECONCILIATION_PARALLEL_SLOTS:-1}
+    queue_limit: ${RECONCILIATION_QUEUE_LIMIT:-4}
+    queue_timeout_seconds: ${RECONCILIATION_QUEUE_TIMEOUT_SECONDS:-30}
     enabled: true
     base_url: ${RECONCILIATION_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
     priority: 100
