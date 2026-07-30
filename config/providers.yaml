@@ -1,301 +1,141 @@
+# Strict offline fleet provider registry.
+#
+# Public inference providers are intentionally absent. This file must contain only
+# physical LAN/Tailscale/loopback runtimes. Discovery may update observations, but
+# it must not add public providers or autonomously load models.
 providers:
-- api_key_env: GROQ_API_KEY
-  base_url: https://api.groq.com/openai/v1
-  enabled: true
-  headers: {}
-  models:
-  - alias: groq/fast-small
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - low_latency
-    context_window: 8192
-    provider_model: llama-3.1-8b-instant
-    quota:
-      rpm: 5
-      tpd: 500000
-  name: groq
-  priority: 20
-  quota_class: fast_free
-  type: openai_compatible
-- api_key_env: CEREBRAS_API_KEY
-  base_url: https://api.cerebras.ai/v1
-  enabled: true
-  headers: {}
-  metadata:
-    docs: https://inference-docs.cerebras.ai
-    notes: Public docs currently list gpt-oss-120b and preview zai-glm-4.7 on shared
-      endpoints. Confirm live availability with GET /v1/models.
-    role: flash_start_planning_node
-  models:
-  - alias: cerebras/flash-reasoner
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - code
-    - reasoning
-    - low_latency
-    - flash_planning
-    provider_model: gpt-oss-120b
-    quota:
-      rpm: 5
-      tpd: 1000000
-      tph: 1000000
-      tpm: 30000
-  - alias: cerebras/glm-4.7-preview
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - code
-    - reasoning
-    - tool_use
-    - low_latency
-    - flash_planning
-    - preview
-    provider_model: zai-glm-4.7
-    quota:
-      rpm: 5
-      tpd: 1000000
-      tph: 1000000
-      tpm: 30000
-  name: cerebras
-  priority: 10
-  quota_class: fast_free
-  type: openai_compatible
-- api_key_env: OPENROUTER_API_KEY
-  base_url: https://openrouter.ai/api/v1
-  enabled: true
-  headers:
-    HTTP-Referer: http://localhost:8088
-    X-Title: auto-router
-  models:
-  - alias: openrouter/free-general
-    capabilities:
-    - chat
-    - streaming
-    context_window: 8192
-    provider_model: meta-llama/llama-3.1-8b-instruct:free
-    quota:
-      rpd: 50
-      rpm: 20
-  name: openrouter
-  priority: 80
-  quota_class: brokered_free
-  type: openai_compatible
-- base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
-  enabled: true
-  models:
-  - alias: local/ornith-1.0-9b
-    capabilities:
-    - chat
-    - streaming
-    - code
-    - json
-    - local_only
-    - hermes_worker
-    context_window: 32768
-    provider_model: ornith-1.0-9b
-  name: lmstudio-xwing
-  node_id: xwing
-  priority: 90
-  quota_class: local
-  type: lmstudio
-- base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
-  enabled: false
-  models: []
-  name: lmstudio-joyner
-  node_id: joyner
-  priority: 5
-  capabilities:
-  - chat
-  - streaming
-  - code
-  - json
-  - local_only
-  - hermes_worker
-  quota_class: local
-  type: lmstudio
-- base_url: http://100.78.106.121:1234/v1
-  enabled: true
-  models:
-  - alias: local/deathstar-0.8b
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - low_latency
-    - local_only
-    - quick_iteration
-    - reasoning
-    - hermes_worker
-    context_window: 262144
-    provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
-  - alias: local/deathstar-toolcall
-    capabilities:
-    - chat
-    - streaming
-    - code
-    - json
-    - local_only
-    - hermes_worker
-    - tool_use
-    context_window: 131072
-    provider_model: refinedtoolcallv5-3b
-  name: lmstudio-deathstar
-  node_id: deathstar-XPS-8920
-  priority: 145
-  quota_class: local
-  type: lmstudio
-- base_url: http://host.docker.internal:1234/v1
-  enabled: true
-  models:
-  - alias: local/reasoning-large
-    capabilities:
-    - chat
-    - reasoning
-    - json
-    - local_only
-    - large_context
-    - hermes_worker
-    context_window: 131072
-    provider_model: ornith-1.0-35b
-  - alias: local/tool-call-x1
-    capabilities:
-    - chat
-    - streaming
-    - code
-    - json
-    - local_only
-    - hermes_worker
-    - tool_use
-    context_window: 131072
-    provider_model: refinedtoolcallv5-3b
-  - alias: local/moe-fast
-    capabilities:
-    - chat
-    - json
-    - low_latency
-    - local_only
-    context_window: 32768
-    provider_model: qwen3.5-9b-neo-heretic-i1
-  name: lmstudio-x1-370
-  node_id: x1-370
-  priority: 100
-  quota_class: local
-  type: lmstudio
-- base_url: ${LMSTUDIO_BEELINK_BASE_URL:-http://100.85.72.121:1234/v1}
-  enabled: true
-  models:
-  - alias: local/worker-default
-    capabilities:
-    - chat
-    - streaming
-    - code
-    - json
-    - local_only
-    - hermes_worker
-    context_window: 131072
-    provider_model: vibethinker-3b-hermes
-  name: lmstudio-beelink-ryzen-7-mini-pc
-  node_id: beelink-ryzen-7-mini-pc
-  priority: 140
-  quota_class: local
-  type: lmstudio
-- base_url: ${LMSTUDIO_LENOVO_BASE_URL:-http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1}
-  enabled: true
-  models:
-  - alias: local/lenovo-fast
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - low_latency
-    - local_only
-    - quick_iteration
-    context_window: 32768
-    provider_model: liquid/lfm2.5-1.2b
-  name: lmstudio-lenovo-ideapad-330s-15ikb
-  node_id: scott-lenovo-ideapad-330s-15ikb
-  priority: 165
-  quota_class: local
-  type: lmstudio
-- base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
-  enabled: true
-  models:
-  - alias: local/optiplex-fast
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - low_latency
-    - local_only
-    - quick_iteration
-    context_window: 32768
-    provider_model: liquid/lfm2.5-1.2b
-  name: lmstudio-optiplex-9030-aio
-  node_id: scott-optiplex-9030-aio
-  priority: 155
-  quota_class: local
-  type: lmstudio
-- base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
-  enabled: true
-  models:
-  - alias: local/quick-iterate
-    capabilities:
-    - chat
-    - streaming
-    - json
-    - low_latency
-    - local_only
-    - quick_iteration
-    - reasoning
-    context_window: 262144
-    provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
-  - alias: local/tool-call
-    capabilities:
-    - chat
-    - streaming
-    - code
-    - json
-    - local_only
-    - hermes_worker
-    - tool_use
-    context_window: 131072
-    provider_model: refinedtoolcallv5-3b
-  name: lmstudio-scotts-macbook-air
-  node_id: scotts-macbook-air
-  priority: 150
-  quota_class: local
-  type: lmstudio
-- base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
-  enabled: true
-  models:
-  - alias: local/destroyer-8b
-    capabilities:
-    - chat
-    - reasoning
-    - streaming
-    - json
-    - local_only
-    - hermes_worker
-    context_window: 131072
-    provider_model: lfm2.5-8b-a1b
-  - alias: local/destroyer-3b
-    capabilities:
-    - chat
-    - streaming
-    - code
-    - json
-    - local_only
-    - hermes_worker
-    - tool_use
-    context_window: 131072
-    provider_model: vibethinker-3b-hermes
-  name: lmstudio-destroyer
-  node_id: destroyer
-  priority: 130
-  quota_class: local
-  type: lmstudio
+  - name: lmstudio-xwing
+    type: lmstudio
+    node_id: xwing
+    enabled: true
+    base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
+    priority: 90
+    quota_class: local
+    models:
+      - alias: local/ornith-1.0-9b
+        provider_model: ornith-1.0-9b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+        context_window: 32768
+
+  - name: lmstudio-joyner
+    type: lmstudio
+    node_id: joyner
+    enabled: false
+    base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
+    priority: 5
+    quota_class: local
+    models: []
+
+  - name: lmstudio-deathstar
+    type: lmstudio
+    node_id: deathstar-XPS-8920
+    enabled: true
+    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://100.78.106.121:1234/v1}
+    priority: 145
+    quota_class: local
+    models:
+      - alias: local/deathstar-0.8b
+        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning, hermes_worker]
+        context_window: 262144
+      - alias: local/deathstar-toolcall
+        provider_model: refinedtoolcallv5-3b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
+        context_window: 131072
+
+  - name: lmstudio-x1-370
+    type: lmstudio
+    node_id: x1-370
+    enabled: true
+    base_url: ${LMSTUDIO_X1_BASE_URL:-http://host.docker.internal:1234/v1}
+    priority: 100
+    quota_class: local
+    models:
+      - alias: local/reasoning-large
+        provider_model: ornith-1.0-35b
+        capabilities: [chat, reasoning, json, local_only, large_context, hermes_worker]
+        context_window: 131072
+      - alias: local/tool-call-x1
+        provider_model: refinedtoolcallv5-3b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
+        context_window: 131072
+      - alias: local/moe-fast
+        provider_model: qwen3.5-9b-neo-heretic-i1
+        capabilities: [chat, json, low_latency, local_only]
+        context_window: 32768
+
+  # Quarantined until one-slot admission control and a sustained concurrency canary pass.
+  - name: lmstudio-beelink-ryzen-7-mini-pc
+    type: lmstudio
+    node_id: beelink-ryzen-7-mini-pc
+    enabled: false
+    base_url: ${LMSTUDIO_BEELINK_BASE_URL:-http://100.85.72.121:1234/v1}
+    priority: 140
+    quota_class: local
+    models:
+      - alias: local/worker-default
+        provider_model: vibethinker-3b-hermes
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+        context_window: 131072
+
+  # Disabled: documented CPU fallback is too slow for useful fleet routing.
+  - name: lmstudio-lenovo-ideapad-330s-15ikb
+    type: lmstudio
+    node_id: scott-lenovo-ideapad-330s-15ikb
+    enabled: false
+    base_url: ${LMSTUDIO_LENOVO_BASE_URL:-http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1}
+    priority: 160
+    quota_class: local
+    models:
+      - alias: local/lenovo-fast
+        provider_model: liquid/lfm2.5-1.2b
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+        context_window: 32768
+
+  # Disabled until the node is online and passes a real completion canary.
+  - name: lmstudio-optiplex-9030-aio
+    type: lmstudio
+    node_id: scott-optiplex-9030-aio
+    enabled: false
+    base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
+    priority: 155
+    quota_class: local
+    models:
+      - alias: local/optiplex-fast
+        provider_model: liquid/lfm2.5-1.2b
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+        context_window: 32768
+
+  - name: lmstudio-scotts-macbook-air
+    type: lmstudio
+    node_id: scotts-macbook-air
+    enabled: true
+    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
+    priority: 150
+    quota_class: local
+    models:
+      - alias: local/quick-iterate
+        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning]
+        context_window: 262144
+      - alias: local/tool-call
+        provider_model: refinedtoolcallv5-3b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
+        context_window: 131072
+
+  - name: lmstudio-destroyer
+    type: lmstudio
+    node_id: destroyer
+    enabled: true
+    base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
+    priority: 130
+    quota_class: local
+    models:
+      - alias: local/destroyer-8b
+        provider_model: lfm2.5-8b-a1b
+        capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker]
+        context_window: 131072
+      - alias: local/destroyer-3b
+        provider_model: vibethinker-3b-hermes
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
+        context_window: 131072
