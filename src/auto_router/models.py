@@ -34,6 +34,9 @@ class QuotaClass(StrEnum):
 class ModelConfig(BaseModel):
     alias: str
     provider_model: str
+    model_instance_id: str | None = None
+    artifact_fingerprint: str | None = None
+    quantization: str | None = None
     capabilities: set[str] = Field(default_factory=set)
     context_window: int | None = None
     quota: dict[str, int] = Field(default_factory=dict)
@@ -45,6 +48,9 @@ class ProviderConfig(BaseModel):
     type: str
     node_id: str | None = None
     runtime_instance_id: str | None = None
+    runtime_kind: str | None = None
+    runtime_version: str | None = None
+    headless: bool | None = None
     parallel_slots: int = Field(default=0, ge=0)
     queue_limit: int = Field(default=0, ge=0)
     queue_timeout_seconds: float = Field(default=0.0, ge=0)
@@ -163,6 +169,7 @@ class AgentWorkerConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # Orchestration plan route request / route decision models (Section 4.2)
 # ---------------------------------------------------------------------------
+
 
 class RouteIntent(BaseModel):
     type: str = "voice_command"
