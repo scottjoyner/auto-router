@@ -15,6 +15,7 @@ def test_reconciled_entrypoint_does_not_mount_duplicate_authority_routes() -> No
     assert "/health" in paths
     assert "/v1/models" in paths
     assert "/api/routes/request" in paths
+    assert "/admin/admission" in paths
 
     assert "/admin/backlog/burn-down" not in paths
     assert "/admin/backlog/dry-run" not in paths
