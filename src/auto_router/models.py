@@ -50,6 +50,7 @@ class ProviderConfig(BaseModel):
     queue_timeout_seconds: float = Field(default=0.0, ge=0)
     enabled: bool = True
     base_url: str
+    access_urls: list[str] = Field(default_factory=list)
     api_key_env: str | None = None
     priority: int = 100
     quota_class: QuotaClass | str = QuotaClass.local
