@@ -28,7 +28,7 @@ if not strict_offline_enabled():
 enforce_strict_offline_provider_config()
 
 import auto_router.main as main_module
-from auto_router.access_paths import RuntimeAccessPathSelector
+from auto_router.access_paths import AccessPathChoice, RuntimeAccessPathSelector
 from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
 from auto_router.assistx_routes import register_assistx_routes
 from auto_router.fleet_routes import router as fleet_router
@@ -82,9 +82,39 @@ def _access_path_selector() -> RuntimeAccessPathSelector:
     return selector
 
 
+def _annotate_request_telemetry(
+    request: RouterRequest,
+    candidate: ProviderCandidate,
+    choice: AccessPathChoice,
+) -> None:
+    """Attach non-secret physical runtime facts for the durable AssistX event stream."""
+
+    provider = candidate.provider
+    model = candidate.model
+    request.metadata = {
+        **(request.metadata if isinstance(request.metadata, dict) else {}),
+        "runtime_node_id": provider.node_id,
+        "runtime_instance_id": choice.runtime_instance_id,
+        "runtime_kind": provider.runtime_kind or provider.type,
+        "runtime_version": provider.runtime_version,
+        "headless": provider.headless,
+        "selected_transport": choice.transport,
+        "selected_access_url": choice.base_url,
+        "parallel_slots": provider.parallel_slots,
+        "queue_limit": provider.queue_limit,
+        "queue_timeout_seconds": provider.queue_timeout_seconds,
+        "model_instance_id": model.model_instance_id,
+        "model_key": model.alias,
+        "provider_model": model.provider_model,
+        "artifact_fingerprint": model.artifact_fingerprint,
+        "quantization": model.quantization,
+        "context_length": model.context_window,
+    }
+
+
 async def _select_provider(
     candidate: ProviderCandidate,
-) -> tuple[Any, ProviderCandidate]:
+) -> tuple[Any, ProviderCandidate, AccessPathChoice]:
     """Select an approved path while preserving the physical runtime identity."""
 
     choice = await _access_path_selector().select(candidate)
@@ -96,7 +126,7 @@ async def _select_provider(
         timeout_seconds=settings.attempt_timeout_seconds,
         connect_timeout_seconds=settings.connect_timeout_seconds,
     )
-    return selected_provider, selected_candidate
+    return selected_provider, selected_candidate, choice
 
 
 async def _admitted_dispatch(
@@ -107,7 +137,8 @@ async def _admitted_dispatch(
 ) -> ProviderResponse:
     lease = await _admission_controller().acquire(candidate)
     try:
-        provider, selected_candidate = await _select_provider(candidate)
+        provider, selected_candidate, choice = await _select_provider(candidate)
+        _annotate_request_telemetry(request, selected_candidate, choice)
         return await _ORIGINAL_DISPATCH(
             provider,
             selected_candidate,
@@ -137,7 +168,8 @@ async def _admitted_dispatch_stream(
 ) -> ProviderStreamResponse:
     lease = await _admission_controller().acquire(candidate)
     try:
-        provider, selected_candidate = await _select_provider(candidate)
+        provider, selected_candidate, choice = await _select_provider(candidate)
+        _annotate_request_telemetry(request, selected_candidate, choice)
         response = await _ORIGINAL_DISPATCH_STREAM(
             provider,
             selected_candidate,
