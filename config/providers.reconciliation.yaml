@@ -1,39 +1,28 @@
-# Initial shadow provider registry.
-# Admit exactly one operator-confirmed physical runtime. Do not add public providers,
-# Link aliases with unresolved owners, or load/unload behavior. access_urls are ordered:
-# prefer a same-LAN address, retain the legacy/operator-selected path, then fall back
-# to the approved Tailscale IP or MagicDNS URL for the same physical runtime.
+# Health-only bootstrap registry for the reconciliation router.
+#
+# This provider is intentionally unroutable: zero slots, zero models, and a closed
+# loopback discard port. It exists only because the base router requires one enabled
+# local provider during startup. The first authenticated AssistX runtime projection
+# atomically replaces the entire provider registry, admission controller, access-path
+# selector, context, and policy engine.
+#
+# Do not add a real runtime, model, LAN URL, Tailscale URL, or positive capacity to
+# this file. All production-capable state must arrive through the signed projection.
 providers:
-  - name: reconciliation-local-runtime
-    type: lmstudio
-    node_id: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
-    runtime_instance_id: ${RECONCILIATION_RUNTIME_INSTANCE_ID:-lmstudio-reconciliation-1234}
-    runtime_kind: ${RECONCILIATION_RUNTIME_KIND:-lmstudio}
-    runtime_version: ${RECONCILIATION_RUNTIME_VERSION:-unknown}
-    headless: ${RECONCILIATION_RUNTIME_HEADLESS:-false}
-    parallel_slots: ${RECONCILIATION_PARALLEL_SLOTS:-1}
-    queue_limit: ${RECONCILIATION_QUEUE_LIMIT:-4}
-    queue_timeout_seconds: ${RECONCILIATION_QUEUE_TIMEOUT_SECONDS:-30}
+  - name: reconciliation-bootstrap-unadmitted
+    type: openai_compatible
+    node_id: bootstrap-unadmitted
+    runtime_instance_id: bootstrap-unadmitted
+    runtime_kind: openai_compatible
+    runtime_version: bootstrap
+    headless: true
+    parallel_slots: 0
+    queue_limit: 0
+    queue_timeout_seconds: 0
     enabled: true
-    base_url: ${RECONCILIATION_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+    base_url: http://127.0.0.1:9/v1
     access_urls:
-      - ${RECONCILIATION_LAN_BASE_URL:-}
-      - ${RECONCILIATION_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
-      - ${RECONCILIATION_TAILSCALE_BASE_URL:-}
-    priority: 100
+      - http://127.0.0.1:9/v1
+    priority: 1000
     quota_class: local
-    models:
-      - alias: local/reconciliation-default
-        provider_model: ${RECONCILIATION_MODEL_ID:-refinedtoolcallv5-3b}
-        model_instance_id: ${RECONCILIATION_MODEL_INSTANCE_ID:-unknown}
-        artifact_fingerprint: ${RECONCILIATION_MODEL_ARTIFACT_FINGERPRINT:-unknown}
-        quantization: ${RECONCILIATION_MODEL_QUANTIZATION:-unknown}
-        capabilities:
-          - chat
-          - streaming
-          - code
-          - json
-          - tool_use
-          - local_only
-          - hermes_worker
-        context_window: ${RECONCILIATION_CONTEXT_WINDOW:-32768}
+    models: []
