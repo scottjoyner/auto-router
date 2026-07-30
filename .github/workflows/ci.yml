@@ -19,9 +19,11 @@ jobs:
       - name: Lint reconciliation paths
         run: |
           ruff check \
+            src/auto_router/access_paths.py \
             src/auto_router/admission.py \
             src/auto_router/main_live.py \
             src/auto_router/offline_guard.py \
+            tests/test_access_paths.py \
             tests/test_admission.py \
             tests/test_offline_guard.py \
             tests/test_reconciliation_config.py \
@@ -132,8 +134,16 @@ jobs:
 
           payload = json.loads(Path("/tmp/router-admission.json").read_text())
           assert isinstance(payload.get("runtimes"), list), payload
+          assert isinstance(payload.get("access_paths"), list), payload
           for runtime in payload["runtimes"]:
               required = {"runtime_instance_id", "parallel_slots", "active", "queued"}
+              assert required <= set(runtime), runtime
+          for runtime in payload["access_paths"]:
+              required = {
+                  "runtime_instance_id",
+                  "approved_access_urls",
+                  "selected_access_url",
+              }
               assert required <= set(runtime), runtime
           PY
       - name: Capture diagnostics on failure
