@@ -76,6 +76,18 @@ def host_is_offline_allowed(host: str, env: Mapping[str, str] | None = None) -> 
     )
 
 
+def _validate_access_url(name: str, label: str, value: Any, env: Mapping[str, str]) -> list[str]:
+    url = str(value or "").strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return [f"{name}: {label} must be a valid http(s) URL"]
+    if not host_is_offline_allowed(parsed.hostname, env):
+        return [
+            f"{name}: public or unresolved provider host '{parsed.hostname}' is forbidden"
+        ]
+    return []
+
+
 def validate_offline_provider_config(
     path: str | Path,
     *,
@@ -104,8 +116,6 @@ def validate_offline_provider_config(
         name = str(provider.get("id") or provider.get("name") or f"providers[{index}]")
         provider_type = str(provider.get("type") or "").strip().lower()
         quota_class = str(provider.get("quota_class") or "local").strip().lower()
-        base_url = str(provider.get("base_url") or "").strip()
-        parsed = urlparse(base_url)
 
         if provider_type not in _ALLOWED_PROVIDER_TYPES:
             errors.append(f"{name}: provider type '{provider_type}' is not allowed offline")
@@ -113,11 +123,37 @@ def validate_offline_provider_config(
             errors.append(f"{name}: quota_class must be 'local', got '{quota_class}'")
         if bool(provider.get("gateway_managed", False)):
             errors.append(f"{name}: gateway_managed providers are forbidden in strict offline mode")
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            errors.append(f"{name}: base_url must be a valid http(s) URL")
-        elif not host_is_offline_allowed(parsed.hostname, source):
+
+        errors.extend(_validate_access_url(name, "base_url", provider.get("base_url"), source))
+        access_urls = provider.get("access_urls") or []
+        if not isinstance(access_urls, list):
+            errors.append(f"{name}: access_urls must be a list")
+        else:
+            seen: set[str] = set()
+            for access_index, access_url in enumerate(access_urls):
+                normalized = str(access_url or "").strip().rstrip("/")
+                if normalized in seen:
+                    errors.append(f"{name}: duplicate access_urls entry '{normalized}'")
+                    continue
+                seen.add(normalized)
+                errors.extend(
+                    _validate_access_url(
+                        name,
+                        f"access_urls[{access_index}]",
+                        access_url,
+                        source,
+                    )
+                )
+
+        try:
+            slots = int(provider.get("parallel_slots") or 0)
+        except (TypeError, ValueError):
+            slots = -1
+            errors.append(f"{name}: parallel_slots must be an integer")
+        runtime_instance_id = str(provider.get("runtime_instance_id") or "").strip()
+        if slots > 0 and not runtime_instance_id:
             errors.append(
-                f"{name}: public or unresolved provider host '{parsed.hostname}' is forbidden"
+                f"{name}: runtime_instance_id is required when parallel_slots is positive"
             )
 
     if not any(isinstance(item, dict) and bool(item.get("enabled", True)) for item in providers):
