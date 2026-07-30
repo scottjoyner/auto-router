@@ -48,16 +48,11 @@ providers:
     type: lmstudio
     enabled: true
     base_url: http://127.0.0.1:1234/v1
-    quota_class: local
-  - name: tailnet-ip
-    type: openai_compatible
-    enabled: true
-    base_url: http://100.85.72.121:1234/v1
-    quota_class: local
-  - name: link-host
-    type: lmstudio
-    enabled: true
-    base_url: http://xwing.example.ts.net:1234/v1
+    access_urls:
+      - http://192.168.1.20:1234/v1
+      - http://100.85.72.121:1234/v1
+      - http://xwing.example.ts.net:1234/v1
+      - ""
     quota_class: local
 """,
     )
@@ -66,6 +61,46 @@ providers:
     assert host_is_offline_allowed("192.168.1.20")
     assert host_is_offline_allowed("100.64.43.123")
     assert host_is_offline_allowed("xwing.example.ts.net")
+
+
+def test_rejects_public_fallback_access_url(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+providers:
+  - name: local-with-public-fallback
+    type: lmstudio
+    enabled: true
+    base_url: http://192.168.1.20:1234/v1
+    access_urls:
+      - http://192.168.1.20:1234/v1
+      - https://example.com/v1
+    quota_class: local
+""",
+    )
+
+    errors = validate_offline_provider_config(path, env={})
+
+    assert any("example.com" in error and "forbidden" in error for error in errors)
+
+
+def test_requires_runtime_identity_for_positive_capacity(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+providers:
+  - name: unresolved-runtime
+    type: lmstudio
+    enabled: true
+    base_url: http://192.168.1.20:1234/v1
+    parallel_slots: 1
+    quota_class: local
+""",
+    )
+
+    errors = validate_offline_provider_config(path, env={})
+
+    assert any("runtime_instance_id" in error for error in errors)
 
 
 def test_ignores_disabled_public_provider(tmp_path: Path) -> None:
