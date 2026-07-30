@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import uvicorn
 
-from auto_router.offline_guard import enforce_strict_offline_provider_config
+from auto_router.offline_guard import (
+    enforce_strict_offline_provider_config,
+    strict_offline_enabled,
+)
+
+# This fleet deployment is intentionally offline-only. Do not permit an environment
+# override to silently re-enable public inference providers.
+if not strict_offline_enabled():
+    raise RuntimeError(
+        "AUTO_ROUTER_STRICT_OFFLINE cannot be disabled in the reconciled fleet deployment"
+    )
 
 # Validate before importing the application module, because application import builds
-# provider state. Strict offline mode defaults to enabled and fails closed if an
-# enabled provider resolves outside loopback/LAN/Tailscale-approved hosts.
+# provider state. The router fails closed if an enabled provider resolves outside
+# loopback/LAN/Tailscale-approved hosts.
 enforce_strict_offline_provider_config()
 
 import auto_router.main as main_module
