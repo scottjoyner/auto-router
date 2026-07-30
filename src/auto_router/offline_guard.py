@@ -132,6 +132,8 @@ def validate_offline_provider_config(
             seen: set[str] = set()
             for access_index, access_url in enumerate(access_urls):
                 normalized = str(access_url or "").strip().rstrip("/")
+                if not normalized:
+                    continue
                 if normalized in seen:
                     errors.append(f"{name}: duplicate access_urls entry '{normalized}'")
                     continue
