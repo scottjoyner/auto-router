@@ -22,21 +22,22 @@ jobs:
             src/auto_router/main_live.py \
             src/auto_router/offline_guard.py \
             tests/test_offline_guard.py \
-            tests/test_reconciliation_config.py
+            tests/test_reconciliation_config.py \
+            tests/test_reconciliation_runtime.py \
+            tests/test_flash_start.py \
+            tests/test_main_health.py
       - name: Audit legacy repository lint backlog
-        # The repository predates the current Ruff gate and currently contains a
-        # large unrelated backlog. Report it without preventing focused tests and
-        # reconciliation gates from running. Remove continue-on-error only after
-        # a dedicated baseline cleanup lands.
+        # The repository predates the current Ruff gate and contains a large
+        # unrelated backlog. Keep it visible without blocking the mounted runtime.
         continue-on-error: true
         run: ruff check src tests
       - name: Type check (mypy)
-        # mypy runs against the repo config; surfaces type errors without
-        # blocking the gate until the fleet-wide type-hygiene pass lands.
+        # Preserve the existing non-blocking type audit until the dedicated
+        # repository-wide type-hygiene pass lands.
         continue-on-error: true
         run: mypy src/auto_router
-      - name: Test
-        run: pytest -q
+      - name: Test mounted reconciliation runtime
+        run: bash scripts/test_reconciliation.sh
 
   integration-smoke:
     runs-on: ubuntu-latest
@@ -56,15 +57,29 @@ jobs:
             sleep 3
           done
           test "$healthy" = "true"
-      - name: Verify health, offline models, and admin auth gate
+      - name: Verify health, offline models, route surface, and admin auth gate
         run: |
           curl -sf http://127.0.0.1:8088/health > /tmp/router-health.json
+          curl -sf http://127.0.0.1:8088/openapi.json > /tmp/router-openapi.json
           python - <<'PY'
           import json
           from pathlib import Path
 
-          payload = json.loads(Path("/tmp/router-health.json").read_text())
-          assert payload.get("service") == "auto-router", payload
+          health = json.loads(Path("/tmp/router-health.json").read_text())
+          assert health.get("service") == "auto-router", health
+
+          paths = set(json.loads(Path("/tmp/router-openapi.json").read_text())["paths"])
+          required = {"/health", "/v1/models", "/api/routes/request"}
+          forbidden = {
+              "/admin/backlog/burn-down",
+              "/admin/backlog/dry-run",
+              "/admin/live-models",
+              "/admin/services/scan",
+              "/admin/agent-clis/discover",
+              "/jobs/agent",
+          }
+          assert required <= paths, sorted(required - paths)
+          assert not (forbidden & paths), sorted(forbidden & paths)
           PY
 
           curl -sf http://127.0.0.1:8088/v1/models > /tmp/router-models.json
