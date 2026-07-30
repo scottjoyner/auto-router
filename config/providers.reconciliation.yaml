@@ -8,6 +8,9 @@ providers:
     type: lmstudio
     node_id: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
     runtime_instance_id: ${RECONCILIATION_RUNTIME_INSTANCE_ID:-lmstudio-reconciliation-1234}
+    runtime_kind: ${RECONCILIATION_RUNTIME_KIND:-lmstudio}
+    runtime_version: ${RECONCILIATION_RUNTIME_VERSION:-unknown}
+    headless: ${RECONCILIATION_RUNTIME_HEADLESS:-false}
     parallel_slots: ${RECONCILIATION_PARALLEL_SLOTS:-1}
     queue_limit: ${RECONCILIATION_QUEUE_LIMIT:-4}
     queue_timeout_seconds: ${RECONCILIATION_QUEUE_TIMEOUT_SECONDS:-30}
@@ -22,6 +25,9 @@ providers:
     models:
       - alias: local/reconciliation-default
         provider_model: ${RECONCILIATION_MODEL_ID:-refinedtoolcallv5-3b}
+        model_instance_id: ${RECONCILIATION_MODEL_INSTANCE_ID:-unknown}
+        artifact_fingerprint: ${RECONCILIATION_MODEL_ARTIFACT_FINGERPRINT:-unknown}
+        quantization: ${RECONCILIATION_MODEL_QUANTIZATION:-unknown}
         capabilities:
           - chat
           - streaming
