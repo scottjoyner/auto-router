@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from auto_router.models import ProviderCandidate, ProviderConfig
 from auto_router.providers import ProviderError
@@ -17,7 +18,7 @@ class RuntimeAdmissionConfig:
 
 
 class RuntimeAdmissionLease:
-    def __init__(self, gate: "_RuntimeGate") -> None:
+    def __init__(self, gate: _RuntimeGate) -> None:
         self._gate = gate
         self._released = False
 
@@ -27,7 +28,7 @@ class RuntimeAdmissionLease:
         self._released = True
         await self._gate.release()
 
-    async def __aenter__(self) -> "RuntimeAdmissionLease":
+    async def __aenter__(self) -> RuntimeAdmissionLease:
         return self
 
     async def __aexit__(self, *_: object) -> None:
