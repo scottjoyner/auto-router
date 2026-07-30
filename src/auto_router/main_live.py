@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI
+from fastapi import Body, Depends, FastAPI, HTTPException
 
 from auto_router.offline_guard import (
     enforce_strict_offline_provider_config,
@@ -39,6 +39,10 @@ from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.otel import init_otel
 from auto_router.providers import ProviderStreamResponse, build_provider
 from auto_router.route_event_patch import install_route_event_patch
+from auto_router.runtime_projection import (
+    RuntimeProjectionManager,
+    projection_poll_task,
+)
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
 
@@ -82,6 +86,13 @@ def _access_path_selector() -> RuntimeAccessPathSelector:
     return selector
 
 
+def _projection_manager() -> RuntimeProjectionManager:
+    manager = getattr(state, "runtime_projection_manager", None)
+    if not isinstance(manager, RuntimeProjectionManager):
+        raise RuntimeError("runtime projection manager is not initialized")
+    return manager
+
+
 def _annotate_request_telemetry(
     request: RouterRequest,
     candidate: ProviderCandidate,
@@ -91,8 +102,13 @@ def _annotate_request_telemetry(
 
     provider = candidate.provider
     model = candidate.model
+    manager = getattr(state, "runtime_projection_manager", None)
+    current = manager.current if isinstance(manager, RuntimeProjectionManager) else None
     request.metadata = {
         **(request.metadata if isinstance(request.metadata, dict) else {}),
+        "runtime_projection_generation": current.generation if current else 0,
+        "runtime_projection_revision": current.revision if current else "bootstrap",
+        "runtime_projection_checksum": current.checksum if current else None,
         "runtime_node_id": provider.node_id,
         "runtime_instance_id": choice.runtime_instance_id,
         "runtime_kind": provider.runtime_kind or provider.type,
@@ -135,6 +151,8 @@ async def _admitted_dispatch(
     request: RouterRequest,
     route_plan: Any | None = None,
 ) -> ProviderResponse:
+    # The lease retains its exact gate object. If AssistX publishes a newer
+    # generation while this request is running, release still targets the old gate.
     lease = await _admission_controller().acquire(candidate)
     try:
         provider, selected_candidate, choice = await _select_provider(candidate)
@@ -188,9 +206,10 @@ async def _admitted_dispatch_stream(
 async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Start only AssistX projection, admission control, and local housekeeping loops.
 
-    The reconciled router does not discover providers or mutate inventory. AssistX
-    supplies approved LAN and Tailscale access paths for one physical runtime record;
-    the router only selects the first reachable approved path and forwards requests.
+    The bootstrap YAML remains a fail-closed starting generation. AssistX may then
+    publish signed, monotonic runtime projections. Each valid projection is prepared
+    fully and atomically swaps provider registry, context, policy engine, admission,
+    and access-path selection. Active leases retain their previous gate objects.
     """
 
     await main_module.load_state()
@@ -205,6 +224,7 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
             os.getenv("AUTO_ROUTER_ACCESS_PATH_PROBE_TIMEOUT_SECONDS", "2")
         ),
     )
+    state.runtime_projection_manager = RuntimeProjectionManager(state)
     init_otel()
     tasks: list[asyncio.Task[object]] = [
         asyncio.create_task(main_module.refresh_context_task()),
@@ -212,6 +232,12 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
         asyncio.create_task(main_module.prune_task()),
         asyncio.create_task(main_module.persist_latency_task()),
     ]
+    if os.getenv("AUTO_ROUTER_RUNTIME_PROJECTION_URL", "").strip():
+        tasks.append(
+            asyncio.create_task(
+                projection_poll_task(state, state.runtime_projection_manager)
+            )
+        )
     try:
         yield
     finally:
@@ -242,13 +268,38 @@ app.include_router(fleet_router)
 @app.get("/admin/admission")
 async def admission_status(
     _: None = Depends(require_admin),
-) -> dict[str, list[dict[str, Any]]]:
-    """Expose ephemeral capacity and access-path state for operator verification."""
+) -> dict[str, Any]:
+    """Expose ephemeral capacity, path state, and projection generation."""
 
+    manager = getattr(state, "runtime_projection_manager", None)
     return {
         "runtimes": _admission_controller().snapshot(),
         "access_paths": _access_path_selector().snapshot(),
+        "runtime_projection": (
+            manager.status()
+            if isinstance(manager, RuntimeProjectionManager)
+            else {"configured": False}
+        ),
     }
+
+
+@app.get("/admin/runtime-projection")
+async def runtime_projection_status(
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    return _projection_manager().status()
+
+
+@app.post("/admin/runtime-projection")
+async def apply_runtime_projection(
+    payload: dict[str, Any] = Body(...),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        return await _projection_manager().apply(payload)
+    except ValueError as exc:
+        _projection_manager().last_error = str(exc)[:1000]
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def run() -> None:
