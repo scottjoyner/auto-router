@@ -27,6 +27,7 @@ if not strict_offline_enabled():
 # guard would permit invalid provider state to be constructed before validation.
 enforce_strict_offline_provider_config()
 
+import auto_router.assistx_routes as assistx_routes_module
 import auto_router.main as main_module
 from auto_router.access_paths import AccessPathChoice, RuntimeAccessPathSelector
 from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
@@ -45,6 +46,7 @@ from auto_router.runtime_projection import (
 )
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
+from auto_router.strict_assistx_routes import install_strict_assistx_route_guard
 
 _RETIRED_INHERITED_PATHS = {
     "/jobs/agent",
@@ -252,6 +254,7 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
 main_module._dispatch = _admitted_dispatch
 main_module._dispatch_stream = _admitted_dispatch_stream
 install_route_event_patch(main_module)
+install_strict_assistx_route_guard(assistx_routes_module)
 _remove_retired_inherited_routes()
 app.router.lifespan_context = strict_offline_lifespan
 app.state.router_state = state
