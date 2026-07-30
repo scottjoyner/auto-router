@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 import uvicorn
@@ -15,8 +16,8 @@ if not strict_offline_enabled():
     )
 
 # Validate before importing the application module, because application import builds
-# provider state. The router fails closed if an enabled provider resolves outside
-# loopback/LAN/Tailscale-approved hosts.
+# provider state. The imports below are intentionally late; moving them above this
+# guard would permit invalid provider state to be constructed before validation.
 enforce_strict_offline_provider_config()
 
 import auto_router.main as main_module
