@@ -33,7 +33,7 @@ AssistX owns decisions. The router forwards requests only to enabled local provi
 
 ## Strict offline mode
 
-`AUTO_ROUTER_STRICT_OFFLINE=true` is the default.
+`AUTO_ROUTER_STRICT_OFFLINE=true` is mandatory.
 
 Before application state is built, the router validates every enabled provider and fails startup when it finds:
 
@@ -86,7 +86,7 @@ LM Studio Link may expose a remote loaded model through a local-looking URL. The
 
 The committed `config/providers.yaml` is local-only. Nodes known to be unstable, offline, or unusably slow are disabled until they pass admission gates.
 
-Copy the examples and set physical endpoints:
+For a normal local deployment, copy the example and set physical endpoints:
 
 ```bash
 cp .env.example .env
@@ -95,6 +95,8 @@ export AUTO_ROUTER_PROVIDER_CONFIG=config/providers.local.yaml
 ```
 
 Each provider should include a stable physical `node_id`, local `quota_class`, and an access URL that resolves only inside the approved network.
+
+For the live migration shadow deployment, use `config/providers.reconciliation.yaml`. It admits one operator-confirmed physical runtime only. Do not add another node until its physical owner, loaded process, completion health, and slot count are proven.
 
 ## Routing policy
 
@@ -126,7 +128,7 @@ AssistX integration:
 
 Operations endpoints remain available for local diagnostics, but their snapshots are not canonical when they differ from AssistX/Neo4j.
 
-## Start
+## Normal local start
 
 ```bash
 cp .env.example .env
@@ -140,22 +142,47 @@ Or:
 docker compose up -d --build
 ```
 
-Point local clients at:
+The default Compose deployment is strict-offline, has autoload/unload and the in-process fleet dispatcher disabled, and does not mount Hermes or worktree execution state into the router.
+
+## Side-by-side migration start
+
+When the old router is still running, do **not** run the base Compose file alone. The reconciliation overlay creates separate container names, Redis/data, Docker network, and loopback port `18088`:
 
 ```bash
-export OPENAI_BASE_URL=http://localhost:8088/v1
-export OPENAI_API_KEY=local-router
+mkdir -p data-reconciliation artifacts-reconciliation
+
+docker compose \
+  -f docker-compose.yml \
+  -f compose.reconciliation.yml \
+  config > artifacts-reconciliation/router-rendered.yaml
+
+docker compose \
+  -f docker-compose.yml \
+  -f compose.reconciliation.yml \
+  up -d --build redis llm-router
+
+curl -fsS http://127.0.0.1:18088/health | jq
+curl -fsS http://127.0.0.1:18088/v1/models | jq
 ```
 
-AssistX should use the router-only overlay. `auto-assign` is retired and must not run in the reconciled deployment.
+The shadow router expects the reconciliation AssistX API on `127.0.0.1:18000` through `host.docker.internal`. Follow the complete runbook in `auto-assist/docs/LOCAL_AGENT_LIVE_MIGRATION_RUNBOOK_20260730.md` on the matching branch.
+
+Point shadow clients at:
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:18088/v1
+export OPENAI_API_KEY=local-offline-only
+```
+
+AssistX must use the router-only overlay. `auto-assign` is retired and must not run in the reconciled deployment.
 
 ## Verification
 
 ```bash
 pytest -q tests/test_offline_guard.py
 pytest -q
-curl http://localhost:8088/health | jq
-curl http://localhost:8088/v1/models | jq
+curl http://127.0.0.1:8088/health | jq
+curl http://127.0.0.1:8088/v1/models | jq
 ```
 
 A deployment is not admitted merely because `/v1/models` succeeds. Each physical model instance also needs a completion canary, fresh health/capacity observation, and benchmark evidence before AssistX routes real work.
@@ -169,4 +196,4 @@ A deployment is not admitted merely because `/v1/models` succeeds. Each physical
 5. Remove scheduler/backlog semantics that overlap AssistX.
 6. Make all workload routes consume an AssistX reservation or signed route decision.
 
-The authoritative cross-repository decision is in `auto-assist/docs/FULL_AUTO_RECONCILIATION_20260730.md` on the matching branch.
+The authoritative cross-repository decision and live migration package are in `auto-assist` on the matching branch.
