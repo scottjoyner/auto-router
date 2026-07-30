@@ -1,9 +1,9 @@
 services:
   llm-router:
     build: .
-    container_name: auto-router
+    container_name: ${AUTO_ROUTER_CONTAINER_NAME:-auto-router}
     ports:
-      - "8088:8088"
+      - "${AUTO_ROUTER_BIND:-0.0.0.0}:${AUTO_ROUTER_HOST_PORT:-8088}:8088"
     environment:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
@@ -14,6 +14,10 @@ services:
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
       AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS: ${AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS:-120}
+      AUTO_ROUTER_ATTEMPT_TIMEOUT_SECONDS: ${AUTO_ROUTER_ATTEMPT_TIMEOUT_SECONDS:-45}
+      AUTO_ROUTER_CONNECT_TIMEOUT_SECONDS: ${AUTO_ROUTER_CONNECT_TIMEOUT_SECONDS:-5}
+      AUTO_ROUTER_REQUEST_DEADLINE_SECONDS: ${AUTO_ROUTER_REQUEST_DEADLINE_SECONDS:-90}
+      AUTO_ROUTER_MAX_CANDIDATE_ATTEMPTS: ${AUTO_ROUTER_MAX_CANDIDATE_ATTEMPTS:-4}
       AUTO_ROUTER_LIVE_MODEL_CACHE_TTL_SECONDS: ${AUTO_ROUTER_LIVE_MODEL_CACHE_TTL_SECONDS:-3600}
       AUTO_ROUTER_ASSISTX_EVENT_SINK_URL: ${AUTO_ROUTER_ASSISTX_EVENT_SINK_URL:-http://assistx-api:8000/api/events}
       AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_TIMEOUT_SECONDS: ${AUTO_ROUTER_ASSISTX_EVENT_DISPATCH_TIMEOUT_SECONDS:-10}
@@ -22,46 +26,21 @@ services:
       AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS: ${AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS:-change-me}
       AUTO_ROUTER_ASSISTX_TASKS_URL: ${AUTO_ROUTER_ASSISTX_TASKS_URL:-http://assistx-api:8000/api/router/backlog-candidates}
       AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS: ${AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS:-10}
-      AUTO_ROUTER_FLEET_DISPATCHER_STATS_PATH: /data/fleet_dispatcher_stats.json
-      # Fleet model-placement controller: keep DESIRED_PLACEMENTS resident so
-      # requests never hit an empty endpoint. Loads only (unloads gated off by
-      # default) so user-loaded models are never evicted.
-      AUTO_ROUTER_AUTOLOAD_ENABLED: ${AUTO_ROUTER_AUTOLOAD_ENABLED:-true}
-      AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS: ${AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS:-60}
-      AUTO_ROUTER_LOAD_TTL_SECONDS: ${AUTO_ROUTER_LOAD_TTL_SECONDS:-0}
-      AUTO_ROUTER_PLACEMENT_UNLOAD: ${AUTO_ROUTER_PLACEMENT_UNLOAD:-false}
-      AUTO_ROUTER_AUTOLOAD_NODES: ${AUTO_ROUTER_AUTOLOAD_NODES:-lmstudio-x1-370,lmstudio-deathstar,lmstudio-xwing,lmstudio-beelink-ryzen-7-mini-pc,lmstudio-scotts-macbook-air,lmstudio-macbook-air,lmstudio-lenovo-ideapad-330s-15ikb,lmstudio-optiplex-9030-aio}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
-      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
-      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
-      ZAI_API_KEY: ${ZAI_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      HERMES_HOME: /root/.hermes
 
-      # --- Agentgateway sidecar integration ---
-      AUTO_ROUTER_AGENTGATEWAY_ENABLED: ${AUTO_ROUTER_AGENTGATEWAY_ENABLED:-false}
-      AUTO_ROUTER_GATEWAY_MODE: ${AUTO_ROUTER_GATEWAY_MODE:-direct}
-      AUTO_ROUTER_AGENTGATEWAY_BASE_URL: ${AUTO_ROUTER_AGENTGATEWAY_BASE_URL:-http://agentgateway:3000}
-      AUTO_ROUTER_AGENTGATEWAY_OPENAI_BASE_URL: ${AUTO_ROUTER_AGENTGATEWAY_OPENAI_BASE_URL:-http://agentgateway:3000/v1}
-      AUTO_ROUTER_AGENTGATEWAY_TIMEOUT_SECONDS: ${AUTO_ROUTER_AGENTGATEWAY_TIMEOUT_SECONDS:-120}
-      AUTO_ROUTER_AGENTGATEWAY_FAIL_OPEN_TO_DIRECT: ${AUTO_ROUTER_AGENTGATEWAY_FAIL_OPEN_TO_DIRECT:-true}
-      AUTO_ROUTER_AGENTGATEWAY_FAIL_CLOSED_FOR_PRIVATE: ${AUTO_ROUTER_AGENTGATEWAY_FAIL_CLOSED_FOR_PRIVATE:-true}
-      AUTO_ROUTER_AGENTGATEWAY_EMIT_HEADERS: ${AUTO_ROUTER_AGENTGATEWAY_EMIT_HEADERS:-true}
-      AUTO_ROUTER_AGENTGATEWAY_PASS_METADATA_IN_BODY: ${AUTO_ROUTER_AGENTGATEWAY_PASS_METADATA_IN_BODY:-true}
-      AUTO_ROUTER_AGENTGATEWAY_RECONCILE_USAGE: ${AUTO_ROUTER_AGENTGATEWAY_RECONCILE_USAGE:-true}
+      # Reconciled deployment invariants. The gateway observes and forwards; it
+      # never escapes to hosted inference or autonomously changes runtime state.
+      AUTO_ROUTER_STRICT_OFFLINE: "true"
+      AUTO_ROUTER_AUTOLOAD_ENABLED: "false"
+      AUTO_ROUTER_PLACEMENT_UNLOAD: "false"
+      AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "false"
+      AUTO_ROUTER_AGENTGATEWAY_ENABLED: "false"
+      AUTO_ROUTER_GATEWAY_MODE: direct
+      AUTO_ROUTER_LOG_PROMPTS: "false"
+
     volumes:
       - ./config:/app/config:ro
       - ./data:/data
       - ./artifacts:/artifacts
-      - ./worktrees:/worktrees
-      - /home/scott/.local/bin/hermes:/usr/local/bin/hermes:ro
-      - /home/scott/git/hermes-agent:/home/scott/git/hermes-agent:ro
-      - /home/scott/.hermes:/root/.hermes
-      - /home/scott/.local/share/uv/python:/home/scott/.local/share/uv/python:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -80,7 +59,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: auto-router-redis
+    container_name: ${AUTO_ROUTER_REDIS_CONTAINER_NAME:-auto-router-redis}
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -94,7 +73,7 @@ services:
 networks:
   assistx:
     external: true
-    name: home_scott_git_auto-assist_default
+    name: ${AUTO_ROUTER_ASSISTX_NETWORK:-home_scott_git_auto-assist_default}
 
 volumes:
   redis-data:
