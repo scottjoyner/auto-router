@@ -58,14 +58,47 @@ jobs:
           test "$healthy" = "true"
       - name: Verify health, offline models, and admin auth gate
         run: |
-          curl -sf http://127.0.0.1:8088/health | grep -q '"service": "auto-router"'
-          models=$(curl -sf http://127.0.0.1:8088/v1/models)
-          ! printf '%s' "$models" | grep -Eiq 'openrouter|cerebras|groq|grok|xai|anthropic|gemini|mistral|cloudflare'
-          # /admin/quota must require the admin token (401 without it)
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/admin/quota)
+          curl -sf http://127.0.0.1:8088/health > /tmp/router-health.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/router-health.json").read_text())
+          assert payload.get("service") == "auto-router", payload
+          PY
+
+          curl -sf http://127.0.0.1:8088/v1/models > /tmp/router-models.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          forbidden = {
+              "openrouter",
+              "cerebras",
+              "groq",
+              "grok",
+              "xai",
+              "anthropic",
+              "gemini",
+              "mistral",
+              "cloudflare",
+          }
+          payload = json.loads(Path("/tmp/router-models.json").read_text())
+          serialized = json.dumps(payload).lower()
+          assert not any(name in serialized for name in forbidden), payload
+          PY
+
+          # /admin/quota must require the admin token (401 without it).
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            http://127.0.0.1:8088/admin/quota)
+          echo "unauthenticated admin status: $code"
           test "$code" = "401"
-          # and succeed with the token
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Admin-Token: smoke-admin-token' http://127.0.0.1:8088/admin/quota)
+
+          # The same endpoint succeeds with the local admin token.
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Admin-Token: smoke-admin-token' \
+            http://127.0.0.1:8088/admin/quota)
+          echo "authenticated admin status: $code"
           test "$code" = "200"
       - name: Capture diagnostics on failure
         if: failure()
