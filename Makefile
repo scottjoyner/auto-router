@@ -18,8 +18,13 @@ lint:
 
 lint-reconciliation:
 	ruff check \
+		src/auto_router/access_paths.py \
+		src/auto_router/admission.py \
 		src/auto_router/main_live.py \
 		src/auto_router/offline_guard.py \
+		scripts/verify_reconciliation_network.py \
+		tests/test_access_paths.py \
+		tests/test_admission.py \
 		tests/test_offline_guard.py \
 		tests/test_reconciliation_config.py \
 		tests/test_reconciliation_runtime.py \
@@ -27,10 +32,10 @@ lint-reconciliation:
 		tests/test_main_health.py
 
 format:
-	ruff check --fix src tests
+	ruff check --fix src tests scripts/verify_reconciliation_network.py
 
 smoke:
-	python -m compileall src
+	python -m compileall src scripts/verify_reconciliation_network.py
 	bash scripts/test_reconciliation.sh
 
 build:
@@ -46,12 +51,14 @@ docker-down:
 RECON_COMPOSE = docker compose -f docker-compose.yml -f compose.reconciliation.yml
 
 .PHONY: reconciliation-init reconciliation-render reconciliation-up \
-	reconciliation-status reconciliation-verify reconciliation-logs reconciliation-down
+	reconciliation-status reconciliation-network-verify reconciliation-verify \
+	reconciliation-logs reconciliation-down
 
 reconciliation-init:
 	@mkdir -p data-reconciliation artifacts-reconciliation
-	@chmod +x scripts/test_reconciliation.sh
-	@echo "Set RECONCILIATION_MODEL_ID and verify its physical runtime with official 'lms ps --host' before startup."
+	@chmod +x scripts/test_reconciliation.sh scripts/verify_reconciliation_network.py
+	@echo "Set AUTO_ROUTER_ADMIN_TOKEN to a unique shadow value."
+	@echo "Set LAN and Tailscale paths and verify physical ownership with official 'lms ps --host' before startup."
 
 reconciliation-render:
 	@mkdir -p artifacts-reconciliation
@@ -66,7 +73,10 @@ reconciliation-status:
 	@curl -fsS http://127.0.0.1:18088/health | jq
 	@curl -fsS http://127.0.0.1:18088/v1/models | jq
 
-reconciliation-verify: lint-reconciliation test reconciliation-render reconciliation-status
+reconciliation-network-verify:
+	@python scripts/verify_reconciliation_network.py
+
+reconciliation-verify: lint-reconciliation test reconciliation-render reconciliation-status reconciliation-network-verify
 	@! grep -Eiq 'api\.openrouter\.ai|api\.cerebras\.ai|api\.groq\.com|api\.x\.ai|api\.anthropic\.com' \
 		artifacts-reconciliation/router-rendered.yaml
 	@echo "Router reconciliation checks passed."
