@@ -35,6 +35,10 @@ from auto_router.otel import init_otel
 from auto_router.route_event_patch import install_route_event_patch
 from auto_router.settings import get_settings
 
+_RETIRED_INHERITED_PATHS = {
+    "/jobs/agent",
+}
+
 
 async def _cancel_tasks(tasks: list[asyncio.Task[object]]) -> None:
     for task in tasks:
@@ -44,6 +48,14 @@ async def _cancel_tasks(tasks: list[asyncio.Task[object]]) -> None:
             await task
         except asyncio.CancelledError:
             pass
+
+
+def _remove_retired_inherited_routes() -> None:
+    app.router.routes = [
+        route
+        for route in app.router.routes
+        if getattr(route, "path", None) not in _RETIRED_INHERITED_PATHS
+    ]
 
 
 @asynccontextmanager
@@ -75,6 +87,7 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 install_route_event_patch(main_module)
+_remove_retired_inherited_routes()
 app.router.lifespan_context = strict_offline_lifespan
 app.state.router_state = state
 
