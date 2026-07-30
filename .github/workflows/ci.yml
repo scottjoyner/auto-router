@@ -23,6 +23,7 @@ jobs:
             src/auto_router/admission.py \
             src/auto_router/main_live.py \
             src/auto_router/offline_guard.py \
+            scripts/verify_reconciliation_network.py \
             tests/test_access_paths.py \
             tests/test_admission.py \
             tests/test_offline_guard.py \
