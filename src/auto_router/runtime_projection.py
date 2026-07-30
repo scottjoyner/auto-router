@@ -103,7 +103,9 @@ def _validate_private_url(label: str, value: str) -> list[str]:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return [f"{label} must be a valid http(s) URL"]
     if not host_is_offline_allowed(parsed.hostname):
-        return [f"{label} host {parsed.hostname!r} is not allowed in strict offline mode"]
+        return [
+            f"{label} host {parsed.hostname!r} is not allowed in strict offline mode"
+        ]
     return []
 
 
@@ -117,22 +119,34 @@ def validate_projection_document(
         raise ValueError("runtime projection is supported only in strict offline mode")
     if not secret.strip():
         raise ValueError("runtime projection HMAC secret is required")
+    if not isinstance(payload, dict):
+        raise ValueError("runtime projection must be a JSON object")
 
-    document = RuntimeProjectionDocument.model_validate(payload)
-    raw = document.model_dump(mode="json")
-    expected_checksum = projection_checksum(raw)
-    if not hmac.compare_digest(document.checksum, expected_checksum):
+    # Authenticate the exact canonical document received on the wire before
+    # Pydantic applies defaults, enum coercion, or other normalization. Otherwise a
+    # valid AssistX signature could be invalidated by router-local model defaults.
+    received_checksum = str(payload.get("checksum") or "")
+    received_signature = str(payload.get("signature") or "")
+    expected_checksum = projection_checksum(payload)
+    if not hmac.compare_digest(received_checksum, expected_checksum):
         raise ValueError("runtime projection checksum mismatch")
+    try:
+        raw_generation = int(payload.get("generation"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("runtime projection generation is invalid") from exc
     expected_signature = projection_signature(
-        document.generation,
-        document.checksum,
+        raw_generation,
+        received_checksum,
         secret,
     )
-    if not hmac.compare_digest(document.signature, expected_signature):
+    if not hmac.compare_digest(received_signature, expected_signature):
         raise ValueError("runtime projection signature mismatch")
 
+    document = RuntimeProjectionDocument.model_validate(payload)
     now = int(now_ms if now_ms is not None else time.time() * 1000)
-    max_future_ms = int(os.getenv("AUTO_ROUTER_PROJECTION_CLOCK_SKEW_MS", "300000"))
+    max_future_ms = int(
+        os.getenv("AUTO_ROUTER_PROJECTION_CLOCK_SKEW_MS", "300000")
+    )
     max_ttl_ms = int(os.getenv("AUTO_ROUTER_PROJECTION_MAX_TTL_MS", "900000"))
     if document.generated_at_ms > now + max_future_ms:
         raise ValueError("runtime projection generated_at_ms is too far in the future")
@@ -173,10 +187,14 @@ def validate_projection_document(
                 errors.append(f"{provider.name}: {field_name} must be resolved")
         if provider.parallel_slots <= 0:
             errors.append(f"{provider.name}: parallel_slots must be positive")
-        errors.extend(_validate_private_url(f"{provider.name}.base_url", provider.base_url))
+        errors.extend(
+            _validate_private_url(f"{provider.name}.base_url", provider.base_url)
+        )
         access_urls = [url for url in provider.access_urls if str(url).strip()]
         if not access_urls:
-            errors.append(f"{provider.name}: at least one approved access URL is required")
+            errors.append(
+                f"{provider.name}: at least one approved access URL is required"
+            )
         for index, url in enumerate(access_urls):
             errors.extend(
                 _validate_private_url(
@@ -240,7 +258,10 @@ class RuntimeProjectionManager:
         self.last_attempt_at_ms = 0
 
     def _secret(self) -> str:
-        return os.getenv("AUTO_ROUTER_RUNTIME_PROJECTION_HMAC_SECRET", "").strip()
+        return os.getenv(
+            "AUTO_ROUTER_RUNTIME_PROJECTION_HMAC_SECRET",
+            "",
+        ).strip()
 
     async def apply(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.last_attempt_at_ms = int(time.time() * 1000)
@@ -295,11 +316,19 @@ class RuntimeProjectionManager:
         async with self._lock:
             if self.current is not None:
                 if document.generation < self.current.generation:
-                    raise ValueError("runtime projection generation rollback is forbidden")
+                    raise ValueError(
+                        "runtime projection generation rollback is forbidden"
+                    )
                 if document.generation == self.current.generation:
                     if document.checksum == self.current.checksum:
-                        return {"applied": False, "idempotent": True, **self.status()}
-                    raise ValueError("runtime projection generation checksum conflict")
+                        return {
+                            "applied": False,
+                            "idempotent": True,
+                            **self.status(),
+                        }
+                    raise ValueError(
+                        "runtime projection generation checksum conflict"
+                    )
                 self.retired.append(self.current)
 
             # Existing RuntimeAdmissionLease instances hold their old gate object and
@@ -315,7 +344,10 @@ class RuntimeProjectionManager:
 
         try:
             if hasattr(self.state, "signal_registry"):
-                await asyncio.to_thread(self.state.signal_registry.save_snapshot, context)
+                await asyncio.to_thread(
+                    self.state.signal_registry.save_snapshot,
+                    context,
+                )
         except Exception:
             pass
         return {"applied": True, "idempotent": False, **self.status()}
@@ -343,7 +375,11 @@ class RuntimeProjectionManager:
         }
 
 
-async def projection_poll_task(state: Any, manager: RuntimeProjectionManager) -> None:
+async def projection_poll_task(
+    state: Any,
+    manager: RuntimeProjectionManager,
+) -> None:
+    del state
     url = os.getenv("AUTO_ROUTER_RUNTIME_PROJECTION_URL", "").strip()
     if not url:
         return
