@@ -111,6 +111,9 @@ def _annotate_request_telemetry(
         "runtime_projection_generation": current.generation if current else 0,
         "runtime_projection_revision": current.revision if current else "bootstrap",
         "runtime_projection_checksum": current.checksum if current else None,
+        "runtime_projection_expires_at_ms": (
+            current.expires_at_ms if current else None
+        ),
         "runtime_node_id": provider.node_id,
         "runtime_instance_id": choice.runtime_instance_id,
         "runtime_kind": provider.runtime_kind or provider.type,
@@ -153,8 +156,9 @@ async def _admitted_dispatch(
     request: RouterRequest,
     route_plan: Any | None = None,
 ) -> ProviderResponse:
-    # The lease retains its exact gate object. If AssistX publishes a newer
-    # generation while this request is running, release still targets the old gate.
+    # No request may acquire capacity from a stale or absent AssistX generation.
+    # Existing leases acquired while fresh can still finish and release safely.
+    _projection_manager().assert_current_fresh()
     lease = await _admission_controller().acquire(candidate)
     try:
         provider, selected_candidate, choice = await _select_provider(candidate)
@@ -186,6 +190,7 @@ async def _admitted_dispatch_stream(
     request: RouterRequest,
     route_plan: Any | None = None,
 ) -> ProviderStreamResponse:
+    _projection_manager().assert_current_fresh()
     lease = await _admission_controller().acquire(candidate)
     try:
         provider, selected_candidate, choice = await _select_provider(candidate)
@@ -208,10 +213,11 @@ async def _admitted_dispatch_stream(
 async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Start only AssistX projection, admission control, and local housekeeping loops.
 
-    The bootstrap YAML remains a fail-closed starting generation. AssistX may then
-    publish signed, monotonic runtime projections. Each valid projection is prepared
-    fully and atomically swaps provider registry, context, policy engine, admission,
-    and access-path selection. Active leases retain their previous gate objects.
+    The bootstrap YAML is health-only and has zero capacity/models. AssistX publishes
+    signed, monotonic runtime generations plus refreshable short-lived leases. Each
+    new generation is prepared fully before atomically replacing provider registry,
+    context, policy, admission, and access-path state. Active old-generation leases
+    retain their original gate objects until completion.
     """
 
     await main_module.load_state()
@@ -281,7 +287,7 @@ async def admission_status(
         "runtime_projection": (
             manager.status()
             if isinstance(manager, RuntimeProjectionManager)
-            else {"configured": False}
+            else {"configured": False, "fresh": False}
         ),
     }
 
