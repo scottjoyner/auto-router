@@ -1,141 +1,26 @@
+# Strict offline provider example.
+#
+# Only physical loopback, LAN, or Tailscale runtimes belong here. Hosted inference
+# providers and broker gateways are intentionally excluded from the fleet system.
 providers:
-  # Agentgateway sidecar (optional first-class gateway)
-  - id: agentgateway-sidecar
-    name: agentgateway sidecar
-    type: openai_compatible
-    enabled: true
-    base_url: ${AUTO_ROUTER_AGENTGATEWAY_OPENAI_BASE_URL:-http://agentgateway:3000/v1}
-    api_key_env: AUTO_ROUTER_AGENTGATEWAY_API_KEY
-    priority: 50
-    quota_class: brokered_free
-    headers: {}
-    gateway_managed: true  # Route through agentgateway when enabled
-    local_gateway_only: false  # Can route to cloud providers via gateway
-    models: []
-
-  - name: groq
-    type: openai_compatible
-    enabled: true
-    base_url: https://api.groq.com/openai/v1
-    api_key_env: GROQ_API_KEY
-    priority: 20
-    quota_class: fast_free
-    headers: {}
-    models:
-      - alias: groq/fast-small
-        provider_model: llama-3.1-8b-instant
-        capabilities: [chat, streaming, json, low_latency]
-        context_window: 8192
-        quota:
-          rpm: 5
-          tpd: 500000
-
-  - name: cerebras
-    type: openai_compatible
-    enabled: true
-    base_url: https://api.cerebras.ai/v1
-    api_key_env: CEREBRAS_API_KEY
-    priority: 10
-    quota_class: fast_free
-    headers: {}
-    metadata:
-      role: flash_start_planning_node
-      docs: https://inference-docs.cerebras.ai
-      notes: Public docs currently list gpt-oss-120b and preview zai-glm-4.7 on shared endpoints. Confirm live availability with GET /v1/models.
-    models:
-      - alias: cerebras/flash-reasoner
-        provider_model: gpt-oss-120b
-        capabilities: [chat, streaming, json, code, reasoning, low_latency, flash_planning]
-        quota:
-          rpm: 5
-          tpm: 30000
-          tph: 1000000
-          tpd: 1000000
-      - alias: cerebras/glm-4.7-preview
-        provider_model: zai-glm-4.7
-        capabilities: [chat, streaming, json, code, reasoning, tool_use, low_latency, flash_planning, preview]
-        quota:
-          rpm: 5
-          tpm: 30000
-          tph: 1000000
-          tpd: 1000000
-
-  - name: openrouter
-    type: openai_compatible
-    enabled: true
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    priority: 80
-    quota_class: brokered_free
-    headers:
-      HTTP-Referer: http://localhost:8088
-      X-Title: auto-router
-    models:
-      - alias: openrouter/free-general
-        provider_model: meta-llama/llama-3.1-8b-instruct:free
-        capabilities: [chat, streaming]
-        context_window: 8192
-        quota:
-          rpm: 20
-          rpd: 50
-
-  - name: lmstudio-r2d2
+  - name: lmstudio-primary
     type: lmstudio
+    node_id: x1-370
     enabled: true
-    base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
-    priority: 900
+    base_url: ${LMSTUDIO_PRIMARY_BASE_URL:-http://host.docker.internal:1234/v1}
+    priority: 100
     quota_class: local
     models:
       - alias: local/default
         provider_model: local/default
-        capabilities: [chat, streaming, code, json, local_only]
-        context_window: 32768
-
-  - name: lmstudio-joyner
-    type: lmstudio
-    enabled: false
-    base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
-    priority: 5
-    capabilities: [chat, streaming, code, json, local_only, hermes_worker]
-    quota_class: local
-    models: []
-
-  - name: lmstudio-deathstar
-    type: lmstudio
-    enabled: true
-    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://deathstar-XPS-8920:1234/v1}
-    priority: 910
-    quota_class: local
-    models:
-      - alias: local/batch
-        provider_model: local/batch
-        capabilities: [chat, streaming, code, json, local_only]
-        context_window: 32768
-
-  - name: lmstudio-beelink-ryzen-7-mini-pc
-    type: lmstudio
-    enabled: true
-    base_url: ${LMSTUDIO_BEELINK_BASE_URL:-http://100.85.72.121:1234/v1}
-    priority: 140
-    quota_class: local
-    models:
-      - alias: local/worker-default
-        provider_model: vibethinker-3b-hermes
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
-        context_window: 131072
+        context_window: 32768
 
-  - name: lmstudio-scotts-macbook-air
+  - name: lmstudio-tailnet-worker
     type: lmstudio
-    enabled: true
-    base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
+    node_id: replace-with-physical-node-id
+    enabled: false
+    base_url: ${LMSTUDIO_WORKER_BASE_URL:-http://replace-with-tailnet-host:1234/v1}
     priority: 150
     quota_class: local
-    models:
-      - alias: local/quick-iterate
-        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
-        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning]
-        context_window: 262144
-      - alias: local/tool-call
-        provider_model: refinedtoolcallv5-3b
-        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
-        context_window: 131072
+    models: []
