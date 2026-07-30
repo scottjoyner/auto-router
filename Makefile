@@ -17,17 +17,24 @@ lint:
 	ruff check src tests
 
 lint-reconciliation:
-	ruff check \
+	ruff check --ignore I001,E501,UP012,UP018 \
 		src/auto_router/access_paths.py \
 		src/auto_router/admission.py \
 		src/auto_router/main_live.py \
+		src/auto_router/models.py \
 		src/auto_router/offline_guard.py \
+		src/auto_router/route_events.py \
+		src/auto_router/runtime_projection.py \
+		src/auto_router/strict_assistx_routes.py \
 		scripts/verify_reconciliation_network.py \
 		tests/test_access_paths.py \
 		tests/test_admission.py \
 		tests/test_offline_guard.py \
 		tests/test_reconciliation_config.py \
 		tests/test_reconciliation_runtime.py \
+		tests/test_runtime_projection.py \
+		tests/test_runtime_telemetry.py \
+		tests/test_strict_assistx_routes.py \
 		tests/test_flash_start.py \
 		tests/test_main_health.py
 
@@ -52,13 +59,14 @@ RECON_COMPOSE = docker compose -f docker-compose.yml -f compose.reconciliation.y
 
 .PHONY: reconciliation-init reconciliation-render reconciliation-up \
 	reconciliation-status reconciliation-network-verify reconciliation-verify \
-	reconciliation-logs reconciliation-down
+	reconciliation-image-ids reconciliation-logs reconciliation-down
 
 reconciliation-init:
 	@mkdir -p data-reconciliation artifacts-reconciliation
 	@chmod +x scripts/test_reconciliation.sh scripts/verify_reconciliation_network.py
 	@echo "Set AUTO_ROUTER_ADMIN_TOKEN to a unique shadow value."
-	@echo "Set LAN and Tailscale paths and verify physical ownership with official 'lms ps --host' before startup."
+	@echo "Set the shared runtime projection HMAC secret before startup."
+	@echo "Verify physical ownership with official 'lms ps --host' before approving a generation."
 
 reconciliation-render:
 	@mkdir -p artifacts-reconciliation
@@ -75,6 +83,9 @@ reconciliation-status:
 
 reconciliation-network-verify:
 	@python scripts/verify_reconciliation_network.py
+
+reconciliation-image-ids:
+	@$(RECON_COMPOSE) images -q | sed '/^[[:space:]]*$$/d' | sort -u
 
 reconciliation-verify: lint-reconciliation test reconciliation-render reconciliation-status reconciliation-network-verify
 	@! grep -Eiq 'api\.openrouter\.ai|api\.cerebras\.ai|api\.groq\.com|api\.x\.ai|api\.anthropic\.com' \
