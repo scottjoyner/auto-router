@@ -32,6 +32,7 @@ import auto_router.main as main_module
 from auto_router.access_paths import AccessPathChoice, RuntimeAccessPathSelector
 from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
 from auto_router.assistx_routes import register_assistx_routes
+from auto_router.claim_fence import assert_executor_claim_current
 from auto_router.fleet_routes import router as fleet_router
 from auto_router.main import app, state
 from auto_router.memory_routes import register_memory_routes
@@ -161,6 +162,9 @@ async def _admitted_dispatch(
     _projection_manager().assert_current_fresh()
     lease = await _admission_controller().acquire(candidate)
     try:
+        # Revalidate after the queue wait so a revoked/expired task cannot consume
+        # a model even if it entered admission while its claim was still valid.
+        await assert_executor_claim_current(request, state)
         provider, selected_candidate, choice = await _select_provider(candidate)
         _annotate_request_telemetry(request, selected_candidate, choice)
         return await _ORIGINAL_DISPATCH(
@@ -193,6 +197,7 @@ async def _admitted_dispatch_stream(
     _projection_manager().assert_current_fresh()
     lease = await _admission_controller().acquire(candidate)
     try:
+        await assert_executor_claim_current(request, state)
         provider, selected_candidate, choice = await _select_provider(candidate)
         _annotate_request_telemetry(request, selected_candidate, choice)
         response = await _ORIGINAL_DISPATCH_STREAM(
