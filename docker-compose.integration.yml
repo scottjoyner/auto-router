@@ -6,6 +6,7 @@
 services:
   llm-router:
     build: .
+    command: uvicorn auto_router.secure_live:app --host 0.0.0.0 --port 8088
     container_name: auto-router-smoke
     ports: !override
       - "127.0.0.1:8088:8088"
@@ -26,6 +27,8 @@ services:
       AUTO_ROUTER_GATEWAY_MODE: direct
       AUTO_ROUTER_OTEL_ENABLED: "false"
       AUTO_ROUTER_ADMIN_TOKEN: "smoke-admin-token"
+      AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED: "true"
+      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: "smoke-service-token"
       RECONCILIATION_RUNTIME_NODE_ID: ci-local-runtime
       RECONCILIATION_LMSTUDIO_BASE_URL: http://host.docker.internal:1234/v1
       RECONCILIATION_MODEL_ID: ci-not-loaded
