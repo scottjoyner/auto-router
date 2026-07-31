@@ -28,3 +28,5 @@ worktrees/
 .DS_Store
 .idea/
 .vscode/
+
+deploy/keys/
