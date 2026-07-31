@@ -10,6 +10,7 @@ services:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
       AUTO_ROUTER_ADMIN_TOKEN: ${AUTO_ROUTER_ADMIN_TOKEN:?set AUTO_ROUTER_ADMIN_TOKEN in the reconciliation environment}
+      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: ${AUTO_ROUTER_INTERNAL_SERVICE_TOKEN:?set an AssistX-only inference service token}
       AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED: "true"
       AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: /run/secrets/assistx_executor_public_key.pem
       AUTO_ROUTER_EXECUTOR_KEY_ID: ${ASSISTX_EXECUTOR_KEY_ID:-assistx-executor-v1}
