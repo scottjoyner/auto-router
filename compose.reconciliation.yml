@@ -3,31 +3,19 @@
 services:
   llm-router:
     container_name: auto-router-reconciliation
-    command: uvicorn auto_router.secure_live:app --host 0.0.0.0 --port 8088
+    extra_hosts:
+      - host.docker.internal:host-gateway
     ports: !override
-      - "127.0.0.1:${RECONCILIATION_ROUTER_PORT:-18088}:8088"
+      - "0.0.0.0:${RECONCILIATION_ROUTER_PORT:-18088}:8088"
     environment:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
-      AUTO_ROUTER_ADMIN_TOKEN: ${AUTO_ROUTER_ADMIN_TOKEN:?set AUTO_ROUTER_ADMIN_TOKEN in the reconciliation environment}
-      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: ${AUTO_ROUTER_INTERNAL_SERVICE_TOKEN:?set an AssistX-only inference service token}
-      AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED: "true"
-      AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: /run/secrets/assistx_executor_public_key.pem
-      AUTO_ROUTER_EXECUTOR_KEY_ID: ${ASSISTX_EXECUTOR_KEY_ID:-assistx-executor-v1}
-      AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL: http://assistx-canary-api:8000
-      AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN: ${ASSISTX_EXECUTOR_SERVICE_TOKEN:?set the router-to-AssistX executor service token}
-      AUTO_ROUTER_EXECUTOR_CLAIM_TIMEOUT_SECONDS: ${AUTO_ROUTER_EXECUTOR_CLAIM_TIMEOUT_SECONDS:-2}
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.reconciliation.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
-      AUTO_ROUTER_CONTEXT_CONFIG: http://assistx-canary-api:8000/api/router/context-projection
-      AUTO_ROUTER_RUNTIME_PROJECTION_URL: http://assistx-canary-api:8000/api/router/runtime-projection
-      AUTO_ROUTER_RUNTIME_PROJECTION_HMAC_SECRET: ${AUTO_ROUTER_RUNTIME_PROJECTION_HMAC_SECRET:?set a unique shared runtime projection HMAC secret}
-      AUTO_ROUTER_RUNTIME_PROJECTION_INTERVAL_SECONDS: ${AUTO_ROUTER_RUNTIME_PROJECTION_INTERVAL_SECONDS:-5}
-      AUTO_ROUTER_RUNTIME_PROJECTION_TIMEOUT_SECONDS: ${AUTO_ROUTER_RUNTIME_PROJECTION_TIMEOUT_SECONDS:-10}
-      AUTO_ROUTER_PROJECTION_MAX_TTL_MS: ${AUTO_ROUTER_PROJECTION_MAX_TTL_MS:-900000}
-      AUTO_ROUTER_ASSISTX_EVENT_SINK_URL: http://assistx-canary-api:8000/api/events
-      AUTO_ROUTER_ASSISTX_TASKS_URL: http://assistx-canary-api:8000/api/router/backlog-candidates
+      AUTO_ROUTER_CONTEXT_CONFIG: http://host.docker.internal:18000/api/router/context-projection
+      AUTO_ROUTER_ASSISTX_EVENT_SINK_URL: http://host.docker.internal:18000/api/events
+      AUTO_ROUTER_ASSISTX_TASKS_URL: http://host.docker.internal:18000/api/router/backlog-candidates
       AUTO_ROUTER_ASSISTX_BASIC_AUTH_USER: ${AUTO_ROUTER_ASSISTX_BASIC_AUTH_USER:-reconciliation-admin}
       AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS: ${AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS:-change-me-shadow-api}
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
@@ -43,37 +31,16 @@ services:
       AUTO_ROUTER_MAX_CANDIDATE_ATTEMPTS: "1"
       AUTO_ROUTER_ATTEMPT_TIMEOUT_SECONDS: "60"
       AUTO_ROUTER_REQUEST_DEADLINE_SECONDS: "75"
-      AUTO_ROUTER_ACCESS_PATH_TTL_SECONDS: ${AUTO_ROUTER_ACCESS_PATH_TTL_SECONDS:-15}
-      AUTO_ROUTER_ACCESS_PATH_PROBE_TIMEOUT_SECONDS: ${AUTO_ROUTER_ACCESS_PATH_PROBE_TIMEOUT_SECONDS:-2}
-      # Bootstrap only. This generation remains fail-closed until the first signed
-      # AssistX projection is accepted atomically.
       RECONCILIATION_RUNTIME_NODE_ID: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
-      RECONCILIATION_RUNTIME_INSTANCE_ID: ${RECONCILIATION_RUNTIME_INSTANCE_ID:-lmstudio-reconciliation-1234}
-      RECONCILIATION_RUNTIME_KIND: ${RECONCILIATION_RUNTIME_KIND:-lmstudio}
-      RECONCILIATION_RUNTIME_VERSION: ${RECONCILIATION_RUNTIME_VERSION:-unknown}
-      RECONCILIATION_RUNTIME_HEADLESS: ${RECONCILIATION_RUNTIME_HEADLESS:-false}
-      RECONCILIATION_PARALLEL_SLOTS: ${RECONCILIATION_PARALLEL_SLOTS:-1}
-      RECONCILIATION_QUEUE_LIMIT: ${RECONCILIATION_QUEUE_LIMIT:-4}
-      RECONCILIATION_QUEUE_TIMEOUT_SECONDS: ${RECONCILIATION_QUEUE_TIMEOUT_SECONDS:-30}
-      RECONCILIATION_LAN_BASE_URL: ${RECONCILIATION_LAN_BASE_URL:-}
       RECONCILIATION_LMSTUDIO_BASE_URL: ${RECONCILIATION_LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
-      RECONCILIATION_TAILSCALE_BASE_URL: ${RECONCILIATION_TAILSCALE_BASE_URL:-}
       RECONCILIATION_MODEL_ID: ${RECONCILIATION_MODEL_ID:-refinedtoolcallv5-3b}
-      RECONCILIATION_MODEL_INSTANCE_ID: ${RECONCILIATION_MODEL_INSTANCE_ID:-unknown}
-      RECONCILIATION_MODEL_ARTIFACT_FINGERPRINT: ${RECONCILIATION_MODEL_ARTIFACT_FINGERPRINT:-unknown}
-      RECONCILIATION_MODEL_QUANTIZATION: ${RECONCILIATION_MODEL_QUANTIZATION:-unknown}
       RECONCILIATION_CONTEXT_WINDOW: ${RECONCILIATION_CONTEXT_WINDOW:-32768}
     volumes: !override
       - ./config:/app/config:ro
       - ./data-reconciliation:/data
       - ./artifacts-reconciliation:/artifacts
-      - ${ASSISTX_EXECUTOR_PUBLIC_KEY_FILE:?set ASSISTX_EXECUTOR_PUBLIC_KEY_FILE}:/run/secrets/assistx_executor_public_key.pem:ro
-    # Normal bridge networking intentionally remains in use: it preserves loopback-only
-    # host publication while allowing outbound LAN and 100.64.0.0/10 traffic through
-    # the host's routes. The cutover verifier must prove both paths from this container.
     networks: !override
       - default
-      - assistx
 
   redis:
     container_name: auto-router-reconciliation-redis
@@ -85,9 +52,6 @@ services:
 networks:
   default:
     name: auto_router_reconciliation_default
-  assistx:
-    external: true
-    name: ${RECONCILIATION_ASSISTX_NETWORK:-assistx_reconciliation_shared}
 
 volumes:
   redis-reconciliation-data: {}

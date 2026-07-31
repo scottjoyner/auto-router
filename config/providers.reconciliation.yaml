@@ -1,28 +1,23 @@
-# Health-only bootstrap registry for the reconciliation router.
-#
-# This provider is intentionally unroutable: zero slots, zero models, and a closed
-# loopback discard port. It exists only because the base router requires one enabled
-# local provider during startup. The first authenticated AssistX runtime projection
-# atomically replaces the entire provider registry, admission controller, access-path
-# selector, context, and policy engine.
-#
-# Do not add a real runtime, model, LAN URL, Tailscale URL, or positive capacity to
-# this file. All production-capable state must arrive through the signed projection.
+# Initial shadow provider registry.
+# Admit exactly one operator-confirmed physical runtime. Do not add discovery,
+# public providers, Link aliases with unresolved owners, or load/unload behavior.
 providers:
-  - name: reconciliation-bootstrap-unadmitted
-    type: openai_compatible
-    node_id: bootstrap-unadmitted
-    runtime_instance_id: bootstrap-unadmitted
-    runtime_kind: openai_compatible
-    runtime_version: bootstrap
-    headless: true
-    parallel_slots: 0
-    queue_limit: 0
-    queue_timeout_seconds: 0
+  - name: reconciliation-local-runtime
+    type: lmstudio
+    node_id: ${RECONCILIATION_RUNTIME_NODE_ID:-x1-370}
     enabled: true
-    base_url: http://127.0.0.1:9/v1
-    access_urls:
-      - http://127.0.0.1:9/v1
-    priority: 1000
+    base_url: http://xwing.tailcb8954.ts.net:1234/v1
+    priority: 100
     quota_class: local
-    models: []
+    models:
+      - alias: local/reconciliation-default
+        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+        capabilities:
+          - chat
+          - streaming
+          - code
+          - json
+          - tool_use
+          - local_only
+          - hermes_worker
+        context_window: 32768
