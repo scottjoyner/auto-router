@@ -14,6 +14,9 @@ services:
       AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED: "true"
       AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: /run/secrets/assistx_executor_public_key.pem
       AUTO_ROUTER_EXECUTOR_KEY_ID: ${ASSISTX_EXECUTOR_KEY_ID:-assistx-executor-v1}
+      AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL: http://assistx-canary-api:8000
+      AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN: ${ASSISTX_EXECUTOR_SERVICE_TOKEN:?set the router-to-AssistX executor service token}
+      AUTO_ROUTER_EXECUTOR_CLAIM_TIMEOUT_SECONDS: ${AUTO_ROUTER_EXECUTOR_CLAIM_TIMEOUT_SECONDS:-2}
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.reconciliation.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
