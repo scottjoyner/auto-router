@@ -23,15 +23,20 @@ jobs:
           ruff check --ignore I001,E501,UP012,UP018 \
             src/auto_router/access_paths.py \
             src/auto_router/admission.py \
+            src/auto_router/claim_fence.py \
+            src/auto_router/executor_auth.py \
             src/auto_router/main_live.py \
             src/auto_router/models.py \
             src/auto_router/offline_guard.py \
             src/auto_router/route_events.py \
             src/auto_router/runtime_projection.py \
+            src/auto_router/secure_live.py \
             src/auto_router/strict_assistx_routes.py \
             scripts/verify_reconciliation_network.py \
             tests/test_access_paths.py \
             tests/test_admission.py \
+            tests/test_claim_fence.py \
+            tests/test_executor_auth.py \
             tests/test_offline_guard.py \
             tests/test_reconciliation_config.py \
             tests/test_reconciliation_runtime.py \
@@ -44,11 +49,16 @@ jobs:
         continue-on-error: true
         run: |
           ruff check --select I,E501,UP012,UP018 \
+            src/auto_router/claim_fence.py \
+            src/auto_router/executor_auth.py \
             src/auto_router/main_live.py \
             src/auto_router/models.py \
             src/auto_router/route_events.py \
             src/auto_router/runtime_projection.py \
+            src/auto_router/secure_live.py \
             src/auto_router/strict_assistx_routes.py \
+            tests/test_claim_fence.py \
+            tests/test_executor_auth.py \
             tests/test_runtime_projection.py \
             tests/test_runtime_telemetry.py \
             tests/test_strict_assistx_routes.py
@@ -83,7 +93,7 @@ jobs:
             sleep 3
           done
           test "$healthy" = "true"
-      - name: Verify health, offline models, route surface, admission, projection, and admin auth gate
+      - name: Verify health, offline models, authenticated inference, route surface, admission, projection, and admin auth gate
         run: |
           curl -sf http://127.0.0.1:8088/health > /tmp/router-health.json
           curl -sf http://127.0.0.1:8088/openapi.json > /tmp/router-openapi.json
@@ -98,6 +108,7 @@ jobs:
           required = {
               "/health",
               "/v1/models",
+              "/v1/chat/completions",
               "/api/routes/request",
               "/admin/admission",
               "/admin/runtime-projection",
@@ -134,6 +145,27 @@ jobs:
           serialized = json.dumps(payload).lower()
           assert not any(name in serialized for name in forbidden), payload
           PY
+
+          # Inference must fail at the authentication boundary without a token.
+          unauth_code=$(curl -s -o /tmp/router-unauth-inference.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"auto/local","messages":[{"role":"user","content":"smoke"}],"max_tokens":8}' \
+            http://127.0.0.1:8088/v1/chat/completions)
+          echo "unauthenticated inference: $unauth_code"
+          test "$unauth_code" = "401"
+
+          # A dedicated AssistX service token crosses authentication, then fails
+          # at the expected empty/bootstrap routing state rather than auth.
+          service_code=$(curl -s -o /tmp/router-service-inference.json -w '%{http_code}' \
+            -H 'Authorization: Bearer smoke-service-token' \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"auto/local","messages":[{"role":"user","content":"smoke"}],"max_tokens":8}' \
+            http://127.0.0.1:8088/v1/chat/completions)
+          echo "authenticated service inference: $service_code"
+          case "$service_code" in
+            429|503|504) ;;
+            *) echo "unexpected authenticated service response"; cat /tmp/router-service-inference.json; exit 1 ;;
+          esac
 
           # Administrative status must require the local admin token.
           for path in /admin/quota /admin/admission /admin/runtime-projection; do
