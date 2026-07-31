@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import math
 import os
@@ -177,6 +178,20 @@ def _max_output(payload: Mapping[str, Any]) -> int:
         raise ExecutorAuthError("requested output token limit is invalid")
 
 
+def _encoded_receive(payload: Mapping[str, Any]) -> Any:
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        sent = True
+        return {"type": "http.request", "body": encoded, "more_body": False}
+
+    return receive
+
+
 class _AttemptLedger:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -226,7 +241,23 @@ class ExecutorInferenceAuthMiddleware:
             payload = json.loads(body)
             if not isinstance(payload, dict):
                 raise ExecutorAuthError("inference request must be a JSON object")
-            claims = decode_executor_token(_bearer(list(scope.get("headers") or [])))
+            bearer = _bearer(list(scope.get("headers") or []))
+            service_token = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
+            if service_token and hmac.compare_digest(bearer, service_token):
+                metadata = payload.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                payload["metadata"] = {
+                    **metadata,
+                    "assistx_service": {
+                        "identity": "assistx-internal",
+                        "authenticated": True,
+                    },
+                }
+                await self.app(scope, _encoded_receive(payload), send)
+                return
+
+            claims = decode_executor_token(bearer)
             model = str(payload.get("model") or "").strip()
             allowed_models = {str(item) for item in claims.get("allowed_model_aliases") or []}
             if not model or model not in allowed_models:
@@ -264,17 +295,7 @@ class ExecutorInferenceAuthMiddleware:
                     "projection_generation": token_generation,
                 },
             }
-            encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            sent = False
-
-            async def authorized_receive() -> dict[str, Any]:
-                nonlocal sent
-                if sent:
-                    return {"type": "http.request", "body": b"", "more_body": False}
-                sent = True
-                return {"type": "http.request", "body": encoded, "more_body": False}
-
-            await self.app(scope, authorized_receive, send)
+            await self.app(scope, _encoded_receive(payload), send)
         except (ExecutorAuthError, json.JSONDecodeError) as exc:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(scope, replay, send)
 
