@@ -174,8 +174,8 @@ def _max_output(payload: Mapping[str, Any]) -> int:
     value = payload.get("max_completion_tokens") or payload.get("max_tokens") or 4096
     try:
         return max(1, int(value))
-    except (TypeError, ValueError):
-        raise ExecutorAuthError("requested output token limit is invalid")
+    except (TypeError, ValueError) as exc:
+        raise ExecutorAuthError("requested output token limit is invalid") from exc
 
 
 def _encoded_receive(payload: Mapping[str, Any]) -> Any:
