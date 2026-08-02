@@ -9,6 +9,7 @@ PYTHON="${PYTHON:-python3}"
 : "${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}"
 export NEO4J_USER="${NEO4J_USER:-neo4j}"
 export NEO4J_DATABASE="${NEO4J_DATABASE:-${NEO4J_DB:-neo4j}}"
+export AUTO_ROUTER_RETAIN_SNAPSHOTS="${AUTO_ROUTER_RETAIN_SNAPSHOTS:-0}"
 
 cd "$ROOT"
 exec 9>"$LOCK_FILE"
@@ -23,9 +24,10 @@ fi
   --neo4j-password "$NEO4J_PASSWORD" \
   --neo4j-database "$NEO4J_DATABASE"
 
-"$PYTHON" scripts/build_fleet_loadouts_atomic.py \
+"$PYTHON" scripts/build_fleet_loadouts_hardened.py \
   --neo4j-uri "$NEO4J_URI" \
   --neo4j-user "$NEO4J_USER" \
   --neo4j-password "$NEO4J_PASSWORD" \
   --neo4j-database "$NEO4J_DATABASE" \
+  --retain-snapshots "$AUTO_ROUTER_RETAIN_SNAPSHOTS" \
   "$@"
