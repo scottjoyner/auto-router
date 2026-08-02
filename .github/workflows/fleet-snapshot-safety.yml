@@ -1,0 +1,49 @@
+name: Fleet snapshot safety
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/build_fleet_loadouts*.py'
+      - 'scripts/preflight_fleet_loadouts.py'
+      - 'scripts/prune_fleet_snapshots.py'
+      - 'scripts/run_fleet_loadout_rebuild.sh'
+      - 'scripts/schema/fleet_snapshot_constraints.cypher'
+      - 'tests/test_build_fleet_loadouts*.py'
+      - '.github/workflows/fleet-snapshot-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest neo4j
+      - name: Compile scripts
+        run: |
+          python -m py_compile \
+            scripts/build_fleet_loadouts.py \
+            scripts/build_fleet_loadouts_atomic.py \
+            scripts/build_fleet_loadouts_hardened.py \
+            scripts/preflight_fleet_loadouts.py \
+            scripts/prune_fleet_snapshots.py
+      - name: Validate shell
+        run: bash -n scripts/run_fleet_loadout_rebuild.sh
+      - name: Run fleet persistence tests
+        run: pytest -q tests/test_build_fleet_loadouts_atomic.py tests/test_build_fleet_loadouts_hardened.py
+      - name: Reject embedded Neo4j passwords in new writers
+        run: |
+          if grep -REn 'DEFAULT_NEO4J_PASSWORD\s*=.*[^)]$|knowledge_graph_2026' \
+            scripts/build_fleet_loadouts_atomic.py \
+            scripts/build_fleet_loadouts_hardened.py \
+            scripts/preflight_fleet_loadouts.py \
+            scripts/prune_fleet_snapshots.py; then
+            echo 'Embedded Neo4j credential detected' >&2
+            exit 1
+          fi
