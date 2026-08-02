@@ -23,3 +23,7 @@ REQUIRE a.assignment_id IS UNIQUE;
 CREATE CONSTRAINT fleet_change_delta_id_unique IF NOT EXISTS
 FOR (d:FleetChangeDelta)
 REQUIRE d.delta_id IS UNIQUE;
+
+CREATE CONSTRAINT fleet_snapshot_pointer_name_unique IF NOT EXISTS
+FOR (p:FleetSnapshotPointer)
+REQUIRE p.name IS UNIQUE;
