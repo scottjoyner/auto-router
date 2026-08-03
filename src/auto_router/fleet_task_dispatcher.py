@@ -79,7 +79,10 @@ def _expand_env(value: str) -> str:
 def _api_root(base_url: str) -> str:
     parsed = urlsplit(base_url.strip())
     path = parsed.path.rstrip("/")
-    for suffix in ("/v1", "/api/v1", "/api/v0"):
+    # Match the longest API prefixes first. ``/api/v1`` also ends in ``/v1``;
+    # stripping the short suffix first would incorrectly leave a trailing
+    # ``/api`` and make probes target ``/api/api/v1/models``.
+    for suffix in ("/api/v1", "/api/v0", "/v1"):
         if path.endswith(suffix):
             path = path[: -len(suffix)]
             break
