@@ -6,6 +6,7 @@ on:
       - 'src/auto_router/fleet_task_dispatcher.py'
       - 'scripts/discover_fleet_models.py'
       - 'tests/test_fleet_live_discovery.py'
+      - 'config/providers.yaml'
       - '.env.example'
       - '.github/workflows/fleet-live-discovery.yml'
   workflow_dispatch:
@@ -22,5 +23,16 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -e '.[dev]'
-      - run: python -m py_compile src/auto_router/fleet_task_dispatcher.py scripts/discover_fleet_models.py
-      - run: pytest -q tests/test_fleet_live_discovery.py
+      - name: Compile discovery paths
+        run: |
+          python -m py_compile \
+            src/auto_router/fleet_task_dispatcher.py \
+            scripts/discover_fleet_models.py
+      - name: Lint discovery paths
+        run: |
+          ruff check --ignore E402,E501 \
+            src/auto_router/fleet_task_dispatcher.py \
+            scripts/discover_fleet_models.py \
+            tests/test_fleet_live_discovery.py
+      - name: Test discovery failure modes
+        run: pytest -q tests/test_fleet_live_discovery.py
