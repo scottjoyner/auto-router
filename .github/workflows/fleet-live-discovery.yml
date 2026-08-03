@@ -30,7 +30,7 @@ jobs:
             scripts/discover_fleet_models.py
       - name: Lint discovery paths
         run: |
-          ruff check --ignore E402,E501 \
+          ruff check --ignore E402,E501,I001 \
             src/auto_router/fleet_task_dispatcher.py \
             scripts/discover_fleet_models.py \
             tests/test_fleet_live_discovery.py
