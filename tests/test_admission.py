@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from auto_router.admission import RuntimeAdmissionController
-from auto_router.models import ModelConfig, ProviderCandidate, ProviderConfig
+from auto_router.models import ModelConfig, Priority, ProviderCandidate, ProviderConfig
 from auto_router.providers import ProviderError
 
 
@@ -67,6 +67,59 @@ async def test_one_slot_runtime_serializes_waiting_request() -> None:
 
     await second.release()
     assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_critical_voice_request_advances_ahead_of_background_queue() -> None:
+    candidate = _candidate(queue_limit=2, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    first = await controller.acquire(candidate, Priority.batch)
+
+    background_task = asyncio.create_task(
+        controller.acquire(candidate, Priority.background)
+    )
+    await asyncio.sleep(0)
+    critical_task = asyncio.create_task(
+        controller.acquire(candidate, Priority.critical)
+    )
+    await asyncio.sleep(0)
+
+    snapshot = controller.snapshot()[0]
+    assert snapshot["queued"] == 2
+    assert snapshot["queued_by_priority"]["critical"] == 1
+    assert snapshot["queued_by_priority"]["background"] == 1
+
+    await first.release()
+    critical = await asyncio.wait_for(critical_task, timeout=0.2)
+    assert not background_task.done()
+
+    await critical.release()
+    background = await asyncio.wait_for(background_task, timeout=0.2)
+    await background.release()
+
+
+@pytest.mark.asyncio
+async def test_equal_priority_waiters_remain_fifo() -> None:
+    candidate = _candidate(queue_limit=2, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    first = await controller.acquire(candidate)
+
+    earlier_task = asyncio.create_task(
+        controller.acquire(candidate, Priority.interactive)
+    )
+    await asyncio.sleep(0)
+    later_task = asyncio.create_task(
+        controller.acquire(candidate, Priority.interactive)
+    )
+    await asyncio.sleep(0)
+
+    await first.release()
+    earlier = await asyncio.wait_for(earlier_task, timeout=0.2)
+    assert not later_task.done()
+
+    await earlier.release()
+    later = await asyncio.wait_for(later_task, timeout=0.2)
+    await later.release()
 
 
 @pytest.mark.asyncio
