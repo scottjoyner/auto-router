@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 import asyncio
+from types import SimpleNamespace
 
 import auto_router.main as main_module
 
@@ -14,7 +14,7 @@ class FakeContext:
         return ["local"]
 
     def free_api_provider_names(self):
-        return ["cerebras"]
+        return []
 
     def blocked_provider_names(self):
         return ["blocked"]
@@ -25,23 +25,23 @@ class FakeContext:
 
 class FakeCircuits:
     def snapshot(self):
-        return [{"owner": "cerebras", "open": False}]
+        return []
 
 
 class FakeProviders:
     def enabled(self):
-        return ["cerebras", "lmstudio"]
+        return ["lmstudio"]
 
 
 class FakeAgents:
-    agent_workers = ["worker-1"]
+    agent_workers = []
 
 
 async def _fake_gateway_status() -> dict[str, object]:
     return {"enabled": False, "ok": True, "mode": "direct", "detail": "mock"}
 
 
-def test_health_includes_outbox_dispatch_status(monkeypatch) -> None:
+def test_health_reports_warning_outbox_pressure_without_degrading(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "build_agentgateway_status", _fake_gateway_status)
     monkeypatch.setattr(
         main_module,
@@ -68,9 +68,10 @@ def test_health_includes_outbox_dispatch_status(monkeypatch) -> None:
 
     result = asyncio.run(main_module.health())
 
-    assert result["ok"] is False
-    assert result["status"] == "degraded"
+    assert result["ok"] is True
+    assert result["status"] == "ok"
     assert result["gateway"]["ok"] is True
+    assert result["free_api_providers"] == []
     assert result["assistx_outbox_dispatch"]["status"] == "running"
     assert result["assistx_outbox_dispatch"]["last_reason"] == "scheduled"
     assert result["assistx_outbox_dispatch"]["next_run_in_seconds"] >= 0

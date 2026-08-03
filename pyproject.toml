@@ -1,7 +1,7 @@
 [project]
 name = "auto-router"
 version = "0.1.0"
-description = "Local-first OpenAI-compatible LLM router with free quota scheduling and LM Studio fallback."
+description = "Strict-offline OpenAI-compatible gateway for AssistX-admitted local inference runtimes."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,6 +15,7 @@ dependencies = [
   "jinja2>=3.1.6",
   "prometheus-client>=0.20.0",
   "opentelemetry-api>=1.20.0",
+  "cryptography>=43.0.0,<46",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,13 @@ dev = [
   "ruff>=0.6.0",
   "mypy>=1.11.0",
   "pre-commit>=3.5.0",
+  # Required only to collect/test the superseded direct-Neo4j loadout script.
+  "neo4j>=5.0",
+]
+legacy-loadout = [
+  # The reconciliation runtime does not use this path. Install only when
+  # examining or migrating scripts/build_fleet_loadouts.py into AssistX.
+  "neo4j>=5.0",
 ]
 
 [project.scripts]

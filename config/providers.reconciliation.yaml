@@ -1,0 +1,28 @@
+# Health-only bootstrap registry for the reconciliation router.
+#
+# This provider is intentionally unroutable: zero slots, zero models, and a closed
+# loopback discard port. It exists only because the base router requires one enabled
+# local provider during startup. The first authenticated AssistX runtime projection
+# atomically replaces the entire provider registry, admission controller, access-path
+# selector, context, and policy engine.
+#
+# Do not add a real runtime, model, LAN URL, Tailscale URL, or positive capacity to
+# this file. All production-capable state must arrive through the signed projection.
+providers:
+  - name: reconciliation-bootstrap-unadmitted
+    type: openai_compatible
+    node_id: bootstrap-unadmitted
+    runtime_instance_id: bootstrap-unadmitted
+    runtime_kind: openai_compatible
+    runtime_version: bootstrap
+    headless: true
+    parallel_slots: 0
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    enabled: true
+    base_url: http://127.0.0.1:9/v1
+    access_urls:
+      - http://127.0.0.1:9/v1
+    priority: 1000
+    quota_class: local
+    models: []

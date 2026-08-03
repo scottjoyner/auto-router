@@ -9,6 +9,14 @@ from auto_router.settings import get_settings
 from auto_router.signal_registry import route_decision_signals, signal_snapshot
 
 
+def _canonicalizer(context: Any, name: str):
+    return getattr(
+        context,
+        name,
+        lambda value: str(value).strip().lower(),
+    )
+
+
 def ensure_event_outbox(state: Any) -> EventOutbox:
     if not hasattr(state, "event_outbox"):
         state.event_outbox = EventOutbox(get_settings().database_url)
@@ -19,16 +27,30 @@ def _provider_node_id(state: Any, provider_name: str | None) -> str | None:
     if not provider_name or not hasattr(state, "providers"):
         return None
     context = getattr(state, "context", None)
-    canonical = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider_name)
+    canonical = _canonicalizer(context, "canonical_provider_name")(provider_name)
     if context is not None and hasattr(context, "provider_for"):
         provider = context.provider_for(canonical)
         if provider is not None:
             return provider.node_id
+    canonicalize = _canonicalizer(context, "canonical_provider_name")
     for provider in state.providers.enabled():
-        provider_name_value = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider.name)
-        if provider_name_value == canonical:
+        if canonicalize(provider.name) == canonical:
             return provider.node_id
     return None
+
+
+def _projection_metadata(request_metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "runtime_projection_generation": request_metadata.get(
+            "runtime_projection_generation"
+        ),
+        "runtime_projection_revision": request_metadata.get(
+            "runtime_projection_revision"
+        ),
+        "runtime_projection_checksum": request_metadata.get(
+            "runtime_projection_checksum"
+        ),
+    }
 
 
 def enqueue_route_execution_event(
@@ -51,42 +73,52 @@ def enqueue_route_execution_event(
     value_units: int | None = None,
     value_per_second: float | None = None,
 ) -> str:
-    """Queue routing provenance without storing prompt bodies.
-
-    This event intentionally avoids `request.raw_body`, messages, prompt text, or
-    response text. It only records operational metadata needed for AssistX/Neo4j
-    provenance, quota accounting, debugging, and dashboard history.
-    """
+    """Queue routing provenance without storing prompt or response bodies."""
 
     outbox = ensure_event_outbox(state)
     usage = usage or {}
     error_type = type(error).__name__ if error else None
     error_message = str(error)[:1000] if error else None
     context = getattr(state, "context", None)
-    canonical_provider = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower())(provider)
-    canonical_model = getattr(context, "canonical_model_id", lambda value: str(value).strip().lower())(model)
-    provider_model_id = _provider_scoped_model_id(canonical_provider, canonical_model) if provider and model else None
+    canonical_provider = _canonicalizer(
+        context,
+        "canonical_provider_name",
+    )(provider)
+    canonical_model = _canonicalizer(context, "canonical_model_id")(model)
+    provider_model_id = (
+        _provider_scoped_model_id(canonical_provider, canonical_model)
+        if provider and model
+        else None
+    )
     status = _route_status(status_code=status_code, error=error)
     event_type = f"router.execution_stage.{status}"
     idempotency_key = (
-        f"{event_type}:{request.request_id}:{stage}:{canonical_provider}:{canonical_model}:"
-        f"{status_code}:{error_type or 'none'}"
+        f"{event_type}:{request.request_id}:{stage}:{canonical_provider}:"
+        f"{canonical_model}:{status_code}:{error_type or 'none'}"
     )
-    gateway_metadata = gateway_metadata if isinstance(gateway_metadata, dict) else {}
-    gateway_used = bool(gateway_metadata) or str(provider).startswith("agentgateway")
-    request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
-    task_id = getattr(request, "task_id", None) or request_metadata.get("task_id")
-    agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get("agent_run_id")
-    # Propagate correlation_id so AssistX can link this TraceEvent back to the
-    # originating trace group. The hub rejects envelopes without correlation_id;
-    # the dispatcher supplies a uuid4 fallback but we prefer the real trace id.
+    gateway_metadata = (
+        gateway_metadata if isinstance(gateway_metadata, dict) else {}
+    )
+    gateway_used = bool(gateway_metadata) or str(provider).startswith(
+        "agentgateway"
+    )
+    request_metadata = (
+        request.metadata if isinstance(request.metadata, dict) else {}
+    )
+    task_id = getattr(request, "task_id", None) or request_metadata.get(
+        "task_id"
+    )
+    agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get(
+        "agent_run_id"
+    )
     correlation_id = (
         getattr(request, "correlation_id", None)
         or request_metadata.get("correlation_id")
         or str(uuid.uuid4())
     )
     node_id = (
-        getattr(request, "node_id", None)
+        request_metadata.get("runtime_node_id")
+        or getattr(request, "node_id", None)
         or request_metadata.get("node_id")
         or _provider_node_id(state, provider)
         or str(request_metadata.get("provider_id") or provider or "unknown")
@@ -100,13 +132,38 @@ def enqueue_route_execution_event(
         "priority": request.priority.value,
         "profile": request_metadata.get("profile"),
         "task_id": task_id,
+        "task_title": request_metadata.get("task_title")
+        or request_metadata.get("title"),
+        "task_kind": request_metadata.get("task_kind")
+        or request_metadata.get("kind"),
+        "repository": request_metadata.get("repository")
+        or request_metadata.get("repo"),
         "agent_run_id": agent_run_id,
+        "agent": request_metadata.get("agent")
+        or request_metadata.get("executor"),
         "node_id": node_id,
+        **_projection_metadata(request_metadata),
+        "runtime_node_id": request_metadata.get("runtime_node_id") or node_id,
+        "runtime_instance_id": request_metadata.get("runtime_instance_id"),
+        "runtime_kind": request_metadata.get("runtime_kind"),
+        "runtime_version": request_metadata.get("runtime_version"),
+        "headless": request_metadata.get("headless"),
+        "selected_transport": request_metadata.get("selected_transport"),
+        "selected_access_url": request_metadata.get("selected_access_url"),
+        "parallel_slots": request_metadata.get("parallel_slots"),
+        "queue_limit": request_metadata.get("queue_limit"),
+        "queue_timeout_seconds": request_metadata.get("queue_timeout_seconds"),
         "stage": stage,
         "provider": provider,
         "provider_id": canonical_provider,
         "model": model,
+        "model_key": request_metadata.get("model_key") or canonical_model,
+        "model_instance_id": request_metadata.get("model_instance_id"),
+        "provider_model": request_metadata.get("provider_model") or model,
         "provider_model_id": provider_model_id,
+        "artifact_fingerprint": request_metadata.get("artifact_fingerprint"),
+        "quantization": request_metadata.get("quantization"),
+        "context_length": request_metadata.get("context_length"),
         "status": status,
         "status_code": status_code,
         "latency_ms": latency_ms,
@@ -114,22 +171,42 @@ def enqueue_route_execution_event(
         "ended_at_ms": ended_at_ms,
         "queue_wait_ms": queue_wait_ms,
         "load_time_ms": load_time_ms,
+        "time_to_first_token_ms": request_metadata.get(
+            "time_to_first_token_ms"
+        )
+        or load_time_ms,
         "tokens_per_second": tokens_per_second,
         "value_units": value_units,
         "value_per_second": value_per_second,
-        "input_tokens": int(usage.get("prompt_tokens") or getattr(estimate, "input_tokens", 0)),
+        "input_tokens": int(
+            usage.get("prompt_tokens")
+            or getattr(estimate, "input_tokens", 0)
+        ),
         "output_tokens": int(usage.get("completion_tokens") or 0),
-        "total_tokens": int(usage.get("total_tokens") or getattr(estimate, "total_tokens", 0)),
+        "total_tokens": int(
+            usage.get("total_tokens")
+            or getattr(estimate, "total_tokens", 0)
+        ),
         "quota_units": getattr(estimate, "dimensions", {}),
         "local_only": request.local_only,
         "allow_cloud": request.allow_cloud,
         "stream": request.stream,
-        # Gateway fields (optional)
         "gateway_used": gateway_used,
-        "gateway_provider": gateway_metadata.get("provider") if gateway_metadata else (provider if gateway_used else None),
-        "upstream_provider": gateway_metadata.get("upstream_provider") if gateway_metadata else None,
-        "gateway_latency_ms": gateway_metadata.get("latency_ms") if gateway_metadata else (latency_ms if gateway_used else None),
-        # Error fields
+        "gateway_provider": (
+            gateway_metadata.get("provider")
+            if gateway_metadata
+            else provider if gateway_used else None
+        ),
+        "upstream_provider": (
+            gateway_metadata.get("upstream_provider")
+            if gateway_metadata
+            else None
+        ),
+        "gateway_latency_ms": (
+            gateway_metadata.get("latency_ms")
+            if gateway_metadata
+            else latency_ms if gateway_used else None
+        ),
         "error_type": error_type,
         "error_message": error_message,
         "context_revision": getattr(context, "revision", "unknown"),
@@ -157,21 +234,29 @@ def enqueue_route_decision_event(
     chosen_payload = _candidate_summary(chosen_candidate)
     candidate_payloads = [_candidate_summary(candidate) for candidate in candidates]
     context = getattr(state, "context", None)
-    request_metadata = request.metadata if isinstance(request.metadata, dict) else {}
-    task_id = getattr(request, "task_id", None) or request_metadata.get("task_id")
-    agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get("agent_run_id")
-    # Propagate correlation_id for end-to-end trace linkage (hub rejects envelopes
-    # without it; dispatcher supplies a uuid4 fallback but the real id is better).
+    request_metadata = (
+        request.metadata if isinstance(request.metadata, dict) else {}
+    )
+    task_id = getattr(request, "task_id", None) or request_metadata.get(
+        "task_id"
+    )
+    agent_run_id = getattr(request, "agent_run_id", None) or request_metadata.get(
+        "agent_run_id"
+    )
     correlation_id = (
         getattr(request, "correlation_id", None)
         or request_metadata.get("correlation_id")
         or str(uuid.uuid4())
     )
+    chosen_provider = chosen_payload.get("provider_id") or chosen_payload.get(
+        "provider"
+    )
     node_id = (
-        getattr(request, "node_id", None)
+        request_metadata.get("runtime_node_id")
+        or getattr(request, "node_id", None)
         or request_metadata.get("node_id")
-        or _provider_node_id(state, chosen_payload.get("provider_id") or chosen_payload.get("provider"))
-        or str(chosen_payload.get("provider_id") or chosen_payload.get("provider") or "unknown")
+        or _provider_node_id(state, chosen_provider)
+        or str(chosen_provider or "unknown")
     )
     payload = {
         "request_id": request.request_id,
@@ -182,6 +267,13 @@ def enqueue_route_decision_event(
         "task_id": task_id,
         "agent_run_id": agent_run_id,
         "node_id": node_id,
+        **_projection_metadata(request_metadata),
+        "runtime_node_id": request_metadata.get("runtime_node_id") or node_id,
+        "runtime_instance_id": request_metadata.get("runtime_instance_id"),
+        "runtime_kind": request_metadata.get("runtime_kind"),
+        "runtime_version": request_metadata.get("runtime_version"),
+        "selected_transport": request_metadata.get("selected_transport"),
+        "selected_access_url": request_metadata.get("selected_access_url"),
         "stage": stage,
         "priority": request.priority.value,
         "local_only": request.local_only,
@@ -192,7 +284,11 @@ def enqueue_route_decision_event(
         "context_revision": getattr(context, "revision", "unknown"),
         "context_source": getattr(context, "source", "unknown"),
     }
-    idempotency_key = f"router.route_decision:{request.request_id}:{stage}:{chosen_payload['provider_id']}:{chosen_payload['model_id'] or chosen_payload['model']}"
+    idempotency_key = (
+        f"router.route_decision:{request.request_id}:{stage}:"
+        f"{chosen_payload['provider_id']}:"
+        f"{chosen_payload['model_id'] or chosen_payload['model']}"
+    )
     event_id = outbox.enqueue(
         OutboxEvent(
             event_type="router.route_decision",
@@ -210,7 +306,7 @@ def enqueue_route_decision_event(
             rejections=list(rejections or []),
         )
     if hasattr(state, "signal_registry"):
-        node_id = _provider_node_id(state, chosen_payload.get("provider_id") or chosen_payload.get("provider"))
+        signal_node_id = _provider_node_id(state, chosen_provider)
         signals = route_decision_signals(
             request=request,
             profile_name=profile_name,
@@ -218,10 +314,15 @@ def enqueue_route_decision_event(
             chosen=chosen_payload,
             candidates=candidate_payloads,
             rejections=rejections,
-            node_id=node_id,
+            node_id=signal_node_id,
         )
         if signals:
-            state.signal_registry.save_snapshot(signal_snapshot(signals, revision=f"route-decision:{request.request_id}:{stage}", source="route_decision"))
+            snapshot = signal_snapshot(
+                signals,
+                revision=f"route-decision:{request.request_id}:{stage}",
+                source="route_decision",
+            )
+            state.signal_registry.save_snapshot(snapshot)
             state.context = state.signal_registry.hydrate_context(state.context)
             if hasattr(state, "policy_engine"):
                 state.policy_engine.context = state.context
@@ -231,15 +332,27 @@ def enqueue_route_decision_event(
 def _candidate_summary(candidate: Any) -> dict[str, Any]:
     provider = getattr(candidate, "provider", None)
     model = getattr(candidate, "model", None)
-    provider_name = str(getattr(provider, "name", getattr(provider, "provider", None)) or "").strip()
+    provider_name = str(
+        getattr(provider, "name", getattr(provider, "provider", None)) or ""
+    ).strip()
     provider_id = provider_name.lower() or None
-    provider_model = str(getattr(model, "provider_model", None) or getattr(model, "alias", getattr(model, "name", None)) or "").strip()
-    model_id = f"{provider_id}.{provider_model.lower()}" if provider_id and provider_model else None
+    provider_model = str(
+        getattr(model, "provider_model", None)
+        or getattr(model, "alias", getattr(model, "name", None))
+        or ""
+    ).strip()
+    model_id = (
+        f"{provider_id}.{provider_model.lower()}"
+        if provider_id and provider_model
+        else None
+    )
     return {
         "provider": provider_name,
         "provider_id": provider_id,
         "provider_model": getattr(model, "provider_model", None),
-        "model": str(getattr(model, "alias", getattr(model, "name", None)) or "").strip(),
+        "model": str(
+            getattr(model, "alias", getattr(model, "name", None)) or ""
+        ).strip(),
         "model_id": model_id,
         "score": getattr(candidate, "score", None),
         "reason": getattr(candidate, "reason", ""),

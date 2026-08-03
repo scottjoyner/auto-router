@@ -14,4 +14,4 @@ RUN pip install --upgrade pip && pip install .
 
 EXPOSE 8088
 
-CMD ["uvicorn", "auto_router.main_live:app", "--host", "0.0.0.0", "--port", "8088"]
+CMD ["uvicorn", "auto_router.secure_live:app", "--host", "0.0.0.0", "--port", "8088"]

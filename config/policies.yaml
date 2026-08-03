@@ -1,100 +1,100 @@
+# Strict offline routing policies.
+# Every profile resolves only to local physical runtimes. Hosted provider classes
+# are intentionally absent, including flash-start and quota-burn lanes.
 profiles:
   interactive_balanced:
-    description: Fast free quota first, then local fallback for normal OpenAI-compatible requests.
+    description: Select the best admitted local model for normal interactive work.
     stages:
       - purpose: final
-        provider_classes: [fast_free, brokered_free, local]
+        provider_classes: [local]
         required_capabilities: [chat]
         allow_local_fallback: true
 
-  flash_start_planner:
-    description: Use the Cerebras WSE-3 free lane as an instant planning/decomposition starter, then hand off to local or higher-quality refine lanes.
+  local_planner:
+    description: Use a low-latency local model for planning and decomposition.
     stages:
       - purpose: draft
-        provider_classes: [fast_free]
-        required_capabilities: [chat, low_latency, flash_planning]
+        provider_classes: [local]
+        required_capabilities: [chat, low_latency]
         allow_local_fallback: true
       - purpose: refine
-        provider_classes: [local, premium_free, fast_free]
-        required_capabilities: [chat]
+        provider_classes: [local]
+        required_capabilities: [chat, reasoning]
         allow_local_fallback: true
         optional: true
 
   high_priority_deliverable:
-    description: Local draft, best available free refine, optional judge for high-value deliverables.
+    description: Local draft, local refine, and optional local judge.
     stages:
       - purpose: draft
-        provider_classes: [local, fast_free]
+        provider_classes: [local]
         required_capabilities: [chat]
         allow_local_fallback: true
       - purpose: refine
-        provider_classes: [premium_free, fast_free, brokered_free]
+        provider_classes: [local]
         required_capabilities: [chat, reasoning]
         allow_local_fallback: true
+        optional: true
       - purpose: judge
-        provider_classes: [premium_free, fast_free]
+        provider_classes: [local]
         required_capabilities: [chat]
-        allow_local_fallback: false
+        allow_local_fallback: true
         optional: true
 
   code_high_quality:
-    description: Local coding draft followed by cloud/free refinement.
+    description: Local coding draft and local refinement for Hermes or OpenCode.
     stages:
       - purpose: draft
         provider_classes: [local]
         required_capabilities: [chat, code]
         allow_local_fallback: true
       - purpose: refine
-        provider_classes: [premium_free, fast_free, brokered_free]
+        provider_classes: [local]
         required_capabilities: [chat, code]
         allow_local_fallback: true
+        optional: true
 
   iterative_review_handoff:
-    description: One-pass local iteration for small slices, then a Hermes-ready handoff with validation metrics for final review.
+    description: Local iteration and review before a Hermes handoff.
     stages:
       - purpose: draft
-        provider_classes: [local, fast_free]
+        provider_classes: [local]
         required_capabilities: [chat, low_latency, quick_iteration]
         allow_local_fallback: true
       - purpose: refine
-        provider_classes: [local, fast_free, premium_free, brokered_free]
+        provider_classes: [local]
         required_capabilities: [chat, reasoning, large_context]
         allow_local_fallback: true
         optional: true
       - purpose: judge
-        provider_classes: [local, premium_free, fast_free]
+        provider_classes: [local]
         required_capabilities: [chat, reasoning]
-        allow_local_fallback: false
+        allow_local_fallback: true
         optional: true
 
   sophia_realtime:
-    description: Low-latency local-only lane for Sophia realtime app traffic; preserve the voice/privacy wall.
+    description: Low-latency local-only lane for realtime private traffic.
     stages:
       - purpose: final
         provider_classes: [local]
         required_capabilities: [chat, low_latency]
         allow_local_fallback: true
 
-  backlog_burn:
-    description: Controlled surplus-quota burn profile for backlog items, documentation review, summaries, and non-urgent enrichment.
+  backlog_local:
+    description: Local-only batch processing; never burn hosted quota.
     stages:
       - purpose: draft
-        provider_classes: [local, fast_free, edge_free]
+        provider_classes: [local]
         required_capabilities: [chat]
         allow_local_fallback: true
       - purpose: refine
-        provider_classes: [fast_free, premium_free, brokered_free]
+        provider_classes: [local]
         required_capabilities: [chat]
         allow_local_fallback: true
         optional: true
-      - purpose: judge
-        provider_classes: [fast_free, premium_free]
-        required_capabilities: [chat]
-        allow_local_fallback: false
-        optional: true
 
   local_only:
-    description: Never leave local endpoints.
+    description: Never leave approved local endpoints.
     stages:
       - purpose: final
         provider_classes: [local]
@@ -105,14 +105,14 @@ classification:
   default_profile: interactive_balanced
   model_alias_profiles:
     auto/fast: interactive_balanced
-    auto/flash-start: flash_start_planner
+    auto/flash-start: local_planner
     auto/high-quality: high_priority_deliverable
     auto/code: code_high_quality
     auto/review: iterative_review_handoff
     auto/iterate: iterative_review_handoff
     auto/finalize: iterative_review_handoff
     auto/sophia: sophia_realtime
-    auto/backlog-burn: backlog_burn
+    auto/backlog-burn: backlog_local
     auto/local: local_only
     auto/private: local_only
   local_only_markers:
