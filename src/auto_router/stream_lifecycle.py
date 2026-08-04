@@ -258,6 +258,9 @@ def install_stream_lifecycle(main_module: Any) -> None:
             raise
 
         owner = main_module._owner(candidate)
+        # Capture the provider iterator before replacing response.body. Referencing
+        # response.body from the wrapper would recurse into the wrapper generator.
+        upstream_body = response.body
         # Base _execute releases its in-flight mark when headers arrive. Add one
         # matching mark that remains until the response iterator actually closes.
         state.policy_engine.mark_inflight_start(owner)
@@ -351,7 +354,7 @@ def install_stream_lifecycle(main_module: Any) -> None:
         async def body():
             completed = False
             try:
-                async for chunk in response.body:
+                async for chunk in upstream_body:
                     collector.feed(chunk)
                     yield chunk
                 completed = True
