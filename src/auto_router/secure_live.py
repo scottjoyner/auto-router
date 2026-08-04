@@ -21,13 +21,15 @@ main_live_module.RuntimeProjectionManager = RuntimeProjectionManager
 
 app = main_live_module.app
 state = main_live_module.state
+router_module = main_live_module.main_module
 
 # Starlette runs the last-added middleware outermost. Authentication is installed
-# last so an invalid credential cannot reserve an idempotency row. The stream patch
-# wraps the already-admitted main_live dispatch path and finalizes only when the
-# iterator actually completes, fails, or is cancelled.
-install_request_idempotency(app, state, main_live_module)
-install_stream_lifecycle(main_live_module)
+# last so an invalid credential cannot reserve an idempotency row. The strict-live
+# wrapper owns admission, but the route functions execute from the underlying main
+# module; patch that implementation explicitly rather than relying on private names
+# being re-exported by the wrapper module.
+install_request_idempotency(app, state, router_module)
+install_stream_lifecycle(router_module)
 install_executor_inference_auth(app, state)
 
 __all__ = ["app"]
