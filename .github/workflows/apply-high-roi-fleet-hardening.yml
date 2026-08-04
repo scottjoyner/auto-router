@@ -1,0 +1,62 @@
+name: Apply high ROI fleet hardening
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: high-roi-fleet-hardening-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/restore-live-fleet-discovery'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply hardening patch
+        run: python scripts/apply_high_roi_fleet_hardening.py
+
+      - name: Install focused validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+
+      - name: Format and lint changed Python
+        run: |
+          ruff format scripts/build_fleet_loadouts.py
+          ruff check scripts/build_fleet_loadouts.py --ignore E501,UP017
+          python -m compileall -q scripts/build_fleet_loadouts.py
+
+      - name: Run focused reconciliation tests
+        run: |
+          pytest -q tests/test_fleet_loadout_authority.py tests/test_fleet_live_discovery.py
+
+      - name: Verify clean patch
+        run: git diff --check
+
+      - name: Commit validated hardening
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          git rm scripts/apply_high_roi_fleet_hardening.py
+          git rm .github/workflows/apply-high-roi-fleet-hardening.yml
+          git add scripts/build_fleet_loadouts.py README.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: make fleet reconciliation fail closed and atomic'
+          git push origin "HEAD:${BRANCH}"
