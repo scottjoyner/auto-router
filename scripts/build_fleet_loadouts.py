@@ -37,7 +37,7 @@ DEFAULT_STATS_PATH = Path(os.getenv("AUTO_ROUTER_FLEET_DISPATCHER_STATS_PATH", "
 DEFAULT_REPORT_PATH = Path(os.getenv("AUTO_ROUTER_FLEET_LOADOUT_REPORT_PATH", "/home/scott/git/auto-router/data/fleet_loadout_report.json"))
 DEFAULT_NEO4J_URI = os.getenv("NEO4J_URI", "bolt://100.64.43.123:7687")
 DEFAULT_NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-DEFAULT_NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "knowledge_graph_2026")
+DEFAULT_NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 DEFAULT_NEO4J_DB = os.getenv("NEO4J_DATABASE", os.getenv("NEO4J_DB", "neo4j"))
 
 REVIEWER_NODE_HINTS = {"x1-370", "xwing"}
@@ -224,8 +224,13 @@ def model_role_score(node: NodeInfo, model_id: str, base_score: float, profile_i
 def build_candidates(nodes: list[NodeInfo], stats: dict[str, Any], profile_id: str) -> list[Candidate]:
     candidates: list[Candidate] = []
     for node in nodes:
+        # Defense in depth: only native, explicit loaded-state inventory may
+        # become a routing candidate. Cached and compatibility-only observations
+        # remain useful diagnostics but are never executable assignments.
+        if not node.online or not node.inventory_authoritative:
+            continue
         base_score, base_reasons, success_rate, failure_rate = base_node_score(node, stats)
-        for model_id in node.loaded_models:
+        for model_id in sorted(set(node.loaded_models)):
             score, model_reasons, role = model_role_score(node, model_id, base_score, profile_id)
             # Slight penalty for online-but-empty or obviously transient nodes.
             if not node.loaded_models:
@@ -337,8 +342,12 @@ def plan_loadout(task_profile: dict[str, Any], nodes: list[NodeInfo], stats: dic
     )
 
 
-def read_task_profiles(driver) -> list[dict[str, Any]]:
-    with driver.session(database=DEFAULT_NEO4J_DB) as session:
+def read_task_profiles(
+    driver,
+    *,
+    database: str = DEFAULT_NEO4J_DB,
+) -> list[dict[str, Any]]:
+    with driver.session(database=database) as session:
         rows = session.run(
             """
             MATCH (p:FleetTaskProfile)
@@ -362,11 +371,27 @@ def _snapshot_payload(nodes: list[NodeInfo], stats: dict[str, Any], task_profile
                 "name": node.name,
                 "ip": node.ip,
                 "online": node.online,
-                "loaded_models": node.loaded_models,
-                "all_models": node.all_models,
+                "loaded_models": sorted(set(node.loaded_models)),
+                "all_models": sorted(set(node.all_models)),
+                "configured_models": sorted(set(node.configured_models)),
+                "model_aliases": dict(sorted(node.model_aliases.items())),
                 "latency_ms": node.latency_ms,
                 "error": node.error,
+                "warnings": list(node.warnings),
+                "endpoint_status": dict(sorted(node.endpoint_status.items())),
                 "power_watts": node.power_watts,
+                "base_url": node.base_url,
+                "provider_name": node.provider_name,
+                "discovery_source": node.discovery_source,
+                "inventory_complete": node.inventory_complete,
+                "inventory_authoritative": node.inventory_authoritative,
+                "loaded_state_source": node.loaded_state_source,
+                "observed_at": node.observed_at,
+                "routable_loaded_models": (
+                    sorted(set(node.loaded_models))
+                    if node.online and node.inventory_authoritative
+                    else []
+                ),
             }
             for node in nodes
         ],
@@ -376,8 +401,12 @@ def _snapshot_payload(nodes: list[NodeInfo], stats: dict[str, Any], task_profile
     }
 
 
-def _current_snapshot_info(driver) -> dict[str, Any] | None:
-    with driver.session(database=DEFAULT_NEO4J_DB) as session:
+def _current_snapshot_info(
+    driver,
+    *,
+    database: str = DEFAULT_NEO4J_DB,
+) -> dict[str, Any] | None:
+    with driver.session(database=database) as session:
         row = session.run(
             """
             MATCH (s:FleetSnapshot)
@@ -391,33 +420,53 @@ def _current_snapshot_info(driver) -> dict[str, Any] | None:
         return dict(row)
 
 
-def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], task_profiles: list[dict[str, Any]]) -> dict[str, Any]:
-    snapshot_id = str(uuid.uuid4())
-    captured_at = utc_now()
-    captured_at_ms = int(captured_at.timestamp() * 1000)
-    previous = _current_snapshot_info(driver)
-    previous_snapshot_id = str(previous["snapshot_id"]) if previous else None
-
-    node_rows = payload.get("nodes", [])
-    stats = payload.get("stats", {})
-
-    node_by_name = {row["name"]: row for row in node_rows if isinstance(row, dict) and row.get("name")}
+def _authoritative_model_rows(
+    node_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     model_rows: list[dict[str, Any]] = []
     for row in node_rows:
-        if not isinstance(row, dict):
+        if (
+            not isinstance(row, dict)
+            or not row.get("name")
+            or not row.get("online")
+            or not row.get("inventory_authoritative")
+        ):
             continue
-        for model_id in row.get("loaded_models") or []:
+        for model_id in sorted(set(row.get("loaded_models") or [])):
             model_rows.append(
                 {
                     "model_id": model_id,
                     "node_name": row["name"],
-                    "online": bool(row.get("online")),
+                    "online": True,
                     "latency_ms": row.get("latency_ms"),
                     "loaded": True,
+                    "discovery_source": row.get("discovery_source"),
+                    "loaded_state_source": row.get("loaded_state_source"),
+                    "observed_at": row.get("observed_at"),
+                    "inventory_authoritative": True,
                 }
             )
+    return model_rows
 
-    with driver.session(database=DEFAULT_NEO4J_DB) as session:
+
+def persist_to_neo4j(
+    driver,
+    payload: dict[str, Any],
+    plans: list[LoadoutPlan],
+    task_profiles: list[dict[str, Any]],
+    *,
+    database: str = DEFAULT_NEO4J_DB,
+) -> dict[str, Any]:
+    snapshot_id = str(uuid.uuid4())
+    captured_at = utc_now()
+    captured_at_ms = int(captured_at.timestamp() * 1000)
+    previous = _current_snapshot_info(driver, database=database)
+    previous_snapshot_id = str(previous["snapshot_id"]) if previous else None
+
+    node_rows = payload.get("nodes", [])
+    model_rows = _authoritative_model_rows(node_rows)
+
+    with driver.session(database=database) as session:
         session.run(
             """
             MERGE (s:FleetSnapshot {snapshot_id: $snapshot_id})
@@ -447,7 +496,7 @@ def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], 
                     {
                         "loadout_count": len(plans),
                         "online_nodes": sum(1 for row in node_rows if row.get("online")),
-                        "loaded_models": len(model_rows),
+                        "routable_loaded_models": len(model_rows),
                     },
                     sort_keys=True,
                 ),
@@ -719,8 +768,19 @@ def main() -> int:
     driver = None
     try:
         if not args.dry_run:
-            driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
-            task_profiles = read_task_profiles(driver)
+            if not args.neo4j_password:
+                parser.error(
+                    "NEO4J_PASSWORD or --neo4j-password is required unless "
+                    "--dry-run is used"
+                )
+            driver = GraphDatabase.driver(
+                args.neo4j_uri,
+                auth=(args.neo4j_user, args.neo4j_password),
+            )
+            task_profiles = read_task_profiles(
+                driver,
+                database=args.neo4j_database,
+            )
         else:
             task_profiles = [
                 {"id": value, "name": value.replace("_", " ").title()}
@@ -735,7 +795,13 @@ def main() -> int:
         if args.dry_run:
             return 0
 
-        persist_result = persist_to_neo4j(driver, report, plans, task_profiles)
+        persist_result = persist_to_neo4j(
+            driver,
+            report,
+            plans,
+            task_profiles,
+            database=args.neo4j_database,
+        )
         print("")
         print(f"Persisted snapshot {persist_result['snapshot_id']} with {persist_result['loadout_count']} loadouts")
         if persist_result.get("previous_snapshot_id"):
