@@ -174,7 +174,7 @@ def test_probe_separates_observed_and_configured_inventory(monkeypatch) -> None:
     assert any("configured models not observed" in warning for warning in node.warnings)
 
 
-def test_openai_only_inventory_is_explicitly_partial_and_inferred(monkeypatch) -> None:
+def test_openai_only_inventory_is_visible_but_not_routable(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
             return httpx.Response(200, json={"data": [{"id": "model-a"}]})
@@ -187,8 +187,9 @@ def test_openai_only_inventory_is_explicitly_partial_and_inferred(monkeypatch) -
     assert node.inventory_complete is False
     assert node.inventory_authoritative is False
     assert node.loaded_state_source == "compatibility-inferred"
-    assert node.loaded_models == ["model-a"]
-    assert any("loaded state inferred" in warning for warning in node.warnings)
+    assert node.loaded_models == []
+    assert node.all_models == ["model-a"]
+    assert any("cannot assert" in warning for warning in node.warnings)
     assert node.endpoint_status["api/v1/models"] == "http-404"
 
 
@@ -280,7 +281,7 @@ def test_live_registry_never_recycles_cached_report(tmp_path: Path, monkeypatch)
     assert nodes[0].inventory_authoritative is False
 
 
-def test_missing_registry_cache_is_marked_non_authoritative(
+def test_missing_registry_cache_is_visible_but_not_routable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -310,6 +311,27 @@ def test_missing_registry_cache_is_marked_non_authoritative(
     assert nodes[0].discovery_source == "cached-report"
     assert nodes[0].inventory_complete is True
     assert nodes[0].inventory_authoritative is False
+    assert nodes[0].loaded_models == []
+    assert nodes[0].all_models == ["old-model"]
+    assert any("diagnostic-only" in warning for warning in nodes[0].warnings)
+
+
+def test_cached_stats_are_visible_but_not_routable(tmp_path: Path, monkeypatch) -> None:
+    missing_registry = tmp_path / "missing.yaml"
+    monkeypatch.setattr(discovery, "DEFAULT_REPORT_PATH", tmp_path / "missing-report.json")
+    stats_path = tmp_path / "stats.json"
+    stats_path.write_text(
+        json.dumps({"slots": [{"node": "cached-node", "model": "old-model"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discovery, "DEFAULT_STATS_PATH", stats_path)
+
+    nodes = discovery.probe_all_nodes(provider_config=missing_registry)
+
+    assert nodes[0].discovery_source == "cached-stats"
+    assert nodes[0].inventory_authoritative is False
+    assert nodes[0].loaded_models == []
+    assert nodes[0].all_models == ["old-model"]
 
 
 def test_unexpected_node_failure_does_not_abort_other_probes(
