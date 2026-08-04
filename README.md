@@ -137,6 +137,27 @@ Each admitted provider should include:
 
 For the live migration shadow deployment, use `config/providers.reconciliation.yaml`. It admits one operator-confirmed physical runtime only. Do not add another node until its physical owner, loaded process, completion health, container network reachability, and slot count are proven.
 
+## Fleet loadout reconciliation safety
+
+The fleet loadout builder reads live runtime inventory and writes both a current
+routing view and immutable snapshot observations. Production reconciliation
+requires explicit Neo4j credentials:
+
+```bash
+export NEO4J_URI=bolt://127.0.0.1:7687
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD='set-in-a-secret-store'
+export NEO4J_DATABASE=neo4j
+python scripts/build_fleet_loadouts.py
+```
+
+A normal run fails closed when discovery contains no authoritative loaded model,
+no task profiles, or a loadout without a primary assignment. This preserves the
+last known-good topology during a discovery outage. `--allow-empty-snapshot` is
+an explicit destructive override intended only for a deliberate fleet drain.
+Reports are published atomically, and Neo4j writes use one transaction so a
+failed reconciliation cannot expose a partially built topology.
+
 ## Routing policy
 
 All committed profiles use only the `local` provider class. Legacy aliases are retained for client compatibility but map to local behavior:
