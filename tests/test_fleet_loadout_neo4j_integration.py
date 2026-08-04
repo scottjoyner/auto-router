@@ -5,11 +5,10 @@ import os
 import sys
 from pathlib import Path
 
-from neo4j import GraphDatabase
 import pytest
+from neo4j import GraphDatabase
 
 from auto_router.fleet_task_dispatcher import NodeInfo
-
 
 pytestmark = pytest.mark.skipif(
     os.getenv("NEO4J_INTEGRATION") != "1",
