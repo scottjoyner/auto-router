@@ -358,10 +358,8 @@ def _probe_provider(
     if explicit_loaded_state:
         loaded_state_source = "native"
     elif compatibility_models:
-        # LM Studio installations that expose only the OpenAI-compatible endpoint
-        # provide no explicit state. Preserve backward compatibility, but mark this
-        # as inferred so downstream code cannot mistake it for authoritative state.
-        loaded_models.update(compatibility_models)
+        # The OpenAI-compatible endpoint exposes model visibility, not loaded
+        # runtime state. Keep those IDs in all_models and fail closed for routing.
         loaded_state_source = "compatibility-inferred"
 
     warnings = list(errors) if successful_endpoint else []
@@ -375,7 +373,9 @@ def _probe_provider(
     if unconfigured:
         warnings.append("observed models not configured for routing: " + ", ".join(unconfigured))
     if loaded_state_source == "compatibility-inferred":
-        warnings.append("loaded state inferred from the OpenAI-compatible inventory")
+        warnings.append(
+            "OpenAI-compatible inventory cannot assert that a model is loaded"
+        )
 
     return NodeInfo(
         name=str(provider["node_id"]),
@@ -407,13 +407,21 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
         name = str(row.get("name") or "").strip()
         if not name:
             continue
+        historical_models = {
+            str(model)
+            for model in (
+                list(row.get("all_models") or [])
+                + list(row.get("loaded_models") or [])
+            )
+            if str(model)
+        }
         nodes.append(
             NodeInfo(
                 name=name,
                 ip=str(row.get("ip") or ""),
                 online=bool(row.get("online")),
-                loaded_models=[str(model) for model in row.get("loaded_models") or []],
-                all_models=[str(model) for model in row.get("all_models") or []],
+                loaded_models=[],
+                all_models=sorted(historical_models),
                 configured_models=[
                     str(model) for model in row.get("configured_models") or []
                 ],
@@ -423,7 +431,10 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
                 },
                 latency_ms=float(row.get("latency_ms") or 0.0),
                 error=str(row.get("error") or ""),
-                warnings=[str(value) for value in row.get("warnings") or []],
+                warnings=[
+                    *[str(value) for value in row.get("warnings") or []],
+                    "cached report inventory is diagnostic-only",
+                ],
                 endpoint_status={
                     str(endpoint): str(status)
                     for endpoint, status in dict(row.get("endpoint_status") or {}).items()
@@ -434,7 +445,7 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
                 discovery_source="cached-report",
                 inventory_complete=bool(row.get("inventory_complete")),
                 inventory_authoritative=False,
-                loaded_state_source=str(row.get("loaded_state_source") or "cached"),
+                loaded_state_source="cached",
                 observed_at=str(row.get("observed_at") or ""),
             )
         )
@@ -442,7 +453,7 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
 
 
 def _from_stats(stats: dict[str, Any]) -> list[NodeInfo]:
-    by_node: dict[str, dict[str, set[str]]] = {}
+    by_node: dict[str, set[str]] = {}
     for row in stats.get("slots") or []:
         if not isinstance(row, dict):
             continue
@@ -450,27 +461,23 @@ def _from_stats(stats: dict[str, Any]) -> list[NodeInfo]:
         model_id = str(row.get("model") or "").strip()
         if not node_name:
             continue
-        entry = by_node.setdefault(
-            node_name,
-            {"loaded_models": set(), "all_models": set()},
-        )
+        models = by_node.setdefault(node_name, set())
         if model_id:
-            entry["loaded_models"].add(model_id)
-            entry["all_models"].add(model_id)
+            models.add(model_id)
     return [
         NodeInfo(
             name=name,
             ip="",
             online=False,
-            loaded_models=sorted(row["loaded_models"]),
-            all_models=sorted(row["all_models"]),
+            loaded_models=[],
+            all_models=sorted(models),
             error="live provider registry unavailable; using stale dispatcher stats",
             warnings=["cached dispatcher statistics are diagnostic-only"],
             discovery_source="cached-stats",
             inventory_authoritative=False,
             loaded_state_source="cached",
         )
-        for name, row in by_node.items()
+        for name, models in by_node.items()
     ]
 
 
