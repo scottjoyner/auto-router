@@ -44,6 +44,42 @@ def _node(**overrides) -> NodeInfo:
     return NodeInfo(**values)
 
 
+class _Result:
+    def __init__(self, *, rows=None, single=None) -> None:
+        self._rows = rows or []
+        self._single = single
+
+    def data(self):
+        return self._rows
+
+    def single(self):
+        return self._single
+
+
+class _Session:
+    def __init__(self, result: _Result) -> None:
+        self.result = result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def run(self, *_args, **_kwargs):
+        return self.result
+
+
+class _Driver:
+    def __init__(self, result: _Result) -> None:
+        self.result = result
+        self.databases: list[str] = []
+
+    def session(self, *, database: str):
+        self.databases.append(database)
+        return _Session(self.result)
+
+
 def test_candidates_require_authoritative_online_inventory() -> None:
     assert builder.build_candidates(
         [_node()],
@@ -115,3 +151,25 @@ def test_persistence_rows_exclude_non_authoritative_inventory() -> None:
     assert rows[0]["node_name"] == "node-a"
     assert rows[0]["model_id"] == "model-a"
     assert rows[0]["inventory_authoritative"] is True
+
+
+def test_task_profile_reads_use_requested_database() -> None:
+    driver = _Driver(
+        _Result(rows=[{"props": {"id": "coding_high_throughput"}}])
+    )
+
+    profiles = builder.read_task_profiles(driver, database="fleet-test")
+
+    assert profiles == [{"id": "coding_high_throughput"}]
+    assert driver.databases == ["fleet-test"]
+
+
+def test_snapshot_lookup_uses_requested_database() -> None:
+    driver = _Driver(
+        _Result(single={"snapshot_id": "snapshot-1", "captured_at_ms": 1})
+    )
+
+    snapshot = builder._current_snapshot_info(driver, database="fleet-test")
+
+    assert snapshot == {"snapshot_id": "snapshot-1", "captured_at_ms": 1}
+    assert driver.databases == ["fleet-test"]
