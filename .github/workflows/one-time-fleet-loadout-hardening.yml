@@ -1,0 +1,385 @@
+name: One-time fleet loadout hardening
+
+on:
+  push:
+    branches:
+      - agent/restore-live-fleet-discovery
+    paths:
+      - .github/workflows/one-time-fleet-loadout-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/restore-live-fleet-discovery
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply authority, provenance, database, and credential patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/build_fleet_loadouts.py")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"expected one replacement for {old[:80]!r}, found {count}"
+                  )
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              'DEFAULT_NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "knowledge_graph_2026")',
+              'DEFAULT_NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")',
+          )
+
+          replace_once(
+              '''    for node in nodes:
+                  base_score, base_reasons, success_rate, failure_rate = base_node_score(node, stats)
+                  for model_id in node.loaded_models:
+          ''',
+              '''    for node in nodes:
+                  # Defense in depth: only native, explicit loaded-state inventory may
+                  # become a routing candidate. Cached and compatibility-only observations
+                  # remain useful diagnostics but are never executable assignments.
+                  if not node.online or not node.inventory_authoritative:
+                      continue
+                  base_score, base_reasons, success_rate, failure_rate = base_node_score(node, stats)
+                  for model_id in sorted(set(node.loaded_models)):
+          ''',
+          )
+
+          replace_once(
+              '''                "loaded_models": node.loaded_models,
+                          "all_models": node.all_models,
+                          "latency_ms": node.latency_ms,
+                          "error": node.error,
+                          "power_watts": node.power_watts,
+          ''',
+              '''                "loaded_models": sorted(set(node.loaded_models)),
+                          "all_models": sorted(set(node.all_models)),
+                          "configured_models": sorted(set(node.configured_models)),
+                          "model_aliases": dict(sorted(node.model_aliases.items())),
+                          "latency_ms": node.latency_ms,
+                          "error": node.error,
+                          "warnings": list(node.warnings),
+                          "endpoint_status": dict(sorted(node.endpoint_status.items())),
+                          "power_watts": node.power_watts,
+                          "base_url": node.base_url,
+                          "provider_name": node.provider_name,
+                          "discovery_source": node.discovery_source,
+                          "inventory_complete": node.inventory_complete,
+                          "inventory_authoritative": node.inventory_authoritative,
+                          "loaded_state_source": node.loaded_state_source,
+                          "observed_at": node.observed_at,
+                          "routable_loaded_models": (
+                              sorted(set(node.loaded_models))
+                              if node.online and node.inventory_authoritative
+                              else []
+                          ),
+          ''',
+          )
+
+          replace_once(
+              '''def read_task_profiles(driver) -> list[dict[str, Any]]:
+              with driver.session(database=DEFAULT_NEO4J_DB) as session:
+          ''',
+              '''def read_task_profiles(
+              driver,
+              *,
+              database: str = DEFAULT_NEO4J_DB,
+          ) -> list[dict[str, Any]]:
+              with driver.session(database=database) as session:
+          ''',
+          )
+
+          replace_once(
+              '''def _current_snapshot_info(driver) -> dict[str, Any] | None:
+              with driver.session(database=DEFAULT_NEO4J_DB) as session:
+          ''',
+              '''def _current_snapshot_info(
+              driver,
+              *,
+              database: str = DEFAULT_NEO4J_DB,
+          ) -> dict[str, Any] | None:
+              with driver.session(database=database) as session:
+          ''',
+          )
+
+          replace_once(
+              '''def persist_to_neo4j(driver, payload: dict[str, Any], plans: list[LoadoutPlan], task_profiles: list[dict[str, Any]]) -> dict[str, Any]:
+          ''',
+              '''def _authoritative_model_rows(
+              node_rows: list[dict[str, Any]],
+          ) -> list[dict[str, Any]]:
+              model_rows: list[dict[str, Any]] = []
+              for row in node_rows:
+                  if (
+                      not isinstance(row, dict)
+                      or not row.get("name")
+                      or not row.get("online")
+                      or not row.get("inventory_authoritative")
+                  ):
+                      continue
+                  for model_id in sorted(set(row.get("loaded_models") or [])):
+                      model_rows.append(
+                          {
+                              "model_id": model_id,
+                              "node_name": row["name"],
+                              "online": True,
+                              "latency_ms": row.get("latency_ms"),
+                              "loaded": True,
+                              "discovery_source": row.get("discovery_source"),
+                              "loaded_state_source": row.get("loaded_state_source"),
+                              "observed_at": row.get("observed_at"),
+                              "inventory_authoritative": True,
+                          }
+                      )
+              return model_rows
+
+
+          def persist_to_neo4j(
+              driver,
+              payload: dict[str, Any],
+              plans: list[LoadoutPlan],
+              task_profiles: list[dict[str, Any]],
+              *,
+              database: str = DEFAULT_NEO4J_DB,
+          ) -> dict[str, Any]:
+          ''',
+          )
+
+          replace_once(
+              '''    previous = _current_snapshot_info(driver)
+              previous_snapshot_id = str(previous["snapshot_id"]) if previous else None
+
+              node_rows = payload.get("nodes", [])
+              stats = payload.get("stats", {})
+
+              node_by_name = {row["name"]: row for row in node_rows if isinstance(row, dict) and row.get("name")}
+              model_rows: list[dict[str, Any]] = []
+              for row in node_rows:
+                  if not isinstance(row, dict):
+                      continue
+                  for model_id in row.get("loaded_models") or []:
+                      model_rows.append(
+                          {
+                              "model_id": model_id,
+                              "node_name": row["name"],
+                              "online": bool(row.get("online")),
+                              "latency_ms": row.get("latency_ms"),
+                              "loaded": True,
+                          }
+                      )
+
+              with driver.session(database=DEFAULT_NEO4J_DB) as session:
+          ''',
+              '''    previous = _current_snapshot_info(driver, database=database)
+              previous_snapshot_id = str(previous["snapshot_id"]) if previous else None
+
+              node_rows = payload.get("nodes", [])
+              model_rows = _authoritative_model_rows(node_rows)
+
+              with driver.session(database=database) as session:
+          ''',
+          )
+
+          replace_once(
+              '                        "loaded_models": len(model_rows),',
+              '                        "routable_loaded_models": len(model_rows),',
+          )
+
+          replace_once(
+              '''        if not args.dry_run:
+                      driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
+                      task_profiles = read_task_profiles(driver)
+          ''',
+              '''        if not args.dry_run:
+                      if not args.neo4j_password:
+                          parser.error(
+                              "NEO4J_PASSWORD or --neo4j-password is required unless "
+                              "--dry-run is used"
+                          )
+                      driver = GraphDatabase.driver(
+                          args.neo4j_uri,
+                          auth=(args.neo4j_user, args.neo4j_password),
+                      )
+                      task_profiles = read_task_profiles(
+                          driver,
+                          database=args.neo4j_database,
+                      )
+          ''',
+          )
+
+          replace_once(
+              '        persist_result = persist_to_neo4j(driver, report, plans, task_profiles)',
+              '''        persist_result = persist_to_neo4j(
+                      driver,
+                      report,
+                      plans,
+                      task_profiles,
+                      database=args.neo4j_database,
+                  )''',
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/test_fleet_loadout_authority.py")
+          test_path.write_text(
+              '''from __future__ import annotations
+
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          from auto_router.fleet_task_dispatcher import NodeInfo
+
+
+          SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_fleet_loadouts.py"
+          SPEC = importlib.util.spec_from_file_location(
+              "fleet_loadout_builder_under_test",
+              SCRIPT_PATH,
+          )
+          assert SPEC is not None and SPEC.loader is not None
+          builder = importlib.util.module_from_spec(SPEC)
+          sys.modules[SPEC.name] = builder
+          SPEC.loader.exec_module(builder)
+
+
+          def _node(**overrides) -> NodeInfo:
+              values = {
+                  "name": "node-a",
+                  "ip": "127.0.0.1",
+                  "online": True,
+                  "loaded_models": ["model-a"],
+                  "all_models": ["model-a"],
+                  "configured_models": ["model-a"],
+                  "model_aliases": {"local/model-a": "model-a"},
+                  "latency_ms": 12.0,
+                  "error": "",
+                  "warnings": [],
+                  "endpoint_status": {"api/v1/models": "ok:1"},
+                  "power_watts": 0.0,
+                  "base_url": "http://127.0.0.1:1234",
+                  "provider_name": "node-a",
+                  "discovery_source": "live",
+                  "inventory_complete": True,
+                  "inventory_authoritative": True,
+                  "loaded_state_source": "native",
+                  "observed_at": "2026-08-04T17:00:00+00:00",
+              }
+              values.update(overrides)
+              return NodeInfo(**values)
+
+
+          def test_candidates_require_authoritative_online_inventory() -> None:
+              assert builder.build_candidates(
+                  [_node()],
+                  {},
+                  "coding_high_throughput",
+              )
+              assert builder.build_candidates(
+                  [_node(inventory_authoritative=False)],
+                  {},
+                  "coding_high_throughput",
+              ) == []
+              assert builder.build_candidates(
+                  [_node(online=False)],
+                  {},
+                  "coding_high_throughput",
+              ) == []
+
+
+          def test_snapshot_preserves_provenance_and_routable_view() -> None:
+              authoritative = _node()
+              observed_only = _node(
+                  name="node-b",
+                  provider_name="node-b",
+                  inventory_complete=False,
+                  inventory_authoritative=False,
+                  loaded_state_source="compatibility-inferred",
+                  warnings=["loaded state unavailable"],
+              )
+
+              payload = builder._snapshot_payload(
+                  [observed_only, authoritative],
+                  {},
+                  [],
+                  [],
+              )
+              rows = {row["name"]: row for row in payload["nodes"]}
+
+              assert rows["node-a"]["routable_loaded_models"] == ["model-a"]
+              assert rows["node-a"]["inventory_authoritative"] is True
+              assert rows["node-a"]["loaded_state_source"] == "native"
+              assert rows["node-a"]["configured_models"] == ["model-a"]
+              assert rows["node-a"]["model_aliases"] == {
+                  "local/model-a": "model-a"
+              }
+              assert rows["node-b"]["loaded_models"] == ["model-a"]
+              assert rows["node-b"]["routable_loaded_models"] == []
+              assert rows["node-b"]["warnings"] == ["loaded state unavailable"]
+
+
+          def test_persistence_rows_exclude_non_authoritative_inventory() -> None:
+              payload = builder._snapshot_payload(
+                  [
+                      _node(),
+                      _node(
+                          name="node-b",
+                          provider_name="node-b",
+                          inventory_authoritative=False,
+                      ),
+                      _node(name="node-c", provider_name="node-c", online=False),
+                  ],
+                  {},
+                  [],
+                  [],
+              )
+
+              rows = builder._authoritative_model_rows(payload["nodes"])
+
+              assert len(rows) == 1
+              assert rows[0]["node_name"] == "node-a"
+              assert rows[0]["model_id"] == "model-a"
+              assert rows[0]["inventory_authoritative"] is True
+          ''',
+              encoding="utf-8",
+          )
+
+          workflow_path = Path(
+              ".github/workflows/one-time-fleet-loadout-hardening.yml"
+          )
+          workflow_path.unlink()
+          PY
+
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Validate loadout hardening
+        run: |
+          python -m compileall -q scripts/build_fleet_loadouts.py
+          python -m ruff check scripts/build_fleet_loadouts.py tests/test_fleet_loadout_authority.py --ignore E402,E501,I001
+          pytest -q tests/test_fleet_loadout_authority.py tests/test_fleet_live_discovery.py
+
+      - name: Commit generated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/build_fleet_loadouts.py tests/test_fleet_loadout_authority.py .github/workflows/one-time-fleet-loadout-hardening.yml
+          git commit -m "Harden fleet loadout authority and provenance"
+          git push origin HEAD:agent/restore-live-fleet-discovery
