@@ -5,8 +5,8 @@ import os
 import sys
 from pathlib import Path
 
-import pytest
 from neo4j import GraphDatabase
+import pytest
 
 from auto_router.fleet_task_dispatcher import NodeInfo
 
