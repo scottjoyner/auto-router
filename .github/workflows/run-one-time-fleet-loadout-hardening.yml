@@ -1,0 +1,70 @@
+name: Run one-time fleet loadout hardening
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - .github/workflows/run-one-time-fleet-loadout-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract and apply reviewed patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          source = Path(
+              ".github/workflows/one-time-fleet-loadout-hardening.yml"
+          ).read_text(encoding="utf-8")
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n"
+          if start_marker not in source or end_marker not in source:
+              raise SystemExit("could not locate embedded hardening patch")
+          body = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          body = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in body.splitlines()
+          )
+          patch_file = Path("/tmp/apply_fleet_loadout_hardening.py")
+          patch_file.write_text(body + "\n", encoding="utf-8")
+          subprocess.run([sys.executable, str(patch_file)], check=True)
+          Path(
+              ".github/workflows/run-one-time-fleet-loadout-hardening.yml"
+          ).unlink()
+          PY
+
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Validate loadout hardening
+        run: |
+          python -m compileall -q scripts/build_fleet_loadouts.py
+          python -m ruff check scripts/build_fleet_loadouts.py tests/test_fleet_loadout_authority.py --ignore E402,E501,I001
+          pytest -q tests/test_fleet_loadout_authority.py tests/test_fleet_live_discovery.py
+
+      - name: Commit generated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/build_fleet_loadouts.py tests/test_fleet_loadout_authority.py .github/workflows/one-time-fleet-loadout-hardening.yml .github/workflows/run-one-time-fleet-loadout-hardening.yml
+          git commit -m "Harden fleet loadout authority and provenance"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
