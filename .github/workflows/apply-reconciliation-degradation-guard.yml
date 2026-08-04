@@ -28,6 +28,20 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Align formatted patch anchor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/apply_reconciliation_degradation_guard.py')
+          text = path.read_text(encoding='utf-8')
+          old = "the current topology.\n'''"
+          new = "the current topology. Snapshot\n'''"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one formatted anchor, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Apply degradation guard patch
         run: python scripts/apply_reconciliation_degradation_guard.py
 
