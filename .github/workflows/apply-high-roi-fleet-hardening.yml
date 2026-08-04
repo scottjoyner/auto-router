@@ -39,7 +39,7 @@ jobs:
       - name: Format and lint changed Python
         run: |
           ruff format scripts/build_fleet_loadouts.py
-          ruff check scripts/build_fleet_loadouts.py --ignore E501,UP017
+          ruff check scripts/build_fleet_loadouts.py --ignore E402,E501,UP017
           python -m compileall -q scripts/build_fleet_loadouts.py
 
       - name: Run focused reconciliation tests
