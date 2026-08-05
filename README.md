@@ -158,9 +158,13 @@ reconcilers and rejects routable-model or authoritative-node drops greater than
 outages. Tune the threshold with `AUTO_ROUTER_MAX_FLEET_DROP_FRACTION` or
 `--max-fleet-drop-fraction`. `--allow-degraded-snapshot` and
 `--allow-empty-snapshot` are explicit destructive overrides for intentional
-fleet changes or drains. Reports are published atomically only after the Neo4j
-transaction commits, so rejected or partial reconciliation attempts cannot
-replace the last committed report or expose a partially built graph topology.
+fleet changes or drains. Reconciliation creates Neo4j uniqueness constraints
+for every mutable and immutable state identity, including the singleton writer
+lock. Reports are published atomically under the same lock/version fence only
+after the Neo4j transaction commits, so rejected, partial, concurrent, or stale
+reconciliation attempts cannot replace the last committed report or expose a
+partially built graph topology. The Neo4j account must have permission to create
+constraints; reconciliation fails closed when those invariants cannot be enforced.
 
 ## Routing policy
 

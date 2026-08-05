@@ -52,6 +52,44 @@ DEFAULT_NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 DEFAULT_NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 DEFAULT_NEO4J_DB = os.getenv("NEO4J_DATABASE", os.getenv("NEO4J_DB", "neo4j"))
 DEFAULT_MAX_FLEET_DROP_FRACTION = float(os.getenv("AUTO_ROUTER_MAX_FLEET_DROP_FRACTION", "0.5"))
+RECONCILIATION_SCHEMA_QUERIES = (
+    """
+    CREATE CONSTRAINT fleet_reconciliation_lock_name IF NOT EXISTS
+    FOR (n:FleetReconciliationLock) REQUIRE n.name IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_snapshot_id IF NOT EXISTS
+    FOR (n:FleetSnapshot) REQUIRE n.snapshot_id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_node_state_name IF NOT EXISTS
+    FOR (n:FleetNodeState) REQUIRE n.node_name IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_node_observation_id IF NOT EXISTS
+    FOR (n:FleetNodeObservation) REQUIRE n.observation_id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_model_state_id IF NOT EXISTS
+    FOR (n:FleetModelState) REQUIRE n.state_id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_model_observation_id IF NOT EXISTS
+    FOR (n:FleetModelObservation) REQUIRE n.observation_id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_loadout_id IF NOT EXISTS
+    FOR (n:FleetLoadout) REQUIRE n.loadout_id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_loadout_assignment_id IF NOT EXISTS
+    FOR (n:FleetLoadoutAssignment) REQUIRE n.assignment_id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT fleet_change_delta_id IF NOT EXISTS
+    FOR (n:FleetChangeDelta) REQUIRE n.delta_id IS UNIQUE
+    """,
+)
 
 REVIEWER_NODE_HINTS = {"x1-370", "xwing"}
 REVIEWER_MODEL_HINTS = ("ornith", "orinth")
@@ -520,7 +558,7 @@ def _current_snapshot_info(
             MATCH (s:FleetSnapshot)
             WHERE s.status = 'ready' OR s.status IS NULL
             RETURN s.snapshot_id AS snapshot_id, s.captured_at_ms AS captured_at_ms
-            ORDER BY coalesce(s.current, false) DESC, s.captured_at_ms DESC
+            ORDER BY coalesce(s.current, false) DESC, coalesce(s.reconciliation_lock_version, 0) DESC, s.captured_at_ms DESC
             LIMIT 1
             """
         ).single()
@@ -587,6 +625,22 @@ def _validate_snapshot_for_persistence(
         )
 
 
+def _ensure_reconciliation_schema(
+    driver,
+    *,
+    database: str,
+) -> None:
+    """Fail closed unless every reconciliation identity is schema-unique."""
+
+    try:
+        for query in RECONCILIATION_SCHEMA_QUERIES:
+            driver.execute_query(query, database_=database)
+    except Exception as exc:
+        raise UnsafeFleetSnapshotError(
+            "cannot enforce Neo4j reconciliation uniqueness constraints"
+        ) from exc
+
+
 def _locked_current_snapshot_info(tx, snapshot_id: str) -> dict[str, Any]:
     """Serialize reconcilers and read the predecessor while holding the lock."""
 
@@ -600,7 +654,7 @@ def _locked_current_snapshot_info(tx, snapshot_id: str) -> dict[str, Any]:
         OPTIONAL MATCH (s:FleetSnapshot)
         WHERE s.status = 'ready' OR s.status IS NULL
         WITH lock, s
-        ORDER BY coalesce(s.current, false) DESC, s.captured_at_ms DESC
+        ORDER BY coalesce(s.current, false) DESC, coalesce(s.reconciliation_lock_version, 0) DESC, s.captured_at_ms DESC
         RETURN s.snapshot_id AS snapshot_id,
                s.captured_at_ms AS captured_at_ms,
                s.model_count AS model_count,
@@ -677,6 +731,7 @@ def persist_to_neo4j(
         plans,
         allow_empty_snapshot=allow_empty_snapshot,
     )
+    _ensure_reconciliation_schema(driver, database=database)
 
     node_state_rows: list[dict[str, Any]] = []
     for row in node_rows:
@@ -1078,6 +1133,62 @@ def persist_to_neo4j(
     }
 
 
+def publish_committed_report(
+    driver,
+    path: Path,
+    report: dict[str, Any],
+    persistence: dict[str, Any],
+    *,
+    database: str = DEFAULT_NEO4J_DB,
+) -> bool:
+    """Publish only while the persisted snapshot still owns the reconciliation fence.
+
+    The transaction takes the same singleton write lock used by reconcilers. A
+    newer reconciliation therefore either waits for this report write and then
+    supersedes it, or commits first and causes this stale publisher to skip.
+    """
+
+    snapshot_id = str(persistence.get("snapshot_id") or "")
+    lock_version = persistence.get("reconciliation_lock_version")
+    if not snapshot_id or lock_version is None:
+        raise ValueError("persistence result is missing snapshot fencing metadata")
+
+    def publish(tx) -> bool:
+        current = tx.run(
+            """
+            MATCH (lock:FleetReconciliationLock {name: 'fleet-loadout'})
+            SET lock.report_publisher_snapshot_id = $snapshot_id,
+                lock.report_publisher_checked_at = datetime()
+            WITH lock
+            MATCH (s:FleetSnapshot {snapshot_id: $snapshot_id})
+            WHERE s.status = 'ready'
+              AND s.current = true
+              AND s.reconciliation_lock_version = $lock_version
+            RETURN s.snapshot_id AS snapshot_id
+            """,
+            snapshot_id=snapshot_id,
+            lock_version=lock_version,
+        ).single()
+        if not current:
+            return False
+
+        atomic_write_json(path, report)
+        tx.run(
+            """
+            MATCH (s:FleetSnapshot {snapshot_id: $snapshot_id})
+            SET s.report_published_at = datetime(),
+                s.report_path = $report_path,
+                s.updated_at = datetime()
+            """,
+            snapshot_id=snapshot_id,
+            report_path=str(path),
+        ).consume()
+        return True
+
+    with driver.session(database=database) as session:
+        return bool(session.execute_write(publish))
+
+
 def build_report(
     nodes: list[NodeInfo], stats: dict[str, Any], task_profiles: list[dict[str, Any]]
 ) -> tuple[dict[str, Any], list[LoadoutPlan]]:
@@ -1195,14 +1306,27 @@ def main() -> int:
         report["publication"] = {
             "mode": "committed",
             "graph_persisted": True,
+            "snapshot_id": persist_result["snapshot_id"],
+            "reconciliation_lock_version": persist_result["reconciliation_lock_version"],
         }
-        atomic_write_json(args.report_path, report)
+        report_published = publish_committed_report(
+            driver,
+            args.report_path,
+            report,
+            persist_result,
+            database=args.neo4j_database,
+        )
         print("")
         print(
             f"Persisted snapshot {persist_result['snapshot_id']} with {persist_result['loadout_count']} loadouts"
         )
         if persist_result.get("previous_snapshot_id"):
             print(f"Previous snapshot: {persist_result['previous_snapshot_id']}")
+        if not report_published:
+            print(
+                "Skipped JSON report publication because a newer fleet snapshot "
+                "already owns the reconciliation fence"
+            )
         return 0
     finally:
         if driver is not None:
