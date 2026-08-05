@@ -67,8 +67,8 @@ jobs:
         env:
           BRANCH: ${{ github.head_ref }}
         run: |
-          git rm scripts/apply_reconciliation_degradation_guard.py
-          git rm .github/workflows/apply-reconciliation-degradation-guard.yml
+          git rm -f scripts/apply_reconciliation_degradation_guard.py
+          git rm -f .github/workflows/apply-reconciliation-degradation-guard.yml
           git add scripts/build_fleet_loadouts.py README.md
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
