@@ -3,16 +3,28 @@ from __future__ import annotations
 from scripts.build_fleet_loadouts import Candidate, LoadoutPlan, NodeInfo, build_report, plan_loadout
 
 
-def _node(name: str, ip: str, models: list[str], latency_ms: float, online: bool = True) -> NodeInfo:
+def _node(
+    name: str,
+    ip: str,
+    models: list[str],
+    latency_ms: float,
+    online: bool = True,
+) -> NodeInfo:
     return NodeInfo(
         name=name,
         ip=ip,
         online=online,
         loaded_models=models,
         all_models=models,
+        configured_models=models,
         latency_ms=latency_ms,
         error="",
         power_watts=45.0,
+        discovery_source="live",
+        inventory_complete=True,
+        inventory_authoritative=True,
+        loaded_state_source="native",
+        observed_at="2026-08-05T01:00:00+00:00",
     )
 
 
