@@ -56,17 +56,19 @@ jobs:
 
           path = Path('scripts/build_fleet_loadouts.py')
           text = path.read_text(encoding='utf-8')
-          old = '''    try:
-              with driver.session(database=database) as session:
-                  for query in RECONCILIATION_SCHEMA_QUERIES:
-                      session.run(query).consume()
-          except Exception as exc:
-          '''
-          new = '''    try:
-              for query in RECONCILIATION_SCHEMA_QUERIES:
-                  driver.execute_query(query, database_=database)
-          except Exception as exc:
-          '''
+          old = (
+              "    try:\n"
+              "        with driver.session(database=database) as session:\n"
+              "            for query in RECONCILIATION_SCHEMA_QUERIES:\n"
+              "                session.run(query).consume()\n"
+              "    except Exception as exc:\n"
+          )
+          new = (
+              "    try:\n"
+              "        for query in RECONCILIATION_SCHEMA_QUERIES:\n"
+              "            driver.execute_query(query, database_=database)\n"
+              "    except Exception as exc:\n"
+          )
           if text.count(old) != 1:
               raise SystemExit(f'expected one schema retry anchor, found {text.count(old)}')
           path.write_text(text.replace(old, new), encoding='utf-8')
