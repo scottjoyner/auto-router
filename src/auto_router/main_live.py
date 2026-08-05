@@ -160,7 +160,7 @@ async def _admitted_dispatch(
     # No request may acquire capacity from a stale or absent AssistX generation.
     # Existing leases acquired while fresh can still finish and release safely.
     _projection_manager().assert_current_fresh()
-    lease = await _admission_controller().acquire(candidate)
+    lease = await _admission_controller().acquire(candidate, request.priority)
     try:
         # Revalidate after the queue wait so a revoked/expired task cannot consume
         # a model even if it entered admission while its claim was still valid.
@@ -195,7 +195,7 @@ async def _admitted_dispatch_stream(
     route_plan: Any | None = None,
 ) -> ProviderStreamResponse:
     _projection_manager().assert_current_fresh()
-    lease = await _admission_controller().acquire(candidate)
+    lease = await _admission_controller().acquire(candidate, request.priority)
     try:
         await assert_executor_claim_current(request, state)
         provider, selected_candidate, choice = await _select_provider(candidate)
