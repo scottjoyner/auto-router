@@ -137,6 +137,38 @@ Each admitted provider should include:
 
 For the live migration shadow deployment, use `config/providers.reconciliation.yaml`. It admits one operator-confirmed physical runtime only. Do not add another node until its physical owner, loaded process, completion health, container network reachability, and slot count are proven.
 
+## Fleet loadout reconciliation safety
+
+The fleet loadout builder reads live runtime inventory and writes both a current
+routing view and immutable snapshot observations. Production reconciliation
+requires explicit Neo4j credentials:
+
+```bash
+export NEO4J_URI=bolt://127.0.0.1:7687
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD='set-in-a-secret-store'
+export NEO4J_DATABASE=neo4j
+python scripts/build_fleet_loadouts.py
+```
+
+A normal run fails closed when discovery contains no authoritative loaded model,
+no task profiles, or a loadout without a primary assignment. It also serializes
+reconcilers and rejects routable-model or authoritative-node drops greater than
+50% by default, preserving the last known-good topology during partial discovery
+outages. Tune the threshold with `AUTO_ROUTER_MAX_FLEET_DROP_FRACTION` or
+`--max-fleet-drop-fraction`. `--allow-degraded-snapshot` and
+`--allow-empty-snapshot` are explicit destructive overrides for intentional
+fleet changes or drains. Reconciliation creates Neo4j uniqueness constraints
+for every mutable and immutable state identity, including the singleton writer
+lock. Reports are published atomically under the same lock/version fence only
+after the Neo4j transaction commits, so rejected, partial, concurrent, or stale
+reconciliation attempts cannot replace the last committed report or expose a
+partially built graph topology. The Neo4j account must have permission to create
+constraints; reconciliation fails closed when those invariants cannot be enforced.
+The dedicated Neo4j contract drops the constraints, starts two first-run
+reconcilers simultaneously, verifies one ordered fence chain and one current
+snapshot, and proves an older publisher cannot overwrite the winning JSON report.
+
 ## Routing policy
 
 All committed profiles use only the `local` provider class. Legacy aliases are retained for client compatibility but map to local behavior:
