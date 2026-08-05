@@ -165,6 +165,9 @@ after the Neo4j transaction commits, so rejected, partial, concurrent, or stale
 reconciliation attempts cannot replace the last committed report or expose a
 partially built graph topology. The Neo4j account must have permission to create
 constraints; reconciliation fails closed when those invariants cannot be enforced.
+The dedicated Neo4j contract drops the constraints, starts two first-run
+reconcilers simultaneously, verifies one ordered fence chain and one current
+snapshot, and proves an older publisher cannot overwrite the winning JSON report.
 
 ## Routing policy
 
