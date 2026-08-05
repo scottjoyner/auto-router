@@ -49,6 +49,29 @@ jobs:
       - name: Apply snapshot fencing patch
         run: python scripts/apply_snapshot_fencing_hardening.py
 
+      - name: Make schema initialization retryable
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/build_fleet_loadouts.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    try:
+              with driver.session(database=database) as session:
+                  for query in RECONCILIATION_SCHEMA_QUERIES:
+                      session.run(query).consume()
+          except Exception as exc:
+          '''
+          new = '''    try:
+              for query in RECONCILIATION_SCHEMA_QUERIES:
+                  driver.execute_query(query, database_=database)
+          except Exception as exc:
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one schema retry anchor, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
       - name: Install validation dependencies
         run: |
           python -m pip install --upgrade pip
