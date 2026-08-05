@@ -152,11 +152,15 @@ python scripts/build_fleet_loadouts.py
 ```
 
 A normal run fails closed when discovery contains no authoritative loaded model,
-no task profiles, or a loadout without a primary assignment. This preserves the
-last known-good topology during a discovery outage. `--allow-empty-snapshot` is
-an explicit destructive override intended only for a deliberate fleet drain.
-Reports are published atomically, and Neo4j writes use one transaction so a
-failed reconciliation cannot expose a partially built topology.
+no task profiles, or a loadout without a primary assignment. It also serializes
+reconcilers and rejects routable-model or authoritative-node drops greater than
+50% by default, preserving the last known-good topology during partial discovery
+outages. Tune the threshold with `AUTO_ROUTER_MAX_FLEET_DROP_FRACTION` or
+`--max-fleet-drop-fraction`. `--allow-degraded-snapshot` and
+`--allow-empty-snapshot` are explicit destructive overrides for intentional
+fleet changes or drains. Reports are published atomically only after the Neo4j
+transaction commits, so rejected or partial reconciliation attempts cannot
+replace the last committed report or expose a partially built graph topology.
 
 ## Routing policy
 

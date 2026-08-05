@@ -51,6 +51,7 @@ DEFAULT_NEO4J_URI = os.getenv("NEO4J_URI", "bolt://100.64.43.123:7687")
 DEFAULT_NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 DEFAULT_NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 DEFAULT_NEO4J_DB = os.getenv("NEO4J_DATABASE", os.getenv("NEO4J_DB", "neo4j"))
+DEFAULT_MAX_FLEET_DROP_FRACTION = float(os.getenv("AUTO_ROUTER_MAX_FLEET_DROP_FRACTION", "0.5"))
 
 REVIEWER_NODE_HINTS = {"x1-370", "xwing"}
 REVIEWER_MODEL_HINTS = ("ornith", "orinth")
@@ -586,6 +587,71 @@ def _validate_snapshot_for_persistence(
         )
 
 
+def _locked_current_snapshot_info(tx, snapshot_id: str) -> dict[str, Any]:
+    """Serialize reconcilers and read the predecessor while holding the lock."""
+
+    row = tx.run(
+        """
+        MERGE (lock:FleetReconciliationLock {name: 'fleet-loadout'})
+        SET lock.owner_snapshot_id = $snapshot_id,
+            lock.version = coalesce(lock.version, 0) + 1,
+            lock.updated_at = datetime()
+        WITH lock
+        OPTIONAL MATCH (s:FleetSnapshot)
+        WHERE s.status = 'ready' OR s.status IS NULL
+        WITH lock, s
+        ORDER BY coalesce(s.current, false) DESC, s.captured_at_ms DESC
+        RETURN s.snapshot_id AS snapshot_id,
+               s.captured_at_ms AS captured_at_ms,
+               s.model_count AS model_count,
+               s.authoritative_node_count AS authoritative_node_count,
+               lock.version AS lock_version
+        LIMIT 1
+        """,
+        snapshot_id=snapshot_id,
+    ).single()
+    return dict(row) if row else {}
+
+
+def _validate_snapshot_degradation(
+    previous: dict[str, Any],
+    *,
+    current_model_count: int,
+    current_authoritative_node_count: int,
+    max_drop_fraction: float,
+    allow_degraded_snapshot: bool,
+) -> None:
+    if allow_degraded_snapshot or not previous.get("snapshot_id"):
+        return
+    if not 0.0 <= max_drop_fraction <= 1.0:
+        raise ValueError("max_drop_fraction must be between 0 and 1")
+
+    regressions: list[str] = []
+    for label, previous_key, current_count in (
+        ("routable models", "model_count", current_model_count),
+        (
+            "authoritative nodes",
+            "authoritative_node_count",
+            current_authoritative_node_count,
+        ),
+    ):
+        previous_count = int(previous.get(previous_key) or 0)
+        if previous_count <= 0 or current_count >= previous_count:
+            continue
+        drop_fraction = (previous_count - current_count) / previous_count
+        if drop_fraction > max_drop_fraction:
+            regressions.append(
+                f"{label} dropped from {previous_count} to {current_count} ({drop_fraction:.1%})"
+            )
+
+    if regressions:
+        raise UnsafeFleetSnapshotError(
+            "refusing degraded fleet snapshot: "
+            + "; ".join(regressions)
+            + ". Use --allow-degraded-snapshot only for an intentional change."
+        )
+
+
 def persist_to_neo4j(
     driver,
     payload: dict[str, Any],
@@ -594,12 +660,12 @@ def persist_to_neo4j(
     *,
     database: str = DEFAULT_NEO4J_DB,
     allow_empty_snapshot: bool = False,
+    allow_degraded_snapshot: bool = False,
+    max_fleet_drop_fraction: float = DEFAULT_MAX_FLEET_DROP_FRACTION,
 ) -> dict[str, Any]:
     snapshot_id = str(uuid.uuid4())
     captured_at = utc_now()
     captured_at_ms = int(captured_at.timestamp() * 1000)
-    previous = _current_snapshot_info(driver, database=database)
-    previous_snapshot_id = str(previous["snapshot_id"]) if previous else None
 
     node_rows = [
         row for row in payload.get("nodes", []) if isinstance(row, dict) and row.get("name")
@@ -711,17 +777,29 @@ def persist_to_neo4j(
                 }
             )
 
-    delta_summary = {
-        "snapshot_id": snapshot_id,
-        "previous_snapshot_id": previous_snapshot_id,
-        "loadout_count": len(plans),
-        "changed_loadouts": (
-            [plan.task_profile_id for plan in plans] if previous_snapshot_id else []
-        ),
-    }
     summary = payload.get("summary") or {}
 
     def write_snapshot(tx) -> dict[str, Any]:
+        previous = _locked_current_snapshot_info(tx, snapshot_id)
+        previous_snapshot_id = str(previous["snapshot_id"]) if previous.get("snapshot_id") else None
+        current_authoritative_node_count = int(summary.get("authoritative_node_count") or 0)
+        _validate_snapshot_degradation(
+            previous,
+            current_model_count=len(model_state_rows),
+            current_authoritative_node_count=current_authoritative_node_count,
+            max_drop_fraction=max_fleet_drop_fraction,
+            allow_degraded_snapshot=(allow_degraded_snapshot or allow_empty_snapshot),
+        )
+        delta_summary = {
+            "snapshot_id": snapshot_id,
+            "previous_snapshot_id": previous_snapshot_id,
+            "reconciliation_lock_version": previous.get("lock_version"),
+            "loadout_count": len(plans),
+            "changed_loadouts": (
+                [plan.task_profile_id for plan in plans] if previous_snapshot_id else []
+            ),
+        }
+
         tx.run(
             """
             MERGE (s:FleetSnapshot {snapshot_id: $snapshot_id})
@@ -741,6 +819,7 @@ def persist_to_neo4j(
                 s.raw_json = $raw_json,
                 s.summary_json = $summary_json,
                 s.previous_snapshot_id = $previous_snapshot_id,
+                s.reconciliation_lock_version = $reconciliation_lock_version,
                 s.updated_at = datetime()
             """,
             snapshot_id=snapshot_id,
@@ -758,6 +837,7 @@ def persist_to_neo4j(
             raw_json=json.dumps(payload, sort_keys=True, default=str),
             summary_json=json.dumps(summary, sort_keys=True, default=str),
             previous_snapshot_id=previous_snapshot_id,
+            reconciliation_lock_version=previous.get("lock_version"),
         )
 
         # Mutable state nodes represent only the current topology. Snapshot
@@ -988,7 +1068,8 @@ def persist_to_neo4j(
     return {
         "snapshot_id": snapshot_id,
         "captured_at": captured_at.isoformat(),
-        "previous_snapshot_id": previous_snapshot_id,
+        "previous_snapshot_id": committed_delta.get("previous_snapshot_id"),
+        "reconciliation_lock_version": committed_delta.get("reconciliation_lock_version"),
         "node_count": len(node_state_rows),
         "model_count": len(model_state_rows),
         "loadout_count": len(plans),
@@ -1050,7 +1131,20 @@ def main() -> int:
         action="store_true",
         help=("Explicitly allow an empty/non-routable snapshot to replace current fleet state"),
     )
+    parser.add_argument(
+        "--allow-degraded-snapshot",
+        action="store_true",
+        help=("Explicitly allow a fleet topology drop larger than the configured safety threshold"),
+    )
+    parser.add_argument(
+        "--max-fleet-drop-fraction",
+        type=float,
+        default=DEFAULT_MAX_FLEET_DROP_FRACTION,
+        help="Maximum tolerated routable-model or authoritative-node drop (0-1)",
+    )
     args = parser.parse_args()
+    if not 0.0 <= args.max_fleet_drop_fraction <= 1.0:
+        parser.error("--max-fleet-drop-fraction must be between 0 and 1")
 
     stats = load_json(args.stats_path)
     nodes = probe_all_nodes()
@@ -1077,10 +1171,14 @@ def main() -> int:
             ]
 
         report, plans = build_report(nodes, stats, task_profiles)
-        atomic_write_json(args.report_path, report)
         print_report(report)
 
         if args.dry_run:
+            report["publication"] = {
+                "mode": "dry-run",
+                "graph_persisted": False,
+            }
+            atomic_write_json(args.report_path, report)
             return 0
 
         persist_result = persist_to_neo4j(
@@ -1090,7 +1188,15 @@ def main() -> int:
             task_profiles,
             database=args.neo4j_database,
             allow_empty_snapshot=args.allow_empty_snapshot,
+            allow_degraded_snapshot=args.allow_degraded_snapshot,
+            max_fleet_drop_fraction=args.max_fleet_drop_fraction,
         )
+        report["persistence"] = persist_result
+        report["publication"] = {
+            "mode": "committed",
+            "graph_persisted": True,
+        }
+        atomic_write_json(args.report_path, report)
         print("")
         print(
             f"Persisted snapshot {persist_result['snapshot_id']} with {persist_result['loadout_count']} loadouts"
