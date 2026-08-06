@@ -77,25 +77,42 @@ def _role_allowed(candidate: Any, family: str) -> bool:
     return True
 
 
-def _benchmark_key(candidate: Any, family: str, original_index: int) -> tuple[Any, ...]:
+def _quality_allowed(candidate: Any, family: str) -> bool:
+    evidence = candidate.model.task_family_scores.get(family)
+    if not isinstance(evidence, dict):
+        return True
+    return evidence.get("quality_floor_passed") is True
+
+
+def _benchmark_key(
+    candidate: Any,
+    family: str,
+    original_index: int,
+) -> tuple[Any, ...]:
     evidence = candidate.model.task_family_scores.get(family)
     if not isinstance(evidence, dict):
         return (1, 0.0, 0.0, original_index)
-    passed = evidence.get("quality_floor_passed") is True
     utility = float(evidence.get("utility_score") or 0.0)
     confidence = float(evidence.get("quality_confidence") or 0.0)
     quality = float(evidence.get("quality_score") or 0.0)
-    # A measured quality-floor failure is below unmeasured candidates. Passed
-    # evidence ranks by utility, then quality. Original order remains the final
-    # tiebreaker so the router's live load-balancing state is preserved.
-    return (0 if passed else 2, -utility, -quality * max(confidence, 0.25), original_index)
+    # Qualified evidence ranks before unmeasured eligible candidates. Original
+    # order remains the final tiebreaker so live load balancing is preserved.
+    return (0, -utility, -quality * max(confidence, 0.25), original_index)
 
 
-def benchmark_order(stage: ExecutionStage, request: RouterRequest) -> ExecutionStage:
+def benchmark_order(
+    stage: ExecutionStage,
+    request: RouterRequest,
+) -> ExecutionStage:
     family = normalize_task_family(request)
     if family == "general" or not stage.candidates:
         return stage
-    allowed = [candidate for candidate in stage.candidates if _role_allowed(candidate, family)]
+    allowed = [
+        candidate
+        for candidate in stage.candidates
+        if _role_allowed(candidate, family)
+        and _quality_allowed(candidate, family)
+    ]
     indexed = list(enumerate(allowed))
     indexed.sort(key=lambda item: _benchmark_key(item[1], family, item[0]))
     candidates = [candidate for _, candidate in indexed]
@@ -109,7 +126,9 @@ def benchmark_order(stage: ExecutionStage, request: RouterRequest) -> ExecutionS
                 f"tps={evidence.get('tokens_per_second')}"
             )
         else:
-            candidate.reason = f"{candidate.reason}; no {family} benchmark evidence"
+            candidate.reason = (
+                f"{candidate.reason}; no {family} benchmark evidence"
+            )
     return stage.model_copy(update={"candidates": candidates})
 
 
@@ -131,7 +150,11 @@ def install_benchmark_routing_policy() -> None:
             return profile
         return original_classify(self, request)
 
-    def build_stage(self: Any, policy_stage: Any, request: RouterRequest) -> ExecutionStage:
+    def build_stage(
+        self: Any,
+        policy_stage: Any,
+        request: RouterRequest,
+    ) -> ExecutionStage:
         stage = original_build_stage(self, policy_stage, request)
         return benchmark_order(stage, request)
 
