@@ -93,6 +93,30 @@ profiles:
         allow_local_fallback: true
         optional: true
 
+  summarization_local:
+    description: Route summaries to admitted full or auxiliary workers using summarization benchmarks.
+    stages:
+      - purpose: final
+        provider_classes: [local]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+
+  compression_local:
+    description: Route context compression to admitted full or auxiliary workers using compression benchmarks.
+    stages:
+      - purpose: final
+        provider_classes: [local]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+
+  extraction_local:
+    description: Route structured extraction to admitted full or auxiliary workers using extraction benchmarks.
+    stages:
+      - purpose: final
+        provider_classes: [local]
+        required_capabilities: [chat]
+        allow_local_fallback: true
+
   local_only:
     description: Never leave approved local endpoints.
     stages:
@@ -113,6 +137,12 @@ classification:
     auto/finalize: iterative_review_handoff
     auto/sophia: sophia_realtime
     auto/backlog-burn: backlog_local
+    auto/summarize: summarization_local
+    auto/summary: summarization_local
+    auto/compress: compression_local
+    auto/compact: compression_local
+    auto/extract: extraction_local
+    auto/parse: extraction_local
     auto/local: local_only
     auto/private: local_only
   local_only_markers:
@@ -127,3 +157,6 @@ classification:
     - refine_later
     - doc_review
     - test_generation
+    - summarization
+    - compression
+    - extraction

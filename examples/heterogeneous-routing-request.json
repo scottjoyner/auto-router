@@ -1,0 +1,14 @@
+{
+  "model": "auto/compress",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Compress this context while preserving decisions, identifiers, deadlines, and unresolved risks."
+    }
+  ],
+  "metadata": {
+    "task_family": "compression",
+    "privacy": "local_only",
+    "queue_class": "background"
+  }
+}
