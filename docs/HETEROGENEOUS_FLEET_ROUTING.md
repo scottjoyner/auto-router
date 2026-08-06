@@ -86,16 +86,18 @@ For a recognized family, the router:
 
 1. starts with candidates from the normal strict-offline policy;
 2. removes candidates whose signed worker roles do not permit the family;
-3. ranks measured quality-floor passes first;
-4. orders passed candidates by task-family utility and quality;
-5. keeps unmeasured eligible candidates behind qualified evidence;
-6. places measured quality-floor failures behind unmeasured candidates;
+3. removes exact node/model/family combinations with a measured quality-floor
+   failure;
+4. ranks measured quality-floor passes first;
+5. orders passed candidates by task-family utility and quality;
+6. keeps unmeasured eligible candidates behind qualified evidence;
 7. preserves the existing admission, load, LRU, latency, health, and private-path
    state as the final operational ordering signals.
 
 An auxiliary worker may therefore win summarization or compression while being
 ineligible for coding. High tokens per second never overrides a measured quality
-failure.
+failure, and a failed exact loadout cannot remain as the final fallback for that
+family.
 
 ## Roles
 
