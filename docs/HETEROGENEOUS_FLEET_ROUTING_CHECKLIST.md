@@ -9,8 +9,8 @@
 - [ ] `auto/extract` selects the extraction profile.
 - [ ] An auxiliary-only node is never selected for coding.
 - [ ] A measured quality-floor pass ranks ahead of unmeasured candidates.
-- [ ] An unmeasured eligible candidate ranks ahead of a measured quality-floor
-      failure.
+- [ ] A measured quality-floor failure is excluded for that exact
+      node/model/task-family combination.
 - [ ] Existing live load, LRU, health, and private access-path selection remain
       active after benchmark ordering.
 - [ ] Observer-only Tailscale peers appear in context but not provider capacity.
