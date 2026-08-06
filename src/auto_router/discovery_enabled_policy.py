@@ -1,13 +1,14 @@
 """Install enabled-state semantics for live LM Studio discovery.
 
-The original discovery parser predated the reconciled rollout controls and did
-not honor ``enabled: false``. This policy keeps disabled providers in the source
-registry for operator history while excluding them from validation, probing,
-and authoritative inventory.
+The legacy registry parser remains available for configuration diagnostics, but
+``probe_all_nodes`` uses only active providers. Disabled entries stay in the
+source registry for operator history while being excluded from validation,
+network access, and authoritative inventory.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -103,5 +104,58 @@ def install_enabled_discovery_policy() -> None:
             )
         return providers
 
-    discovery._provider_rows = active_provider_rows
+    def active_probe_all_nodes(
+        *,
+        provider_config: Path | None = None,
+        timeout_seconds: float = discovery.DEFAULT_TIMEOUT_SECONDS,
+        max_workers: int = discovery.DEFAULT_MAX_WORKERS,
+    ) -> list[Any]:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero")
+        if max_workers <= 0:
+            raise ValueError("max_workers must be greater than zero")
+
+        path = provider_config or discovery.DEFAULT_PROVIDER_CONFIG
+        registry_exists = path.exists()
+        providers = active_provider_rows(path)
+        if registry_exists:
+            if not providers:
+                return []
+            workers = min(max_workers, len(providers))
+            nodes: list[Any] = []
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="fleet-discovery",
+            ) as pool:
+                futures = {
+                    pool.submit(
+                        discovery._probe_provider,
+                        provider,
+                        timeout_seconds=timeout_seconds,
+                    ): provider
+                    for provider in providers
+                }
+                for future in as_completed(futures):
+                    provider = futures[future]
+                    try:
+                        nodes.append(future.result())
+                    except Exception as exc:
+                        nodes.append(
+                            discovery._unexpected_probe_failure(provider, exc)
+                        )
+            return sorted(nodes, key=lambda node: node.name.lower())
+
+        report_nodes = discovery._from_report(
+            discovery._load_json(discovery.DEFAULT_REPORT_PATH)
+        )
+        if report_nodes:
+            return sorted(report_nodes, key=lambda node: node.name.lower())
+        return sorted(
+            discovery._from_stats(
+                discovery._load_json(discovery.DEFAULT_STATS_PATH)
+            ),
+            key=lambda node: node.name.lower(),
+        )
+
+    discovery.probe_all_nodes = active_probe_all_nodes
     _INSTALLED = True
