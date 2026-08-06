@@ -3,9 +3,12 @@ name: Fleet live discovery
 on:
   pull_request:
     paths:
+      - 'src/auto_router/__init__.py'
       - 'src/auto_router/fleet_task_dispatcher.py'
+      - 'src/auto_router/discovery_enabled_policy.py'
       - 'scripts/discover_fleet_models.py'
       - 'tests/test_fleet_live_discovery.py'
+      - 'tests/test_disabled_provider_discovery.py'
       - 'config/providers.yaml'
       - '.env.example'
       - '.github/workflows/fleet-live-discovery.yml'
@@ -26,13 +29,21 @@ jobs:
       - name: Compile discovery paths
         run: |
           python -m py_compile \
+            src/auto_router/__init__.py \
             src/auto_router/fleet_task_dispatcher.py \
+            src/auto_router/discovery_enabled_policy.py \
             scripts/discover_fleet_models.py
       - name: Lint discovery paths
         run: |
           ruff check --ignore E402,E501,I001 \
+            src/auto_router/__init__.py \
             src/auto_router/fleet_task_dispatcher.py \
+            src/auto_router/discovery_enabled_policy.py \
             scripts/discover_fleet_models.py \
-            tests/test_fleet_live_discovery.py
+            tests/test_fleet_live_discovery.py \
+            tests/test_disabled_provider_discovery.py
       - name: Test discovery failure modes
-        run: pytest -q tests/test_fleet_live_discovery.py
+        run: |
+          pytest -q \
+            tests/test_fleet_live_discovery.py \
+            tests/test_disabled_provider_discovery.py
