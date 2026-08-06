@@ -40,6 +40,11 @@ class ModelConfig(BaseModel):
     capabilities: set[str] = Field(default_factory=set)
     context_window: int | None = None
     quota: dict[str, int] = Field(default_factory=dict)
+    task_family_scores: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    routing_roles: set[str] = Field(default_factory=set)
+    worker_mode: str | None = None
+    allow_agent_runtime: bool = False
+    allow_code_execution: bool = False
 
 
 class ProviderConfig(BaseModel):
@@ -64,6 +69,10 @@ class ProviderConfig(BaseModel):
     models: list[ModelConfig] = Field(default_factory=list)
     gateway_managed: bool = False  # Route through agentgateway when enabled
     local_gateway_only: bool = False  # Only use gateway for local-only requests
+    routing_roles: set[str] = Field(default_factory=set)
+    worker_mode: str | None = None
+    allow_agent_runtime: bool = False
+    allow_code_execution: bool = False
 
 
 class PolicyStage(BaseModel):
@@ -192,7 +201,15 @@ class RouteRequest(BaseModel):
     intent: RouteIntent = Field(default_factory=RouteIntent)
     context_requirements: ContextRequirements = Field(default_factory=ContextRequirements)
     tools: list[dict[str, Any]] | None = None
-    eligible_lanes: list[str] = Field(default_factory=lambda: ["local", "free_api", "paperclip", "paid_api", "heavy_reasoning"])
+    eligible_lanes: list[str] = Field(
+        default_factory=lambda: [
+            "local",
+            "free_api",
+            "paperclip",
+            "paid_api",
+            "heavy_reasoning",
+        ]
+    )
     blocked_lanes: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
