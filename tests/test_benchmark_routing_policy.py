@@ -122,7 +122,7 @@ def test_auxiliary_node_is_not_eligible_for_coding() -> None:
     assert [item.provider.node_id for item in ordered.candidates] == ["xwing"]
 
 
-def test_quality_floor_failure_sorts_after_unmeasured_candidate() -> None:
+def test_quality_floor_failure_is_excluded_before_unmeasured_fallback() -> None:
     stage = ExecutionStage(
         purpose=StagePurpose.final,
         candidates=[
@@ -147,10 +147,7 @@ def test_quality_floor_failure_sorts_after_unmeasured_candidate() -> None:
 
     ordered = benchmark_order(stage, _request("auto/compress"))
 
-    assert [item.provider.node_id for item in ordered.candidates] == [
-        "unknown",
-        "fast-bad",
-    ]
+    assert [item.provider.node_id for item in ordered.candidates] == ["unknown"]
 
 
 def test_aliases_and_metadata_classify_task_family() -> None:
