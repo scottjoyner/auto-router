@@ -22,6 +22,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import yaml
 
+from .offline_guard import host_is_offline_allowed
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROVIDER_CONFIG = Path(
@@ -122,6 +124,10 @@ def _validate_base_url(base_url: str, *, provider_name: str) -> None:
     if parsed.username or parsed.password:
         raise DiscoveryConfigError(
             f"provider {provider_name!r} must use api_token_env instead of URL credentials"
+        )
+    if not host_is_offline_allowed(parsed.hostname):
+        raise DiscoveryConfigError(
+            f"provider {provider_name!r} has a public or unresolved LM Studio host"
         )
 
 
@@ -316,7 +322,7 @@ def _probe_provider(
         ("api/v0/models", f"{root}/api/v0/models", True),
         ("v1/models", f"{root}/v1/models", False),
     )
-    with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+    with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
         for endpoint, url, native in endpoints:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
