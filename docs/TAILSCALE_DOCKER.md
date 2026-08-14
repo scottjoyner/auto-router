@@ -4,13 +4,13 @@ This document defines the supported pattern for exposing `auto-router`, AssistX,
 
 ## Design goal
 
-Application containers stay on private Docker networks. A Tailscale sidecar joins the tailnet with a stable identity and shares a network namespace with the application it exposes. HTTPS/Serve configuration belongs to the service deployment, is version controlled, and survives restarts.
+Application containers stay on private Docker networks. A Tailscale sidecar joins the tailnet with a stable identity and can share its network namespace with the application it exposes. HTTPS/Serve configuration belongs to the service deployment, is version controlled, and survives restarts.
 
 Do **not** replace an existing reverse proxy or stop unrelated containers as part of tailnet enrollment. Host-level Tailscale, Caddy, and per-service Tailscale sidecars are separate concerns and must be changed independently.
 
 ## Recommended service pattern
 
-For a service such as `auto-router`, run a Tailscale sidecar and put the application in the sidecar's network namespace with `network_mode: service:<tailscale-service>`.
+For a service such as `auto-router`, run a Tailscale sidecar and put the application in the sidecar's network namespace with `network_mode: service:<tailscale-service>`. The sidecar must itself join every Docker network the application needs, because the application inherits the sidecar's network namespace.
 
 ```yaml
 services:
@@ -24,11 +24,15 @@ services:
       TS_ACCEPT_DNS: "true"
       TS_SERVE_CONFIG: /config/serve.json
       TS_ENABLE_HEALTH_CHECK: "true"
+      TS_ENABLE_METRICS: "true"
       TS_LOCAL_ADDR_PORT: "[::]:9002"
     volumes:
       - auto-router-ts-state:/var/lib/tailscale
       - ./tailscale/auto-router:/config:ro
     restart: unless-stopped
+    networks:
+      - default
+      - assistx
 
   llm-router:
     build: .
@@ -38,6 +42,8 @@ services:
       AUTO_ROUTER_PORT: 8088
     depends_on:
       auto-router-ts:
+        condition: service_started
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=3).read()"]
@@ -45,6 +51,10 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+networks:
+  assistx:
+    external: true
 
 volumes:
   auto-router-ts-state:
@@ -58,35 +68,20 @@ Tailscale's container image uses userspace networking by default. That is the pr
 
 Use `TS_SERVE_CONFIG` for declarative HTTPS/Serve behavior. Mount the configuration as a **directory**, not as an individual file, so updates are detected correctly.
 
-Example `tailscale/auto-router/serve.json`:
+Do not hand-author a production `serve.json` from an outdated example. On a disposable/test node running the same Tailscale version, first configure the desired endpoint with the current `tailscale serve` CLI, then export the validated configuration with:
 
-```json
-{
-  "TCP": {
-    "443": {
-      "HTTPS": true
-    }
-  },
-  "Web": {
-    "${TS_CERT_DOMAIN}:443": {
-      "Handlers": {
-        "/": {
-          "Proxy": "http://127.0.0.1:8088"
-        }
-      }
-    }
-  }
-}
+```bash
+tailscale serve status --json
 ```
 
-Before production use, generate or export a known-good Serve document using `tailscale serve status --json` on a test node and commit the resulting shape. Do not synthesize production Serve JSON from memory when the running Tailscale version can validate/export it.
+Commit the validated configuration shape after removing machine-specific or secret material. The target for a sidecar-sharing application is normally the application's loopback listener, for example `http://127.0.0.1:8088`, because both containers share one network namespace.
 
 ## Nextcloud
 
 Nextcloud should receive its own stable tailnet hostname instead of being hidden behind a path prefix such as `/nextcloud`. The preferred topology is:
 
 ```text
-nextcloud.tailnet-name.ts.net:443 -> tailscale sidecar -> nextcloud:80
+nextcloud.<tailnet>.ts.net:443 -> Tailscale sidecar -> Nextcloud HTTP listener
 ```
 
 Keep the Nextcloud app and database on a private Docker network. Configure Nextcloud's trusted domains/proxies and overwrite protocol/host values for the final HTTPS hostname. Validate WebDAV, redirects, generated asset URLs, login, and `.well-known` endpoints before calling the deployment healthy.
@@ -118,9 +113,9 @@ TS_ENABLE_METRICS=true
 TS_LOCAL_ADDR_PORT=[::]:9002
 ```
 
-The orchestration health check should verify both planes independently:
+The orchestration and external probes should verify both planes independently:
 
-- Tailscale sidecar owns at least one tailnet IP and `/healthz` returns 200.
+- Tailscale sidecar owns at least one tailnet IP and its `/healthz` endpoint returns 200.
 - Application health endpoint succeeds via `127.0.0.1` in the shared namespace.
 - A separate end-to-end probe from another tailnet node resolves the service MagicDNS/FQDN and reaches HTTPS.
 
