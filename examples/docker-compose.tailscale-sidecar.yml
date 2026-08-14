@@ -1,0 +1,92 @@
+# Reference topology for a tailnet-only auto-router deployment.
+#
+# This is intentionally an example rather than an override for docker-compose.yml:
+# Compose merge semantics around `network_mode` + existing `networks`/`ports`
+# can produce an invalid or unexpectedly exposed service. Copy/adapt this as a
+# complete deployment definition and validate with `docker compose config`.
+
+services:
+  auto-router-ts:
+    image: tailscale/tailscale:stable
+    container_name: auto-router-ts
+    hostname: auto-router
+    environment:
+      TS_AUTHKEY: ${TAILSCALE_AUTHKEY:?TAILSCALE_AUTHKEY must be provided by deployment secrets}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      TS_ACCEPT_DNS: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_ENABLE_HEALTH_CHECK: "true"
+      TS_ENABLE_METRICS: "true"
+      TS_LOCAL_ADDR_PORT: "[::]:9002"
+      # Optional when using tagged automation credentials:
+      # TS_EXTRA_ARGS: --advertise-tags=tag:auto-router
+    volumes:
+      - auto-router-tailscale-state:/var/lib/tailscale
+      # Mount a directory, not a single serve.json file. Generate/export the
+      # configuration with the Tailscale CLI for the deployed client version.
+      - ../tailscale/auto-router:/config:ro
+    restart: unless-stopped
+    networks:
+      - router
+      - assistx
+
+  llm-router:
+    build:
+      context: ..
+    container_name: auto-router
+    # The application inherits the sidecar's tailnet and Docker interfaces.
+    network_mode: service:auto-router-ts
+    environment:
+      AUTO_ROUTER_HOST: 0.0.0.0
+      AUTO_ROUTER_PORT: 8088
+      AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.yaml
+      AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
+      AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
+      AUTO_ROUTER_CONTEXT_CONFIG: http://assistx-api:8000/api/router/context-projection
+      AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
+      AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
+      AUTO_ROUTER_STRICT_OFFLINE: "true"
+      AUTO_ROUTER_AUTOLOAD_ENABLED: "false"
+      AUTO_ROUTER_PLACEMENT_UNLOAD: "false"
+      AUTO_ROUTER_LOG_PROMPTS: "false"
+    volumes:
+      - ../config:/app/config:ro
+      - ../data:/data
+      - ../artifacts:/artifacts
+    depends_on:
+      auto-router-ts:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - router
+
+networks:
+  router:
+  assistx:
+    external: true
+    name: ${AUTO_ROUTER_ASSISTX_NETWORK:-home_scott_git_auto-assist_default}
+
+volumes:
+  auto-router-tailscale-state:
+  redis-data:
