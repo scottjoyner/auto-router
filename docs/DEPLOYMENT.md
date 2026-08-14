@@ -10,6 +10,15 @@ This guide covers the aligned deployment where AssistX is already running and `a
 - The router keeps its own Redis-backed quota state and local SQLite usage data.
 - Clients point to the router, not AssistX, for OpenAI-compatible LLM traffic.
 - Deployment verification should confirm canonical provider/model IDs are flowing through `/v1/models`, the dashboard, and the ops summaries.
+
+## Network and ingress policy
+
+Internal service-to-service traffic should use private Docker networks. Remote operator/client access should use an explicitly managed ingress layer rather than publishing every application port on `0.0.0.0`.
+
+For tailnet access, follow [TAILSCALE_DOCKER.md](TAILSCALE_DOCKER.md). The preferred model is a stable per-service Tailscale identity or an intentional central Caddy ingress; do not accidentally mix both for the same hostname. Tailscale sidecars must persist their state and deployment agents must validate application health separately from tailnet health.
+
+Before an autonomous agent modifies Docker, Caddy, Tailscale, or service exposure, it must satisfy [AGENT_INFRA_VISIBILITY.md](AGENT_INFRA_VISIBILITY.md). If the host reports active storage/filesystem I/O failures, freeze deployment reconciliation until the host is stable.
+
 ## Recommended topology
 
 ### Option A: shared Docker network
@@ -122,25 +131,35 @@ services:
     restart: unless-stopped
 ```
 
+The host-port mapping above is intentionally a minimal example. For production tailnet access, prefer the Tailscale sidecar or central ingress patterns in `TAILSCALE_DOCKER.md` and remove unnecessary LAN-wide port publication.
+
 If you use a shared network with AssistX, replace the `AUTO_ROUTER_CONTEXT_CONFIG` URL with the AssistX service DNS name instead of `host.docker.internal`.
 
 ## Startup order
 
-1. Start AssistX and verify `/api/context/projection` returns JSON.
-2. Start Redis for the router.
-3. Start `auto-router`.
-4. Check `GET /health` on the router.
-5. Check `GET /dashboard` for context providers, local providers, and free API providers.
-6. Point OpenAI-compatible clients at `http://<router-host>:8088/v1`.
+1. Pass the host-health gate in `AGENT_INFRA_VISIBILITY.md`.
+2. Start AssistX and verify `/api/context/projection` returns JSON.
+3. Start Redis for the router.
+4. Start Tailscale sidecar/ingress if that service uses one, and verify it owns a tailnet IP.
+5. Start `auto-router`.
+6. Check `GET /health` on the router from inside its application namespace.
+7. Check `GET /dashboard` for context providers, local providers, and free API providers.
+8. Validate the HTTPS/MagicDNS endpoint from an independent tailnet node.
+9. Point OpenAI-compatible clients at the validated `/v1` endpoint.
 
 ## Validation checklist
 
+- Host has no active storage/filesystem failure blocking safe deployment.
 - AssistX `/api/context/projection` responds successfully.
 - Router `/health` shows a non-bootstrap `context_revision`.
 - Router `/health` lists the expected local providers and free API providers.
 - Router `/v1/models` exposes lane metadata.
 - Streaming and non-streaming chat requests succeed through the router.
 - Local-only requests stay on local providers.
+- If a Tailscale sidecar is used, it has a persistent state directory and stable tailnet hostname.
+- Tailnet DNS resolves from an independent node.
+- HTTPS reaches the intended backend, with the expected redirect/TLS behavior.
+- No application port is published to the LAN unless there is a documented reason.
 
 ## Failure modes
 
@@ -148,19 +167,28 @@ If you use a shared network with AssistX, replace the `AUTO_ROUTER_CONTEXT_CONFI
 - If the projection is stale, the router continues with the last fetch and bootstrap fallback.
 - If provider keys are missing, health checks should show the affected provider as unhealthy without taking the router down.
 - If Redis is unavailable, the router should fall back to in-memory quota state only for local development; production should not rely on that fallback.
+- If the Tailscale sidecar is green but application health fails, debug the application namespace; do not assume ingress is healthy.
+- If the application is green but tailnet HTTPS fails, inspect Tailscale identity, Serve config, DNS/ACL policy, and ingress independently.
+- If Caddy currently owns ingress, do not stop it merely to test Tailscale Serve.
+- If the host reports storage I/O errors or filesystem corruption, stop deployment changes and switch to recovery workflow.
 
 ## Startup order summary
 
 1. Run the full test suite locally: `pytest -q`.
-2. Start AssistX first and verify `/api/context/projection` returns JSON.
-3. Start Redis for the router.
-4. Start `auto-router` with Docker Compose (`docker compose up -d --build`) or the local app wrapper.
-5. Check `GET /health` on the router.
-6. Check `GET /admin/ops/summary`, `GET /dashboard`, and `GET /v1/models` for canonical provider/model identity.
-7. Point OpenAI-compatible clients at `http://<router-host>:8088/v1`.
+2. Pass the host-health and visibility checks.
+3. Start AssistX first and verify `/api/context/projection` returns JSON.
+4. Start Redis for the router.
+5. Start the intended ingress/tailnet sidecar without replacing unrelated ingress.
+6. Start `auto-router` with Docker Compose (`docker compose up -d --build`) or the local app wrapper.
+7. Check `GET /health` on the router.
+8. Check `GET /admin/ops/summary`, `GET /dashboard`, and `GET /v1/models` for canonical provider/model identity.
+9. Validate DNS + HTTPS from a second tailnet node.
+10. Point OpenAI-compatible clients at the validated `/v1` endpoint.
 
 ## Related docs
 
+- [TAILSCALE_DOCKER.md](TAILSCALE_DOCKER.md)
+- [AGENT_INFRA_VISIBILITY.md](AGENT_INFRA_VISIBILITY.md)
 - [ALIGNMENT_EVENT.md](ALIGNMENT_EVENT.md)
 - [HLD.md](HLD.md)
 - [LLD.md](LLD.md)
