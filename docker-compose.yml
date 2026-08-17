@@ -10,7 +10,7 @@ services:
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
-      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://assistx-api:8000/api/router/context-projection}
+      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://host.docker.internal:8000/api/router/context-projection}
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
       AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS: ${AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS:-120}
@@ -27,12 +27,17 @@ services:
       AUTO_ROUTER_ASSISTX_TASKS_URL: ${AUTO_ROUTER_ASSISTX_TASKS_URL:-http://assistx-api:8000/api/router/backlog-candidates}
       AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS: ${AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS:-10}
 
-      # Reconciled deployment invariants. The gateway observes and forwards; it
-      # never escapes to hosted inference or autonomously changes runtime state.
+      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: ${AUTO_ROUTER_INTERNAL_SERVICE_TOKEN:?set AssistX-only router inference token}
+      AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED: "true"
+      AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: /run/secrets/assistx_executor_public_key.pem
+      AUTO_ROUTER_EXECUTOR_KEY_ID: assistx-executor-v1
+      AUTO_ROUTER_RUNTIME_PROJECTION_URL: ${AUTO_ROUTER_RUNTIME_PROJECTION_URL:-http://host.docker.internal:8000/api/router/runtime-projection}
+      AUTO_ROUTER_RUNTIME_PROJECTION_VERIFY_KEY_FILE: /run/secrets/assistx_runtime_projection_public_key.pem
+      AUTO_ROUTER_RUNTIME_PROJECTION_KEY_ID: ${AUTO_ROUTER_RUNTIME_PROJECTION_KEY_ID:-assistx-runtime-projection-v1}
       AUTO_ROUTER_STRICT_OFFLINE: "true"
       AUTO_ROUTER_AUTOLOAD_ENABLED: "false"
       AUTO_ROUTER_PLACEMENT_UNLOAD: "false"
-      AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "false"
+      AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "true"
       AUTO_ROUTER_AGENTGATEWAY_ENABLED: "false"
       AUTO_ROUTER_GATEWAY_MODE: direct
       AUTO_ROUTER_LOG_PROMPTS: "false"
@@ -41,6 +46,8 @@ services:
       - ./config:/app/config:ro
       - ./data:/data
       - ./artifacts:/artifacts
+      - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_runtime_projection_public_key.pem:ro
+      - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_executor_public_key.pem:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
