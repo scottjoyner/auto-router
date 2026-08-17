@@ -31,17 +31,15 @@ providers:
     node_id: deathstar-XPS-8920
     enabled: true
     base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://100.78.106.121:1234/v1}
-    priority: 145
+    # Deathstar's RX 480 is actively used by auto-ingest diarization.
+    # Keep this endpoint available as a constrained fallback.
+    priority: 220
     quota_class: local
     models:
       - alias: local/deathstar-0.8b
         provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
         capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning, hermes_worker]
         context_window: 262144
-      - alias: local/deathstar-toolcall
-        provider_model: refinedtoolcallv5-3b
-        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
-        context_window: 131072
 
   - name: lmstudio-x1-370
     type: lmstudio
@@ -64,59 +62,77 @@ providers:
         capabilities: [chat, json, low_latency, local_only]
         context_window: 32768
 
-  # Quarantined until one-slot admission control and a sustained concurrency canary pass.
+  # Bounded live trial: four active prompts, no waiting queue. Additional
+  # requests must be rejected/fallback instead of accumulating on Beelink.
   - name: lmstudio-beelink-ryzen-7-mini-pc
     type: lmstudio
     node_id: beelink-ryzen-7-mini-pc
-    enabled: false
+    runtime_instance_id: beelink-ryzen-7-mini-pc-lfm2.5-1.2b
+    enabled: true
     base_url: ${LMSTUDIO_BEELINK_BASE_URL:-http://100.85.72.121:1234/v1}
-    priority: 140
+    priority: 240
     quota_class: local
+    parallel_slots: 4
+    queue_limit: 0
+    queue_timeout_seconds: 0
     models:
-      - alias: local/worker-default
-        provider_model: vibethinker-3b-hermes
-        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
-        context_window: 131072
+      - alias: local/beelink-lfm-fast
+        provider_model: liquid/lfm2.5-1.2b
+        capabilities: [chat, streaming, json, local_only, quick_iteration, classification, compression, memory_constrained, low_concurrency]
+        context_window: 32768
+        max_concurrency: 4
+        recommended_use: [compression, classification, extraction, quick_iteration]
 
-  # Disabled: documented CPU fallback is too slow for useful fleet routing.
+  # Live-verified 2026-08-17: low-priority quick-iteration worker.
   - name: lmstudio-lenovo-ideapad-330s-15ikb
     type: lmstudio
     node_id: scott-lenovo-ideapad-330s-15ikb
-    enabled: false
+    enabled: true
     base_url: ${LMSTUDIO_LENOVO_BASE_URL:-http://scott-lenovo-ideapad-330s-15ikb.tailcb8954.ts.net:1234/v1}
     priority: 160
     quota_class: local
     models:
       - alias: local/lenovo-fast
-        provider_model: liquid/lfm2.5-1.2b
+        provider_model: headless
         capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
         context_window: 32768
 
-  # Disabled until the node is online and passes a real completion canary.
+  # Live-verified 2026-08-17: small quick-iteration worker. The previously
+  # configured liquid/lfm2.5-1.2b timed out and remains intentionally unused.
   - name: lmstudio-optiplex-9030-aio
     type: lmstudio
     node_id: scott-optiplex-9030-aio
-    enabled: false
+    runtime_instance_id: scott-optiplex-9030-aio-qwen035-08b
+    enabled: true
     base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
     priority: 155
     quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
     models:
       - alias: local/optiplex-fast
-        provider_model: liquid/lfm2.5-1.2b
-        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, memory_constrained, low_concurrency]
         context_window: 32768
+        max_concurrency: 1
+        recommended_use: [compression, classification, extraction, quick_iteration]
 
   - name: lmstudio-scotts-macbook-air
     type: lmstudio
     node_id: scotts-macbook-air
+    runtime_instance_id: scotts-macbook-air-qwen3.5-0.8b-mlx
     enabled: true
     base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
     priority: 150
     quota_class: local
+    parallel_slots: 2
+    queue_limit: 0
+    queue_timeout_seconds: 0
     models:
       - alias: local/quick-iterate
-        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
-        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning]
+        provider_model: qwen3.5-0.8b-mlx
+        capabilities: [chat, streaming, json, image_input, vision, low_latency, local_only, quick_iteration, reasoning]
         context_window: 262144
       - alias: local/tool-call
         provider_model: refinedtoolcallv5-3b
