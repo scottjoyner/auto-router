@@ -1,3 +1,5 @@
+import pytest
+
 from auto_router.cache_affinity_telemetry import (
     CacheAffinityTelemetryEnvelope,
     CandidateCacheTelemetry,
@@ -36,7 +38,7 @@ def test_ttft_observation_compares_authoritative_and_affinity_candidates():
     assert observation.affinity_candidate_id == "node-b"
     assert observation.actual_ttft_ms == 300
     assert observation.affinity_ttft_ms == 180
-    assert observation.ttft_reduction_ratio == 0.4
+    assert observation.ttft_reduction_ratio == pytest.approx(0.4)
     assert observation.agreed is False
 
 
@@ -48,6 +50,6 @@ def test_summary_emits_promotion_relevant_median_and_missing_counts():
     summary = summarize_ttft_evidence(observations)
     assert summary["observations"] == 2
     assert summary["comparable_ttft_observations"] == 2
-    assert summary["median_ttft_reduction_ratio"] == 0.3
+    assert summary["median_ttft_reduction_ratio"] == pytest.approx(0.3)
     assert summary["routing_safety_regressions"] == 0
     assert summary["authoritative_behavior_changed"] is False
