@@ -76,7 +76,7 @@ profiles:
     description: Low-latency local-only lane for realtime private traffic.
     stages:
       - purpose: final
-        provider_classes: [local]
+        provider_classes: [local, fast_free]
         required_capabilities: [chat, low_latency]
         allow_local_fallback: true
 

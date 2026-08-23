@@ -155,3 +155,16 @@ providers:
         provider_model: vibethinker-3b-hermes
         capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
         context_window: 131072
+
+  - name: lmstudio-r2d2
+    node_id: r2d2
+    type: lmstudio
+    enabled: true
+    base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
+    priority: 900
+    quota_class: local
+    models:
+      - alias: local/default
+        provider_model: local/default
+        capabilities: [chat, streaming, code, json, local_only]
+        context_window: 32768
