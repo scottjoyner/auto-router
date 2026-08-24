@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import logging
+logger = logging.getLogger(__name__)
 import math
 import os
 import threading
@@ -261,6 +263,12 @@ class ExecutorInferenceAuthMiddleware:
             model = str(payload.get("model") or "").strip()
             allowed_models = {str(item) for item in claims.get("allowed_model_aliases") or []}
             if not model or model not in allowed_models:
+                logger.warning(
+                    "executor scope reject: requested=%r allowed=%r gen=%r",
+                    model,
+                    sorted(allowed_models),
+                    claims.get("projection_generation"),
+                )
                 raise ExecutorAuthError("requested model is outside the executor token scope")
             input_tokens = _estimate_tokens(payload)
             output_tokens = _max_output(payload)
