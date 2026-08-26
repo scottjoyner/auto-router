@@ -258,8 +258,17 @@ async def _backlog_burn_loop() -> None:
 
     await asyncio.sleep(15)
     interval = int(getattr(_settings(), "backlog_burn_interval_seconds", 60) or 60)
+    logger.info("backlog-burn loop started (interval=%ss)", interval)
     while True:
         try:
+            # Power brake: never burn backlog while any node is off DAILY power
+            # (CONSERVE/SURVIVE) — batch jobs are the first thing an outage
+            # sacrifices (FLEET-STANDARD-LOADOUTS.md rule 6).
+            off_daily = {h: s["profile"] for h, s in _power_state_by_node().items() if s["profile"] != "daily"}
+            if off_daily:
+                logger.info("backlog-burn skipped: nodes off DAILY power: %s", off_daily)
+                await asyncio.sleep(interval)
+                continue
             url = f"http://127.0.0.1:{_settings().port}/admin/backlog/burn-down"
             async with httpx.AsyncClient() as client:
                 r = await client.post(
@@ -681,10 +690,58 @@ async def get_agent_job_artifacts(job_id: str) -> dict[str, Any]:
     return {"job_id": job_id, "artifacts": state.agent_jobs.artifacts_for(job_id)}
 
 
+def _apply_power_tiers_to_policy() -> None:
+    """Stamp power-tier reports onto the policy engine's provider_health map
+    under the names routing actually uses (state.providers composite names).
+    Runs per-request alongside the fleet-health-cache assignment; cheap dict
+    work, and only mutates entries for nodes whose tier differs from DAILY."""
+    power_map = _power_profile_by_node()
+    if not power_map:
+        return
+    try:
+        current = state.policy_engine.provider_health
+    except Exception:
+        return
+    if not isinstance(current, dict):
+        current = {}
+    node_map = _providers_by_node()
+    stamped = False
+    for host_lower, profile in power_map.items():
+        for provider_name in node_map.get(host_lower, []):
+            entry = current.get(provider_name)
+            if not isinstance(entry, dict):
+                entry = {
+                    "provider": provider_name,
+                    "ok": True,
+                    "stale": False,
+                    "age_seconds": 0,
+                    "model_count": None,
+                    "health_score": 100,
+                }
+                current[provider_name] = entry
+            prev_profile = entry.get("power_profile")
+            model_class = _power_state_by_node().get(host_lower, {}).get("model_class", "full")
+            _power_tier_apply(entry, profile, model_class)
+            if profile == "daily":
+                # keep probe-derived scoring authoritative; just mark tier
+                entry.pop("error", None) if entry.get("error", "").startswith("power-") else None
+            if prev_profile != profile:
+                if profile == "daily":
+                    logger.info("routing restored to DAILY: %s", provider_name)
+                else:
+                    logger.info("routing gated by power tier: %s -> %s", provider_name, profile)
+            stamped = True
+    if stamped:
+        state.policy_engine.provider_health = current
+
+
 async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingResponse:
     # Feed the router's probe-history health into the policy engine so routing
     # can demote/exclude flaky + unloaded nodes (liveness-gated routing).
     state.policy_engine.provider_health = _fleet_health_map()
+    # Overlay fleet power tiers (DAILY/CONSERVE/SURVIVE) so battery-state nodes
+    # are demoted/parked on top of probe evidence.
+    _apply_power_tiers_to_policy()
     plan = state.policy_engine.plan(router_request)
     settings = get_settings()
     # Hard bounds so a fleet full of dead/hung nodes can never make a single
@@ -1204,6 +1261,9 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
         if provider_open:
             report["ok"] = False
             report["detail"] = f"Circuit open: {', '.join(provider_open[:3])}"
+        node_state = _power_state_by_node().get(str(getattr(provider, "node_id", "") or "").lower())
+        if node_state:
+            _power_tier_apply(report, node_state["profile"], node_state["model_class"])
         reports.append(report)
         if hasattr(state, "signal_registry"):
             signals = provider_health_signals(provider.name, report, node_id=provider.node_id)
@@ -1221,15 +1281,115 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
 _FLEET_HEALTH_CACHE: dict[str, Any] = {"at": 0.0, "map": {}}
 
 
+def _power_state_by_node() -> dict[str, dict[str, str]]:
+    """Fresh node-report power state (FLEET-STANDARD-LOADOUTS.md) by hostname.
+
+    Returns {hostname_lower: {"profile": daily|conserve|survive,
+                               "model_class": full|essential|...}}."""
+    from auto_router.fleet_routes import _node_reports
+
+    now = int(time.time())
+    out: dict[str, dict[str, str]] = {}
+    for hostname, report in list(_node_reports.items()):
+        if now - int(report.get("received_at", 0)) > 120:
+            continue
+        profile = str(report.get("power_profile") or "").lower()
+        if profile in {"daily", "conserve", "survive"}:
+            out[hostname.lower()] = {
+                "profile": profile,
+                "model_class": str(report.get("power_model_class") or "full").lower(),
+            }
+    return out
+
+
+def _power_profile_by_node() -> dict[str, str]:
+    """Backward-compatible view: {hostname_lower: profile}."""
+    return {host: st["profile"] for host, st in _power_state_by_node().items()}
+
+
+def _providers_by_node() -> dict[str, list[str]]:
+    """Map lowercased provider node_id -> provider names.
+
+    Merges two registries on purpose: ``state.providers`` carries the
+    gateway/assistx-composite names seen by the live admin view, while the
+    providers.yaml registry carries the ``lmstudio-*`` names used as keys in
+    the probe-DB-backed routing health cache."""
+    node_map: dict[str, list[str]] = {}
+    try:
+        enabled = state.providers.enabled()
+        for provider in enabled:
+            node_id = str(getattr(provider, "node_id", "") or "").lower()
+            if node_id:
+                node_map.setdefault(node_id, []).append(str(provider.name))
+    except Exception:
+        pass
+    try:
+        import os
+
+        import auto_router.config as config_module
+
+        config_path = os.environ.get("AUTO_ROUTER_PROVIDER_CONFIG", "/app/config/providers.yaml")
+        registry = config_module.load_provider_registry(config_path)
+        for provider in registry.enabled():
+            node_id = str(getattr(provider, "node_id", "") or "").lower()
+            if node_id:
+                node_map.setdefault(node_id, []).append(str(provider.name))
+    except Exception:
+        pass
+    return node_map
+
+
+_POWER_TIER_LOG_STATE: dict[str, str] = {}
+
+
+def _power_tier_apply(report: dict[str, Any], profile: str, model_class: str = "full") -> None:
+    """Stamp one provider-health report with its node's power tier."""
+    report["power_profile"] = profile
+    report["power_model_class"] = model_class
+    if profile == "conserve":
+        if report.get("health_score") is not None:
+            report["health_score"] = min(int(report.get("health_score") or 0), 40)
+        if not report.get("error"):
+            report["error"] = "power-conserve (battery tier; demoted)"
+    elif profile == "survive":
+        report["ok"] = False
+        report["model_count"] = 0
+        report["health_score"] = 0
+        report["error"] = "power-survive (battery reserve; inference parked)"
+
+
+def _apply_power_tiers(health_map: dict[str, Any]) -> None:
+    """Overlay fleet power tiers onto the cached provider health used for
+    liveness-gated routing. CONSERVE demotes (still routable for essential
+    tasks); SURVIVE excludes via ok=False + model_count=0."""
+    power_state = _power_state_by_node()
+    if not power_state:
+        return
+    node_map = _providers_by_node()
+    applied: dict[str, str] = {}
+    for host_lower, state_info in power_state.items():
+        for provider_name in node_map.get(host_lower, []):
+            report = health_map.get(provider_name)
+            if isinstance(report, dict):
+                _power_tier_apply(report, state_info["profile"], state_info["model_class"])
+                applied[provider_name] = state_info["profile"]
+    if applied and applied != _POWER_TIER_LOG_STATE:
+        logger.info("fleet power tiers applied to routing health: %s", applied)
+        _POWER_TIER_LOG_STATE.clear()
+        _POWER_TIER_LOG_STATE.update(applied)
+
+
 async def refresh_fleet_health_task() -> None:
     """Periodically populate _FLEET_HEALTH_CACHE off the event loop."""
     while True:
         try:
             if hasattr(state, "model_registry"):
                 reports = await asyncio.to_thread(state.model_registry.provider_health_reports)
-                _FLEET_HEALTH_CACHE["map"] = {
+                health_map = {
                     str(report.get("provider") or ""): report for report in reports
                 }
+                await asyncio.to_thread(_apply_power_tiers, health_map)
+                _FLEET_HEALTH_CACHE["map"] = health_map
                 _FLEET_HEALTH_CACHE["at"] = time.time()
         except Exception:
             pass

@@ -61,6 +61,8 @@ async def node_report(request: Request) -> dict[str, Any]:
         "capabilities": body.get("capabilities") or [],
         "specs": body.get("specs") or {},
         "health": body.get("health") or {},
+        "power_profile": str(body.get("power_profile") or "").lower(),
+        "power_model_class": str(body.get("power_model_class") or "").lower(),
         "os": body.get("os"),
         "received_at": int(time.time()),
     }
