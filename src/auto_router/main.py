@@ -385,6 +385,13 @@ async def health() -> dict[str, Any]:
     context_projection = _context_projection_summary()
     model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     outbox_pressure = build_outbox_pressure_status(state)
+    reserved_providers = []
+    if hasattr(state, "policy_engine") and hasattr(state.policy_engine, "_provider_reserved"):
+        reserved_providers = sorted({
+            provider.name for provider in state.providers.enabled()
+            if state.policy_engine._provider_reserved(provider)
+        })
+    blocked_providers = sorted(set(state.context.blocked_provider_names()) | set(reserved_providers))
     # A live telemetry trickle sits at 'warning' (draining, below the critical
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
@@ -414,7 +421,8 @@ async def health() -> dict[str, Any]:
         "providers_enabled": len(state.providers.enabled()),
         "local_providers": state.context.local_provider_names(),
         "free_api_providers": state.context.free_api_provider_names(),
-        "blocked_providers": state.context.blocked_provider_names(),
+        "blocked_providers": blocked_providers,
+        "reserved_providers": reserved_providers,
         "model_registry_stale_providers": model_registry_summary.get("stale_providers", []) if hasattr(state, "model_registry") else [],
         "model_registry_error_providers": model_registry_summary.get("error_providers", []) if hasattr(state, "model_registry") else [],
         "running_local_nodes": state.context.running_local_node_names(),

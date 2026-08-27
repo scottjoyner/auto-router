@@ -95,6 +95,8 @@ def test_enqueue_route_execution_event_records_failure(tmp_path) -> None:
     assert payload["status"] == "failed"
     assert payload["error_type"] == "RuntimeError"
     assert payload["error_message"] == "provider failed"
+    assert payload["tokens_per_second"] is None
+    assert payload["value_per_second"] is None
 
 
 def test_route_execution_provider_model_id_does_not_double_prefix(tmp_path) -> None:

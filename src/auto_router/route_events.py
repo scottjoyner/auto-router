@@ -91,6 +91,13 @@ def enqueue_route_execution_event(
         else None
     )
     status = _route_status(status_code=status_code, error=error)
+    measurement_valid = error is None and status_code is not None and 200 <= status_code < 400
+    if not measurement_valid:
+        # Failed/unknown-status executions are outcomes, never performance samples.
+        # In particular, do not let timeout wall time divided by zero/near-zero
+        # output tokens become an absurd throughput value in the fleet ledger.
+        tokens_per_second = None
+        value_per_second = None
     event_type = f"router.execution_stage.{status}"
     idempotency_key = (
         f"{event_type}:{request.request_id}:{stage}:{canonical_provider}:"
