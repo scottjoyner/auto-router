@@ -83,7 +83,10 @@ providers:
         max_concurrency: 4
         recommended_use: [compression, classification, extraction, quick_iteration]
 
-  # Live-verified 2026-08-17: low-priority quick-iteration worker.
+  # Live-tuned 2026-08-26: resident LFM2.5-8B-A1B MoE (reasoning, ~1B active)
+  # at PP~26/TG~13 tok/s sustained on CPU @13W cap. CONSERVE auto-swaps this
+  # alias to LFM2.5-1.2B and router power tiers demote/exclude accordingly
+  # (FLEET-STANDARD-LOADOUTS.md). Battery field node.
   - name: lmstudio-lenovo-ideapad-330s-15ikb
     type: lmstudio
     node_id: scott-lenovo-ideapad-330s-15ikb
@@ -94,16 +97,17 @@ providers:
     models:
       - alias: local/lenovo-fast
         provider_model: headless
-        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration]
+        capabilities: [chat, streaming, json, local_only, quick_iteration, reasoning, moe]
         context_window: 32768
 
-  # Live-verified 2026-08-17: small quick-iteration worker. The previously
-  # configured liquid/lfm2.5-1.2b timed out and remains intentionally unused.
+  # CONTAINED 2026-08-27: OptiPlex is offline on Tailscale and LAN; repeated
+  # routed requests are timing out. Keep the Optimax dual-server config intact,
+  # but fail closed until direct /v1/models + completion proof returns.
   - name: lmstudio-optiplex-9030-aio
     type: lmstudio
     node_id: scott-optiplex-9030-aio
     runtime_instance_id: scott-optiplex-9030-aio-qwen035-08b
-    enabled: true
+    enabled: false
     base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
     priority: 155
     quota_class: local
