@@ -62,6 +62,29 @@ providers:
         capabilities: [chat, json, low_latency, local_only]
         context_window: 32768
 
+  # x1 FastFlowLM/Lemonade NPU lane. This is a separate runtime from the
+  # LM Studio :1234 provider above. The API does not expose a context limit;
+  # keep admission conservative at 32K until a bounded long-context benchmark
+  # proves more. Exact live model identity is qwen3.6-moe:35b-a3b, not Ornith.
+  - name: fastflowlm-x1-npu
+    type: openai_compatible
+    node_id: x1-370
+    runtime_instance_id: x1-370-fastflowlm-qwen3.6-moe-35b-a3b
+    enabled: true
+    base_url: ${FASTFLOWLM_X1_NPU_BASE_URL:-http://100.64.43.123:52625/v1}
+    priority: 115
+    quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    models:
+      - alias: local/qwen3.6-moe-35b-a3b
+        provider_model: qwen3.6-moe:35b-a3b
+        capabilities: [chat, streaming, reasoning, json, local_only, large_context, hermes_worker]
+        context_window: 32768
+        max_concurrency: 1
+        recommended_use: [reasoning, review, long_context]
+
   # Bounded live trial: four active prompts, no waiting queue. Additional
   # requests must be rejected/fallback instead of accumulating on Beelink.
   - name: lmstudio-beelink-ryzen-7-mini-pc
@@ -172,3 +195,16 @@ providers:
         provider_model: local/default
         capabilities: [chat, streaming, code, json, local_only]
         context_window: 32768
+
+  - name: lmstudio-destroyer-k2
+    type: lmstudio
+    node_id: destroyer
+    enabled: true
+    base_url: http://destroyer.tailcb8954.ts.net:1235/v1
+    priority: 120
+    quota_class: local
+    models:
+      - alias: local/destroyer-36b
+        provider_model: k2-horizon-moVA-36B-A4B
+        capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker]
+        context_window: 57344
