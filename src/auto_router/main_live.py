@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
 from fastapi import Body, Depends, FastAPI, HTTPException
+from starlette.responses import JSONResponse, StreamingResponse
 
 from auto_router.offline_guard import (
     enforce_strict_offline_provider_config,
@@ -55,6 +57,7 @@ _RETIRED_INHERITED_PATHS = {
 
 _ORIGINAL_DISPATCH = main_module._dispatch
 _ORIGINAL_DISPATCH_STREAM = main_module._dispatch_stream
+_ORIGINAL_EXECUTE = main_module._execute
 
 
 async def _cancel_tasks(tasks: list[asyncio.Task[object]]) -> None:
@@ -214,6 +217,219 @@ async def _admitted_dispatch_stream(
     return response
 
 
+async def _execute_with_access_paths(router_request: RouterRequest) -> JSONResponse | StreamingResponse:
+    """Execute a request using the access path selector for approved runtime paths."""
+    # Feed the router's probe-history health into the policy engine so routing
+    # can demote/exclude flaky + unloaded nodes (liveness-gated routing).
+    state.policy_engine.provider_health = main_module._fleet_health_map()
+    plan = state.policy_engine.plan(router_request)
+    settings = get_settings()
+    # Hard bounds so a fleet full of dead/hung nodes can never make a single
+    # request hang for (attempt_timeout * candidate_count). We stop trying once
+    # the deadline passes or we've burned max_candidate_attempts.
+    deadline = time.monotonic() + settings.request_deadline_seconds
+    attempts = 0
+    timed_out = False
+    errors: list[str] = []
+    for stage in plan.stages:
+        if not stage.candidates and stage.optional:
+            continue
+        stage_rejections: list[str] = []
+        # Release the plan-time reservation for this stage's top candidate now that
+        # we're committing to executing it (in-flight tracking takes over from here).
+        if stage.candidates:
+            state.policy_engine.mark_planned_end(
+                f"{stage.candidates[0].provider.name}/{stage.candidates[0].model.alias}"
+            )
+        for candidate in stage.candidates:
+            if time.monotonic() > deadline or attempts >= settings.max_candidate_attempts:
+                timed_out = True
+                break
+            attempts += 1
+            owner = main_module._owner(candidate)
+            if not main_module._candidate_allowed(router_request, candidate, state.context):
+                rejection = f"not allowed for {owner}"
+                stage_rejections.append(rejection)
+                continue
+            if not state.circuits.allowed(owner):
+                rejection = f"circuit open for {owner}"
+                stage_rejections.append(rejection)
+                errors.append(rejection)
+                continue
+            estimate = await asyncio.to_thread(state.quota.estimate, candidate.model, router_request.raw_body)
+            if not await asyncio.to_thread(state.quota.reserve, candidate.provider, candidate.model, estimate):
+                rejection = f"quota unavailable for {candidate.provider.name}/{candidate.model.alias}"
+                stage_rejections.append(rejection)
+                errors.append(rejection)
+                continue
+            await asyncio.to_thread(
+                main_module.enqueue_route_decision_event,
+                state,
+                request=router_request,
+                profile_name=plan.profile_name,
+                stage=stage.purpose.value,
+                chosen_candidate=candidate,
+                candidates=stage.candidates,
+                rejections=stage_rejections,
+            )
+            state.policy_engine.mark_inflight_start(owner)
+            # Use access path selector to get approved URL
+            _projection_manager().assert_current_fresh()
+            lease = await _admission_controller().acquire(candidate)
+            try:
+                # Only validate executor claim for requests that carry executor metadata
+                metadata = router_request.metadata if isinstance(router_request.metadata, dict) else {}
+                if metadata.get("assistx_executor"):
+                    await assert_executor_claim_current(router_request, state)
+                provider, selected_candidate, choice = await _select_provider(candidate)
+                _annotate_request_telemetry(router_request, selected_candidate, choice)
+                started_at_ms = int(time.time() * 1000)
+                started = time.perf_counter()
+                try:
+                    if router_request.stream and router_request.route in {"chat_completions", "responses", "completions"}:
+                        gateway_context = main_module._gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
+                        stream_response = await asyncio.wait_for(
+                            _dispatch_stream_with_choice(provider, selected_candidate, router_request, route_plan=gateway_context),
+                            timeout=settings.attempt_timeout_seconds,
+                        )
+                        state.policy_engine.mark_inflight_end(owner)
+                        latency_ms = int((time.perf_counter() - started) * 1000)
+                        ended_at_ms = int(time.time() * 1000)
+                        state.policy_engine.mark_latency(owner, latency_ms)
+                        state.circuits.record_success(owner)
+                        gateway_metadata = None
+                        if stream_response.provider.startswith("agentgateway"):
+                            gateway_metadata = {
+                                "provider": stream_response.provider,
+                                "profile": gateway_context.profile,
+                                "stage": gateway_context.stage,
+                                "privacy": gateway_context.privacy,
+                                "quota_mode": gateway_context.quota_mode,
+                                "latency_ms": latency_ms,
+                            }
+                        await asyncio.to_thread(
+                            main_module._record_usage,
+                            router_request,
+                            stream_response.provider,
+                            stream_response.model,
+                            stage.purpose.value,
+                            estimate,
+                            stream_response.status_code,
+                            latency_ms,
+                            gateway_metadata=gateway_metadata,
+                            started_at_ms=started_at_ms,
+                            ended_at_ms=ended_at_ms,
+                        )
+                        return StreamingResponse(
+                            stream_response.body,
+                            status_code=stream_response.status_code,
+                            media_type=stream_response.headers.get("content-type", "text/event-stream"),
+                            headers={
+                                "x-auto-router-provider": stream_response.provider,
+                                "x-auto-router-model": stream_response.model,
+                                "x-auto-router-stage": stage.purpose.value,
+                                "x-auto-router-profile": plan.profile_name,
+                            },
+                        )
+                    gateway_context = main_module._gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
+                    response = await asyncio.wait_for(
+                        _dispatch_with_choice(provider, selected_candidate, router_request, route_plan=gateway_context),
+                        timeout=settings.attempt_timeout_seconds,
+                    )
+                    state.policy_engine.mark_inflight_end(owner)
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    state.policy_engine.mark_latency(owner, latency_ms)
+                    state.circuits.record_success(owner)
+                    await asyncio.to_thread(
+                        main_module._record_usage,
+                        router_request,
+                        response.provider,
+                        response.model,
+                        stage.purpose.value,
+                        estimate,
+                        response.status_code,
+                        latency_ms,
+                        started_at_ms=started_at_ms,
+                        ended_at_ms=int(time.time() * 1000),
+                    )
+                    return JSONResponse(
+                        content=response.data,
+                        status_code=response.status_code,
+                        headers={
+                            "x-auto-router-provider": response.provider,
+                            "x-auto-router-model": response.model,
+                            "x-auto-router-stage": stage.purpose.value,
+                            "x-auto-router-profile": plan.profile_name,
+                        },
+                    )
+                except asyncio.TimeoutError:
+                    state.policy_engine.mark_inflight_end(owner)
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    state.policy_engine.mark_latency(owner, latency_ms)
+                    state.circuits.record_failure(owner, "timeout")
+                    errors.append(f"timeout for {owner}")
+                    continue
+                except Exception as exc:
+                    state.policy_engine.mark_inflight_end(owner)
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    state.policy_engine.mark_latency(owner, latency_ms)
+                    state.circuits.record_failure(owner, str(exc))
+                    errors.append(f"{type(exc).__name__}: {exc}")
+                    continue
+            finally:
+                await lease.release()
+    # All candidates exhausted
+    if timed_out:
+        raise HTTPException(status_code=504, detail={"error": "request deadline exceeded", "errors": errors})
+    raise HTTPException(status_code=503, detail={"error": "no available provider", "errors": errors})
+
+
+async def _dispatch_with_choice(
+    provider: Any,
+    candidate: ProviderCandidate,
+    request: RouterRequest,
+    route_plan: Any | None = None,
+) -> ProviderResponse:
+    provider_model = candidate.model.provider_model
+    if request.route == "chat_completions":
+        if isinstance(provider, main_module.AgentGatewayProviderAdapter):
+            return await provider.chat_completions(request, provider_model, route_plan=route_plan)
+        return await provider.chat_completions(request, provider_model)
+    if request.route == "responses":
+        if isinstance(provider, main_module.AgentGatewayProviderAdapter):
+            return await provider.responses(request, provider_model)
+        return await provider.responses(request, provider_model)
+    if request.route == "embeddings":
+        return await provider.embeddings(request, provider_model)
+    if request.route == "completions":
+        if isinstance(provider, main_module.AgentGatewayProviderAdapter):
+            return await provider.completions(request, provider_model)
+        return await provider.completions(request, provider_model)
+    raise main_module.ProviderError(f"unsupported route {request.route}", retryable=False)
+
+
+async def _dispatch_stream_with_choice(
+    provider: Any,
+    candidate: ProviderCandidate,
+    request: RouterRequest,
+    route_plan: Any | None = None,
+) -> ProviderStreamResponse:
+    provider_model = candidate.model.provider_model
+    if request.route == "chat_completions":
+        if isinstance(provider, main_module.AgentGatewayProviderAdapter):
+            return await provider.stream_chat_completions(request, provider_model, route_plan=route_plan)
+        return await provider.stream_chat_completions(request, provider_model)
+    if request.route == "responses":
+        if isinstance(provider, main_module.AgentGatewayProviderAdapter):
+            return await provider.stream_responses(request, provider_model)
+        return await provider.stream_responses(request, provider_model)
+    if request.route == "completions":
+        if isinstance(provider, main_module.AgentGatewayProviderAdapter):
+            return await provider.stream_completions(request, provider_model)
+        return await provider.stream_completions(request, provider_model)
+    raise main_module.ProviderError(f"unsupported stream route {request.route}", retryable=False)
+
+
 @asynccontextmanager
 async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Start only AssistX projection, admission control, and local housekeeping loops.
@@ -264,6 +480,7 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 main_module._dispatch = _admitted_dispatch
 main_module._dispatch_stream = _admitted_dispatch_stream
+main_module._execute = _execute_with_access_paths
 install_route_event_patch(main_module)
 install_strict_assistx_route_guard(assistx_routes_module)
 _remove_retired_inherited_routes()
