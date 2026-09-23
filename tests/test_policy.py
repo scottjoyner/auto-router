@@ -156,7 +156,7 @@ def test_exact_artifact_identity_routes_across_all_eligible_replicas() -> None:
         request_id="artifact-1",
         route="chat_completions",
         local_only=True,
-        metadata={"assistx_artifact_fingerprint": "sha256:bonsai"},
+        metadata={"assistx_service": {"identity": "assistx-internal", "authenticated": True}, "assistx_artifact_fingerprint": "sha256:bonsai"},
     )
 
     plan = engine.plan(request)
@@ -172,6 +172,43 @@ def test_exact_artifact_identity_routes_across_all_eligible_replicas() -> None:
     assert plan.stages[0].allow_local_fallback is False
 
 
+def test_exact_artifact_identity_rejects_untrusted_metadata_selector() -> None:
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="runtime-a",
+                type="lmstudio",
+                base_url="http://runtime-a:1234/v1",
+                quota_class="local",
+                models=[
+                    ModelConfig(
+                        alias="allowed-alias",
+                        provider_model="allowed-provider-model",
+                        artifact_fingerprint="sha256:protected",
+                        capabilities={"chat"},
+                    )
+                ],
+            )
+        ]
+    )
+    policies = PolicyRegistry(
+        profiles={"interactive_balanced": PolicyProfile(stages=[])}
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="artifact-untrusted",
+        route="chat_completions",
+        model="allowed-alias",
+        metadata={"assistx_artifact_fingerprint": "sha256:protected"},
+    )
+
+    plan = engine.plan(request)
+
+    assert plan.profile_name == "exact_artifact"
+    assert plan.stages[0].candidates == []
+    assert plan.stages[0].allow_local_fallback is False
+
+
 def test_exact_artifact_identity_fails_closed_when_no_route_exists() -> None:
     providers = ProviderRegistry(providers=[])
     policies = PolicyRegistry(
@@ -181,7 +218,7 @@ def test_exact_artifact_identity_fails_closed_when_no_route_exists() -> None:
     request = RouterRequest(
         request_id="artifact-missing",
         route="chat_completions",
-        metadata={"assistx_artifact_fingerprint": "sha256:missing"},
+        metadata={"assistx_service": {"identity": "assistx-internal", "authenticated": True}, "assistx_artifact_fingerprint": "sha256:missing"},
     )
 
     plan = engine.plan(request)
@@ -233,7 +270,7 @@ def test_exact_artifact_identity_respects_local_only_boundary() -> None:
         route="chat_completions",
         local_only=True,
         allow_cloud=False,
-        metadata={"assistx_artifact_fingerprint": "sha256:same"},
+        metadata={"assistx_service": {"identity": "assistx-internal", "authenticated": True}, "assistx_artifact_fingerprint": "sha256:same"},
     )
 
     plan = engine.plan(request)
