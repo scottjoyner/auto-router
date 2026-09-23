@@ -144,6 +144,30 @@ class PolicyEngine:
         ).strip()
 
         if requested_artifact:
+            # Exact artifact identity is an internal AssistX control-plane selector.
+            # The inference auth middleware injects this marker only after the
+            # dedicated internal service token authenticates. An executor-scoped
+            # token or arbitrary caller must not be able to smuggle an artifact
+            # fingerprint in metadata and bypass its allowed-model scope.
+            assistx_service = metadata.get("assistx_service")
+            service_authenticated = (
+                isinstance(assistx_service, dict)
+                and assistx_service.get("authenticated") is True
+                and assistx_service.get("identity") == "assistx-internal"
+            )
+            if not service_authenticated:
+                return ExecutionPlan(
+                    profile_name="exact_artifact",
+                    stages=[
+                        ExecutionStage(
+                            purpose=StagePurpose.final,
+                            candidates=[],
+                            required_capabilities=request.required_capabilities,
+                            allow_local_fallback=False,
+                        )
+                    ],
+                )
+
             candidates: list[ProviderCandidate] = []
             for provider in self.providers.enabled():
                 if not self._provider_is_eligible(provider, request):
