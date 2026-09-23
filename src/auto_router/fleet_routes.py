@@ -18,6 +18,7 @@ import asyncio
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -33,6 +34,85 @@ router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 _node_reports: dict[str, dict[str, Any]] = {}
 _sse_subscribers: list[asyncio.Queue] = []
 _STALE_SECONDS = 180
+
+
+_RUNTIME_KINDS = {
+    "lmstudio",
+    "lm_studio",
+    "llama_cpp",
+    "vllm",
+    "sglang",
+    "openai_compatible",
+}
+_RUNTIME_PROTOCOLS = {"lmstudio-native", "openai-compatible"}
+
+
+def _sanitize_runtime_observations(value: Any) -> list[dict[str, Any]]:
+    """Keep bounded non-admitting runtime evidence from node reporters.
+
+    Fleet reports are visibility/evidence only. They must never be able to
+    smuggle an admitted RuntimeInstance, artifact identity, or routing
+    credential into the signed AssistX projection.
+    """
+
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for raw in value[:32]:
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("observation_schema") != "fleet-runtime-observation.v1":
+            continue
+        observation_id = str(raw.get("runtime_observation_id") or "").strip()
+        runtime_kind = str(raw.get("runtime_kind") or "").strip().lower()
+        protocol = str(raw.get("protocol") or "").strip().lower()
+        base_url = str(raw.get("base_url") or "").strip().rstrip("/")
+        if (
+            not observation_id
+            or len(observation_id) > 128
+            or observation_id in seen_ids
+            or runtime_kind not in _RUNTIME_KINDS
+            or protocol not in _RUNTIME_PROTOCOLS
+        ):
+            continue
+        parsed = urlparse(base_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or len(base_url) > 512
+        ):
+            continue
+        models = sorted(
+            {
+                str(model).strip()
+                for model in (raw.get("models") or [])[:64]
+                if str(model).strip() and len(str(model).strip()) <= 256
+            }
+        )
+        try:
+            observed_at = int(raw.get("observed_at") or 0)
+        except (TypeError, ValueError):
+            observed_at = 0
+        seen_ids.add(observation_id)
+        out.append(
+            {
+                "observation_schema": "fleet-runtime-observation.v1",
+                "runtime_observation_id": observation_id,
+                "runtime_kind": runtime_kind,
+                "protocol": protocol,
+                "base_url": base_url,
+                "models": models,
+                "ready": bool(raw.get("ready")),
+                "observed_at": observed_at,
+                # Explicitly force observation-only semantics even if an
+                # untrusted sender attempts to set admitted=true.
+                "admitted": False,
+            }
+        )
+    return out
 
 
 def _publish(report: dict[str, Any]) -> None:
@@ -58,6 +138,7 @@ async def node_report(request: Request) -> dict[str, Any]:
         "ip": src_ip or body.get("ip"),
         "library": body.get("library") or [],
         "loaded": body.get("loaded") or [],
+        "runtimes": _sanitize_runtime_observations(body.get("runtimes")),
         "capabilities": body.get("capabilities") or [],
         "specs": body.get("specs") or {},
         "health": body.get("health") or {},
@@ -145,6 +226,21 @@ async def network_map(request: Request) -> dict[str, Any]:
                 "cpu": specs.get("cpu") if report_is_fresh else None,
                 "all_models": report.get("library", []) if report_is_fresh else [],
                 "loaded_models": report.get("loaded", []) if report_is_fresh else [],
+                "runtime_observation_count": (
+                    len(report.get("runtimes") or []) if report_is_fresh else 0
+                ),
+                "runtime_models": (
+                    sorted(
+                        {
+                            str(model)
+                            for runtime in (report.get("runtimes") or [])
+                            if isinstance(runtime, dict) and runtime.get("ready")
+                            for model in (runtime.get("models") or [])
+                        }
+                    )
+                    if report_is_fresh
+                    else []
+                ),
                 "report_received_at": received_at or None,
                 "report_fresh": report_is_fresh,
             }
