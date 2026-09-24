@@ -166,6 +166,31 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
                 signed_continuity = None
             if isinstance(signed_continuity, dict):
                 signed_body = signed_continuity.get("continuity")
+                signed_observation = signed_continuity.get("observation")
+                raw_models_for_signature = sorted(
+                    {
+                        str(model).strip()
+                        for model in (raw.get("models") or [])
+                        if str(model).strip()
+                    },
+                    key=str.casefold,
+                )
+                try:
+                    raw_observed_at = int(raw.get("observed_at") or 0)
+                except (TypeError, ValueError):
+                    raw_observed_at = 0
+                expected_signed_observation = {
+                    "runtime_observation_id": str(
+                        raw.get("runtime_observation_id") or ""
+                    ),
+                    "observed_at": raw_observed_at,
+                    "runtime_kind": str(raw.get("runtime_kind") or ""),
+                    "protocol": str(raw.get("protocol") or ""),
+                    "base_url": str(raw.get("base_url") or "").strip().rstrip("/"),
+                    "models": raw_models_for_signature,
+                    "ready": bool(raw.get("ready")) and bool(raw_models_for_signature),
+                    "observed_model_count": len(raw_models_for_signature),
+                }
                 if (
                     signed_continuity.get("schema_version")
                     == "fleet-runtime-continuity-attestation.v1"
@@ -186,6 +211,7 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
                         signed_continuity.get("attestation_fingerprint")
                     )
                     and isinstance(signed_body, dict)
+                    and signed_observation == expected_signed_observation
                 ):
                     continuity_attestation = {
                         "runtime_identity_continuity_json": continuity_payload,
