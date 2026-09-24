@@ -205,6 +205,42 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
         "bounded-signature\n"
         "-----END SSH SIGNATURE-----\n"
     )
+    continuity_document = {
+        "schema_version": "fleet-runtime-continuity-attestation.v1",
+        "node_id": "destroyer",
+        "runtime_observation_id": "runtime-observation:k2",
+        "witness_fingerprint": witness["witness_fingerprint"],
+        "runtime_url": "http://localhost:1235",
+        "runtime_kind": "llama_cpp",
+        "provider_model": "k2-36b",
+        "continuity": {
+            "valid": True,
+            "reason": "match",
+            "checked_at": 124,
+            "pid": 42,
+            "boot_id": "boot",
+            "process_start_ticks": 99,
+            "executable_basename": "llama-server",
+            "executable_file_valid": True,
+            "model_file_valid": True,
+            "model_process_binding_valid": True,
+            "model_process_binding": "proc_maps",
+        },
+        "signer_identity": "destroyer",
+        "signature_namespace": "lms-runtime-continuity",
+        "signing_key_fingerprint": "SHA256:nodekey",
+        "admission": {"admitted": False},
+        "attestation_fingerprint": "sha256:" + "5" * 64,
+    }
+    continuity_payload = (
+        json.dumps(continuity_document, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    )
+    continuity_signature = (
+        "-----BEGIN SSH SIGNATURE-----\n"
+        "continuity-signature\n"
+        "-----END SSH SIGNATURE-----\n"
+    )
     observations = fleet_routes._sanitize_runtime_observations(
         [
             {
@@ -218,6 +254,8 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
                 "observed_at": 123,
                 "runtime_identity_witness_json": payload,
                 "runtime_identity_witness_signature": signature,
+                "runtime_identity_continuity_json": continuity_payload,
+                "runtime_identity_continuity_signature": continuity_signature,
                 "runtime_identity_continuity": {
                     "valid": True,
                     "reason": "match",
@@ -240,6 +278,8 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
     item = observations[0]
     assert item["runtime_identity_witness_json"] == payload
     assert item["runtime_identity_witness_signature"] == signature
+    assert item["runtime_identity_continuity_json"] == continuity_payload
+    assert item["runtime_identity_continuity_signature"] == continuity_signature
     assert item["runtime_identity_continuity"]["valid"] is True
     assert item["runtime_identity_continuity"]["pid"] == 42
     assert item["runtime_identity_continuity"]["executable_file_valid"] is True
@@ -272,3 +312,92 @@ def test_malformed_runtime_identity_witness_is_dropped_without_dropping_observat
     assert "runtime_identity_witness_json" not in observations[0]
     assert "runtime_identity_witness_signature" not in observations[0]
     assert observations[0]["admitted"] is False
+
+
+def test_cross_runtime_continuity_attestation_is_dropped_but_witness_remains() -> None:
+    witness = {
+        "schema_version": "fleet-runtime-identity-witness.v1",
+        "node_id": "destroyer",
+        "runtime_url": "http://localhost:1235",
+        "runtime_kind": "llama_cpp",
+        "provider_model": "k2-36b",
+        "loadout_fingerprint": "sha256:" + "1" * 64,
+        "model_content_sha256": "sha256:" + "2" * 64,
+        "witness_signer_identity": "runtime-witness-operator",
+        "witness_signature_namespace": "lms-runtime-identity-witness",
+        "witness_signing_key_fingerprint": "SHA256:trustedkey",
+        "witness_fingerprint": "sha256:" + "3" * 64,
+        "admission": {"admitted": False},
+        "model_file_identity": {
+            "device": 1,
+            "inode": 2,
+            "size_bytes": 123,
+            "mtime_ns": 456,
+            "ctime_ns": 457,
+        },
+        "model_process_binding": "proc_maps",
+        "process": {
+            "pid": 42,
+            "boot_id": "boot",
+            "process_start_ticks": 99,
+            "executable_sha256": "sha256:" + "4" * 64,
+            "executable_basename": "llama-server",
+            "executable_file_identity": {
+                "device": 10,
+                "inode": 11,
+                "size_bytes": 12,
+                "mtime_ns": 13,
+                "ctime_ns": 14,
+            },
+        },
+    }
+    witness_payload = json.dumps(
+        witness, sort_keys=True, separators=(",", ":")
+    ) + "\n"
+    continuity = {
+        "schema_version": "fleet-runtime-continuity-attestation.v1",
+        "node_id": "destroyer",
+        "runtime_observation_id": "runtime-observation:OTHER",
+        "witness_fingerprint": witness["witness_fingerprint"],
+        "continuity": {"valid": True},
+        "signer_identity": "destroyer",
+        "signature_namespace": "lms-runtime-continuity",
+        "signing_key_fingerprint": "SHA256:nodekey",
+        "admission": {"admitted": False},
+        "attestation_fingerprint": "sha256:" + "5" * 64,
+    }
+    continuity_payload = json.dumps(
+        continuity, sort_keys=True, separators=(",", ":")
+    ) + "\n"
+    signature = (
+        "-----BEGIN SSH SIGNATURE-----\n"
+        "bounded\n"
+        "-----END SSH SIGNATURE-----\n"
+    )
+
+    observations = fleet_routes._sanitize_runtime_observations(
+        [
+            {
+                "observation_schema": "fleet-runtime-observation.v1",
+                "runtime_observation_id": "runtime-observation:k2",
+                "runtime_kind": "openai_compatible",
+                "protocol": "openai-compatible",
+                "base_url": "http://destroyer:1235",
+                "models": ["k2-36b"],
+                "ready": True,
+                "observed_at": 123,
+                "runtime_identity_witness_json": witness_payload,
+                "runtime_identity_witness_signature": signature,
+                "runtime_identity_continuity_json": continuity_payload,
+                "runtime_identity_continuity_signature": signature,
+                "runtime_identity_continuity": {"valid": True},
+            }
+        ]
+    )
+
+    assert len(observations) == 1
+    item = observations[0]
+    assert item["runtime_identity_witness_json"] == witness_payload
+    assert "runtime_identity_continuity_json" not in item
+    assert "runtime_identity_continuity_signature" not in item
+    assert item["admitted"] is False
