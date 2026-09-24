@@ -142,7 +142,7 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
         return {}
     if not _sha256_identity(process.get("executable_sha256")):
         return {}
-    if str(witness.get("model_process_binding") or "") not in {"proc_maps", "cmdline"}:
+    if str(witness.get("model_process_binding") or "") not in {"proc_maps", "darwin_vmmap_lsof", "cmdline"}:
         return {}
     if not isinstance(continuity, dict):
         return {}
