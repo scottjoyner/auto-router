@@ -37,7 +37,7 @@ def test_macbook_air_provider_registry_includes_live_tailnet_models() -> None:
     assert provider.node_id == "scotts-macbook-air"
     assert provider.base_url.endswith("scotts-macbook-air.tailcb8954.ts.net:1234/v1")
     model_ids = {model.provider_model for model in provider.models}
-    assert "qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled" in model_ids
+    assert "qwen3.5-0.8b-mlx" in model_ids
     assert "refinedtoolcallv5-3b" in model_ids
 
 
