@@ -63,6 +63,8 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
     payload = raw.get("runtime_identity_witness_json")
     signature = raw.get("runtime_identity_witness_signature")
     continuity = raw.get("runtime_identity_continuity")
+    continuity_payload = raw.get("runtime_identity_continuity_json")
+    continuity_signature = raw.get("runtime_identity_continuity_signature")
     if not isinstance(payload, str) or not isinstance(signature, str):
         return {}
     if len(payload.encode("utf-8")) > 16 * 1024 or len(signature.encode("utf-8")) > 8 * 1024:
@@ -150,9 +152,50 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
         start_ticks = int(continuity.get("process_start_ticks") or 0)
     except (TypeError, ValueError):
         return {}
+    continuity_attestation: dict[str, Any] = {}
+    if isinstance(continuity_payload, str) and isinstance(continuity_signature, str):
+        if (
+            len(continuity_payload.encode("utf-8")) <= 16 * 1024
+            and len(continuity_signature.encode("utf-8")) <= 8 * 1024
+            and "BEGIN SSH SIGNATURE" in continuity_signature
+            and "END SSH SIGNATURE" in continuity_signature
+        ):
+            try:
+                signed_continuity = json.loads(continuity_payload)
+            except json.JSONDecodeError:
+                signed_continuity = None
+            if isinstance(signed_continuity, dict):
+                signed_body = signed_continuity.get("continuity")
+                if (
+                    signed_continuity.get("schema_version")
+                    == "fleet-runtime-continuity-attestation.v1"
+                    and signed_continuity.get("admission") == {"admitted": False}
+                    and signed_continuity.get("runtime_observation_id")
+                    == raw.get("runtime_observation_id")
+                    and signed_continuity.get("node_id") == witness.get("node_id")
+                    and signed_continuity.get("witness_fingerprint")
+                    == witness.get("witness_fingerprint")
+                    and signed_continuity.get("signer_identity")
+                    == witness.get("node_id")
+                    and signed_continuity.get("signature_namespace")
+                    == "lms-runtime-continuity"
+                    and str(
+                        signed_continuity.get("signing_key_fingerprint") or ""
+                    ).startswith("SHA256:")
+                    and _sha256_identity(
+                        signed_continuity.get("attestation_fingerprint")
+                    )
+                    and isinstance(signed_body, dict)
+                ):
+                    continuity_attestation = {
+                        "runtime_identity_continuity_json": continuity_payload,
+                        "runtime_identity_continuity_signature": continuity_signature,
+                    }
+
     return {
         "runtime_identity_witness_json": payload,
         "runtime_identity_witness_signature": signature,
+        **continuity_attestation,
         "runtime_identity_continuity": {
             "valid": bool(continuity.get("valid")),
             "reason": str(continuity.get("reason") or "")[:128],
