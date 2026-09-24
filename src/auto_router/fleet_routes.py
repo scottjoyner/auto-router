@@ -15,6 +15,7 @@ enumerate directly.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -47,12 +48,101 @@ _RUNTIME_KINDS = {
 _RUNTIME_PROTOCOLS = {"lmstudio-native", "openai-compatible"}
 
 
+def _sha256_identity(value: Any) -> bool:
+    text = str(value or "")
+    if not text.startswith("sha256:") or len(text) != 71:
+        return False
+    try:
+        int(text[7:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
+    payload = raw.get("runtime_identity_witness_json")
+    signature = raw.get("runtime_identity_witness_signature")
+    continuity = raw.get("runtime_identity_continuity")
+    if not isinstance(payload, str) or not isinstance(signature, str):
+        return {}
+    if len(payload.encode("utf-8")) > 16 * 1024 or len(signature.encode("utf-8")) > 8 * 1024:
+        return {}
+    if "BEGIN SSH SIGNATURE" not in signature or "END SSH SIGNATURE" not in signature:
+        return {}
+    try:
+        witness = json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(witness, dict):
+        return {}
+    if witness.get("schema_version") != "fleet-runtime-identity-witness.v1":
+        return {}
+    if witness.get("admission") != {"admitted": False}:
+        return {}
+    if not all(
+        (
+            str(witness.get("node_id") or "").strip(),
+            str(witness.get("runtime_url") or "").strip(),
+            str(witness.get("runtime_kind") or "").strip(),
+            str(witness.get("provider_model") or "").strip(),
+            _sha256_identity(witness.get("loadout_fingerprint")),
+            _sha256_identity(witness.get("model_content_sha256")),
+            _sha256_identity(witness.get("witness_fingerprint")),
+        )
+    ):
+        return {}
+    if len(str(witness.get("node_id"))) > 128 or len(str(witness.get("provider_model"))) > 256:
+        return {}
+    parsed = urlparse(str(witness.get("runtime_url") or ""))
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return {}
+    process = witness.get("process")
+    if not isinstance(process, dict):
+        return {}
+    try:
+        if int(process.get("pid") or 0) <= 0 or int(process.get("process_start_ticks") or 0) <= 0:
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    if not _sha256_identity(process.get("executable_sha256")):
+        return {}
+    if not isinstance(continuity, dict):
+        return {}
+    try:
+        checked_at = int(continuity.get("checked_at") or 0)
+        pid = int(continuity.get("pid") or 0)
+        start_ticks = int(continuity.get("process_start_ticks") or 0)
+    except (TypeError, ValueError):
+        return {}
+    return {
+        "runtime_identity_witness_json": payload,
+        "runtime_identity_witness_signature": signature,
+        "runtime_identity_continuity": {
+            "valid": bool(continuity.get("valid")),
+            "reason": str(continuity.get("reason") or "")[:128],
+            "checked_at": checked_at,
+            "pid": pid,
+            "boot_id": str(continuity.get("boot_id") or "")[:128],
+            "process_start_ticks": start_ticks,
+            "executable_basename": str(
+                continuity.get("executable_basename") or ""
+            )[:256],
+        },
+    }
+
+
 def _sanitize_runtime_observations(value: Any) -> list[dict[str, Any]]:
     """Keep bounded non-admitting runtime evidence from node reporters.
 
-    Fleet reports are visibility/evidence only. They must never be able to
-    smuggle an admitted RuntimeInstance, artifact identity, or routing
-    credential into the signed AssistX projection.
+    Fleet reports are visibility/evidence only. A bounded operator-signed
+    runtime identity witness may cross this surface, but it remains evidence
+    only and can never mint an admitted RuntimeInstance, routing credential, or
+    signed AssistX projection.
     """
 
     if not isinstance(value, list):
@@ -98,6 +188,7 @@ def _sanitize_runtime_observations(value: Any) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             observed_at = 0
         seen_ids.add(observation_id)
+        witness_evidence = _sanitize_runtime_identity_witness(raw)
         out.append(
             {
                 "observation_schema": "fleet-runtime-observation.v1",
@@ -112,6 +203,7 @@ def _sanitize_runtime_observations(value: Any) -> list[dict[str, Any]]:
                 "observed_model_count": len(models),
                 "models_truncated": isinstance(raw_models, list) and len(raw_models) > 64,
                 "observed_at": observed_at,
+                **witness_evidence,
                 # Explicitly force observation-only semantics even if an
                 # untrusted sender attempts to set admitted=true.
                 "admitted": False,
