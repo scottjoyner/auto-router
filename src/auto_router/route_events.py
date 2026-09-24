@@ -74,6 +74,7 @@ def _assistx_model_authority_metadata(
         return {
             "artifact_fingerprint": request_metadata.get("artifact_fingerprint"),
             "assistx_mobile_model_handle": None,
+            "assistx_mobile_request_id": None,
         }
 
     handle = request_metadata.get("assistx_mobile_model_handle")
@@ -82,9 +83,17 @@ def _assistx_model_authority_metadata(
     artifact = request_metadata.get("assistx_artifact_fingerprint")
     if not isinstance(artifact, str) or not artifact.strip():
         artifact = request_metadata.get("artifact_fingerprint")
+    mobile_request_id = request_metadata.get("assistx_mobile_request_id")
+    if (
+        not isinstance(mobile_request_id, str)
+        or not mobile_request_id.startswith("kmr:")
+        or len(mobile_request_id) > 128
+    ):
+        mobile_request_id = None
     return {
         "artifact_fingerprint": artifact,
         "assistx_mobile_model_handle": handle,
+        "assistx_mobile_request_id": mobile_request_id,
     }
 
 
