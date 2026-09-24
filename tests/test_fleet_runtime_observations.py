@@ -518,3 +518,74 @@ def test_signed_continuity_with_tampered_model_observation_is_dropped() -> None:
     assert item["runtime_identity_witness_json"] == witness_payload
     assert "runtime_identity_continuity_json" not in item
     assert item["admitted"] is False
+
+
+def test_darwin_vmmap_lsof_witness_binding_is_preserved_as_evidence() -> None:
+    witness = {
+        "schema_version": "fleet-runtime-identity-witness.v1",
+        "node_id": "macbook",
+        "runtime_url": "http://localhost:1234",
+        "runtime_kind": "openai_compatible",
+        "provider_model": "mlx-model",
+        "loadout_fingerprint": "sha256:" + "1" * 64,
+        "model_content_sha256": "sha256:" + "2" * 64,
+        "witness_signer_identity": "runtime-witness-operator",
+        "witness_signature_namespace": "lms-runtime-identity-witness",
+        "witness_signing_key_fingerprint": "SHA256:operator",
+        "witness_fingerprint": "sha256:" + "3" * 64,
+        "admission": {"admitted": False},
+        "model_process_binding": "darwin_vmmap_lsof",
+        "model_file_identity": {
+            "device": 1,
+            "inode": 2,
+            "size_bytes": 123,
+            "mtime_ns": 456,
+            "ctime_ns": 457,
+        },
+        "process": {
+            "pid": 42,
+            "boot_id": "darwin-boottime:1.000001",
+            "process_start_ticks": 99,
+            "executable_sha256": "sha256:" + "4" * 64,
+            "executable_basename": "runtime",
+            "executable_file_identity": {
+                "device": 5,
+                "inode": 6,
+                "size_bytes": 7,
+                "mtime_ns": 8,
+                "ctime_ns": 9,
+            },
+        },
+    }
+    payload = json.dumps(witness, sort_keys=True, separators=(",", ":")) + "\n"
+    signature = (
+        "-----BEGIN SSH SIGNATURE-----\n"
+        "darwin-evidence\n"
+        "-----END SSH SIGNATURE-----\n"
+    )
+
+    sanitized = fleet_routes._sanitize_runtime_identity_witness(
+        {
+            "runtime_identity_witness_json": payload,
+            "runtime_identity_witness_signature": signature,
+            "runtime_identity_continuity": {
+                "valid": True,
+                "reason": "match",
+                "checked_at": 100,
+                "pid": 42,
+                "boot_id": "darwin-boottime:1.000001",
+                "process_start_ticks": 99,
+                "executable_basename": "runtime",
+                "executable_file_valid": True,
+                "model_file_valid": True,
+                "model_process_binding_valid": True,
+                "model_process_binding": "darwin_vmmap_lsof",
+            },
+        }
+    )
+
+    assert sanitized["runtime_identity_witness_json"] == payload
+    assert (
+        sanitized["runtime_identity_continuity"]["model_process_binding"]
+        == "darwin_vmmap_lsof"
+    )
