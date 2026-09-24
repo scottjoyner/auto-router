@@ -113,11 +113,14 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
             or int(model_file_identity.get("inode")) <= 0
             or int(model_file_identity.get("size_bytes")) <= 0
             or int(model_file_identity.get("mtime_ns")) <= 0
+            or int(model_file_identity.get("ctime_ns")) <= 0
         ):
             return {}
     except (TypeError, ValueError):
         return {}
     if not _sha256_identity(process.get("executable_sha256")):
+        return {}
+    if str(witness.get("model_process_binding") or "") not in {"proc_maps", "cmdline"}:
         return {}
     if not isinstance(continuity, dict):
         return {}
@@ -144,6 +147,9 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
             "model_process_binding_valid": bool(
                 continuity.get("model_process_binding_valid")
             ),
+            "model_process_binding": str(
+                continuity.get("model_process_binding") or ""
+            )[:32],
         },
     }
 
