@@ -34,6 +34,8 @@ def test_runtime_observation_sanitizer_forces_non_admitting_boundary() -> None:
             "base_url": "http://destroyer:1235",
             "models": ["k2-36b"],
             "ready": True,
+            "observed_model_count": 1,
+            "models_truncated": False,
             "observed_at": 123,
             "admitted": False,
         }
@@ -111,9 +113,48 @@ def test_node_report_preserves_runtime_evidence_without_admitting_it() -> None:
     assert response.status_code == 200
     stored = fleet_routes._node_reports["destroyer"]
     assert len(stored["runtimes"]) == 2
+    assert stored["runtime_observations_truncated"] is False
+    assert stored["source_ip"] == "testclient"
     assert all(runtime["admitted"] is False for runtime in stored["runtimes"])
+    assert all(runtime["observed_model_count"] == 1 for runtime in stored["runtimes"])
     assert {
         model
         for runtime in stored["runtimes"]
         for model in runtime["models"]
     } == {"k2-36b", "ternary-bonsai-2"}
+
+
+def test_empty_models_cannot_claim_ready_and_truncation_is_visible() -> None:
+    models = [f"model-{index}" for index in range(70)]
+    observations = fleet_routes._sanitize_runtime_observations(
+        [
+            {
+                "observation_schema": "fleet-runtime-observation.v1",
+                "runtime_observation_id": "runtime-observation:empty",
+                "runtime_kind": "openai_compatible",
+                "protocol": "openai-compatible",
+                "base_url": "http://destroyer:1235",
+                "models": [],
+                "ready": True,
+                "observed_at": 123,
+            },
+            {
+                "observation_schema": "fleet-runtime-observation.v1",
+                "runtime_observation_id": "runtime-observation:many",
+                "runtime_kind": "openai_compatible",
+                "protocol": "openai-compatible",
+                "base_url": "http://destroyer:1236",
+                "models": models,
+                "ready": True,
+                "observed_at": 123,
+            },
+        ]
+    )
+
+    empty, many = observations
+    assert empty["ready"] is False
+    assert empty["observed_model_count"] == 0
+    assert empty["models_truncated"] is False
+    assert many["ready"] is True
+    assert many["observed_model_count"] == 64
+    assert many["models_truncated"] is True
