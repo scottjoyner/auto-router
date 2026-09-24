@@ -152,6 +152,114 @@ def test_enqueue_route_execution_event_uses_provider_node_fallback(tmp_path) -> 
     payload = state.event_outbox.pending()[0]["payload"]
     assert payload["node_id"] == "x1-370"
 
+
+def test_route_execution_event_records_only_trusted_assistx_model_authority(tmp_path) -> None:
+    state = SimpleNamespace(
+        event_outbox=EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}"),
+        context=ContextSnapshot(revision="rev-route", source="unit-test"),
+    )
+    trusted = RouterRequest(
+        request_id="req-assistx-trusted",
+        route="chat_completions",
+        model="auto/local",
+        metadata={
+            "assistx_service": {
+                "identity": "assistx-internal",
+                "authenticated": True,
+            },
+            "assistx_mobile_model_handle": "model:v1:" + "a" * 32,
+            "assistx_artifact_fingerprint": "sha256:bonsai",
+        },
+        local_only=True,
+        allow_cloud=False,
+    )
+    enqueue_route_execution_event(
+        state,
+        request=trusted,
+        provider="runtime-b",
+        model="provider-b-model",
+        stage="final",
+        estimate=Estimate(),
+        status_code=200,
+        latency_ms=25,
+    )
+
+    payload = state.event_outbox.pending()[0]["payload"]
+    assert payload["artifact_fingerprint"] == "sha256:bonsai"
+    assert payload["assistx_mobile_model_handle"] == "model:v1:" + "a" * 32
+    assert payload["provider"] == "runtime-b"
+
+    spoofed = RouterRequest(
+        request_id="req-assistx-spoofed",
+        route="chat_completions",
+        model="auto/local",
+        metadata={
+            "assistx_mobile_model_handle": "model:v1:" + "b" * 32,
+            "assistx_artifact_fingerprint": "sha256:spoofed",
+        },
+        local_only=True,
+        allow_cloud=False,
+    )
+    enqueue_route_execution_event(
+        state,
+        request=spoofed,
+        provider="runtime-c",
+        model="provider-c-model",
+        stage="final",
+        estimate=Estimate(),
+        status_code=200,
+        latency_ms=30,
+    )
+
+    second = state.event_outbox.pending()[1]["payload"]
+    assert second["artifact_fingerprint"] is None
+    assert second["assistx_mobile_model_handle"] is None
+
+
+def test_route_decision_event_records_trusted_mobile_authority_for_canary_correlation() -> None:
+    state = SimpleNamespace(
+        event_outbox=EventOutbox("sqlite:///:memory:"),
+        context=SimpleNamespace(revision="ctx-authority", source="assistx"),
+    )
+    request = RouterRequest(
+        request_id="req-authority",
+        route="chat_completions",
+        model="auto/local",
+        metadata={
+            "assistx_service": {
+                "identity": "assistx-internal",
+                "authenticated": True,
+            },
+            "assistx_mobile_model_handle": "model:v1:" + "c" * 32,
+            "assistx_artifact_fingerprint": "sha256:bonsai",
+        },
+        local_only=True,
+        allow_cloud=False,
+    )
+    candidate = SimpleNamespace(
+        provider=SimpleNamespace(name="runtime-b"),
+        model=SimpleNamespace(alias="bonsai-b", provider_model="provider-b-model"),
+        score=1.0,
+        reason="exact artifact",
+    )
+
+    enqueue_route_decision_event(
+        state,
+        request=request,
+        profile_name="exact_artifact",
+        stage="final",
+        chosen_candidate=candidate,
+        candidates=[candidate],
+    )
+
+    payload = state.event_outbox.pending()[0]["payload"]
+    assert payload["profile"] == "exact_artifact"
+    assert payload["artifact_fingerprint"] == "sha256:bonsai"
+    assert payload["assistx_mobile_model_handle"] == "model:v1:" + "c" * 32
+    assert payload["chosen"]["provider"] == "runtime-b"
+    assert payload["local_only"] is True
+    assert payload["allow_cloud"] is False
+
 def test_route_event_records_gateway_metadata():
     state = SimpleNamespace(
         event_outbox=EventOutbox("sqlite:///:memory:"),
