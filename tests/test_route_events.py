@@ -168,6 +168,7 @@ def test_route_execution_event_records_only_trusted_assistx_model_authority(tmp_
                 "authenticated": True,
             },
             "assistx_mobile_model_handle": "model:v1:" + "a" * 32,
+            "assistx_mobile_request_id": "kmr:before-canary",
             "assistx_artifact_fingerprint": "sha256:bonsai",
         },
         local_only=True,
@@ -187,6 +188,7 @@ def test_route_execution_event_records_only_trusted_assistx_model_authority(tmp_
     payload = state.event_outbox.pending()[0]["payload"]
     assert payload["artifact_fingerprint"] == "sha256:bonsai"
     assert payload["assistx_mobile_model_handle"] == "model:v1:" + "a" * 32
+    assert payload["assistx_mobile_request_id"] == "kmr:before-canary"
     assert payload["provider"] == "runtime-b"
 
     spoofed = RouterRequest(
@@ -195,6 +197,7 @@ def test_route_execution_event_records_only_trusted_assistx_model_authority(tmp_
         model="auto/local",
         metadata={
             "assistx_mobile_model_handle": "model:v1:" + "b" * 32,
+            "assistx_mobile_request_id": "kmr:spoofed",
             "assistx_artifact_fingerprint": "sha256:spoofed",
         },
         local_only=True,
@@ -214,6 +217,7 @@ def test_route_execution_event_records_only_trusted_assistx_model_authority(tmp_
     second = state.event_outbox.pending()[1]["payload"]
     assert second["artifact_fingerprint"] is None
     assert second["assistx_mobile_model_handle"] is None
+    assert second["assistx_mobile_request_id"] is None
 
 
 def test_route_decision_event_records_trusted_mobile_authority_for_canary_correlation() -> None:
@@ -231,6 +235,7 @@ def test_route_decision_event_records_trusted_mobile_authority_for_canary_correl
                 "authenticated": True,
             },
             "assistx_mobile_model_handle": "model:v1:" + "c" * 32,
+            "assistx_mobile_request_id": "kmr:after-canary",
             "assistx_artifact_fingerprint": "sha256:bonsai",
         },
         local_only=True,
@@ -256,6 +261,7 @@ def test_route_decision_event_records_trusted_mobile_authority_for_canary_correl
     assert payload["profile"] == "exact_artifact"
     assert payload["artifact_fingerprint"] == "sha256:bonsai"
     assert payload["assistx_mobile_model_handle"] == "model:v1:" + "c" * 32
+    assert payload["assistx_mobile_request_id"] == "kmr:after-canary"
     assert payload["chosen"]["provider"] == "runtime-b"
     assert payload["local_only"] is True
     assert payload["allow_cloud"] is False
