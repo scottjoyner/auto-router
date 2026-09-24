@@ -102,10 +102,18 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
     ):
         return {}
     process = witness.get("process")
-    if not isinstance(process, dict):
+    model_file_identity = witness.get("model_file_identity")
+    if not isinstance(process, dict) or not isinstance(model_file_identity, dict):
         return {}
     try:
         if int(process.get("pid") or 0) <= 0 or int(process.get("process_start_ticks") or 0) <= 0:
+            return {}
+        if (
+            int(model_file_identity.get("device")) < 0
+            or int(model_file_identity.get("inode")) <= 0
+            or int(model_file_identity.get("size_bytes")) <= 0
+            or int(model_file_identity.get("mtime_ns")) <= 0
+        ):
             return {}
     except (TypeError, ValueError):
         return {}
@@ -132,6 +140,10 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
             "executable_basename": str(
                 continuity.get("executable_basename") or ""
             )[:256],
+            "model_file_valid": bool(continuity.get("model_file_valid")),
+            "model_process_binding_valid": bool(
+                continuity.get("model_process_binding_valid")
+            ),
         },
     }
 
