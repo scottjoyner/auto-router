@@ -85,10 +85,11 @@ def _sanitize_runtime_observations(value: Any) -> list[dict[str, Any]]:
             or len(base_url) > 512
         ):
             continue
+        raw_models = raw.get("models") or []
         models = sorted(
             {
                 str(model).strip()
-                for model in (raw.get("models") or [])[:64]
+                for model in raw_models[:64]
                 if str(model).strip() and len(str(model).strip()) <= 256
             }
         )
@@ -105,7 +106,11 @@ def _sanitize_runtime_observations(value: Any) -> list[dict[str, Any]]:
                 "protocol": protocol,
                 "base_url": base_url,
                 "models": models,
-                "ready": bool(raw.get("ready")),
+                # Never allow a sender to claim readiness for an empty serving
+                # set. This remains observation-only evidence.
+                "ready": bool(raw.get("ready")) and bool(models),
+                "observed_model_count": len(models),
+                "models_truncated": isinstance(raw_models, list) and len(raw_models) > 64,
                 "observed_at": observed_at,
                 # Explicitly force observation-only semantics even if an
                 # untrusted sender attempts to set admitted=true.
@@ -133,12 +138,20 @@ async def node_report(request: Request) -> dict[str, Any]:
     src_ip = None
     if request.client is not None:
         src_ip = request.client.host
+    raw_runtimes = body.get("runtimes")
     report = {
         "hostname": hostname,
+        # Preserve the transport-observed source separately from any sender
+        # supplied IP so operator evidence can distinguish the two.
+        "source_ip": src_ip,
+        "reported_ip": body.get("ip"),
         "ip": src_ip or body.get("ip"),
         "library": body.get("library") or [],
         "loaded": body.get("loaded") or [],
-        "runtimes": _sanitize_runtime_observations(body.get("runtimes")),
+        "runtimes": _sanitize_runtime_observations(raw_runtimes),
+        "runtime_observations_truncated": (
+            isinstance(raw_runtimes, list) and len(raw_runtimes) > 32
+        ),
         "capabilities": body.get("capabilities") or [],
         "specs": body.get("specs") or {},
         "health": body.get("health") or {},
