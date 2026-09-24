@@ -172,6 +172,77 @@ def test_exact_artifact_identity_routes_across_all_eligible_replicas() -> None:
     assert plan.stages[0].allow_local_fallback is False
 
 
+
+def test_exact_artifact_identity_survives_replica_loss_without_identity_change() -> None:
+    def engine_with(providers: list[ProviderConfig]) -> PolicyEngine:
+        return PolicyEngine(
+            ProviderRegistry(providers=providers),
+            PolicyRegistry(
+                profiles={"interactive_balanced": PolicyProfile(stages=[])}
+            ),
+            "interactive_balanced",
+        )
+
+    runtime_a = ProviderConfig(
+        name="runtime-a",
+        type="lmstudio",
+        base_url="http://runtime-a:1234/v1",
+        quota_class="local",
+        priority=100,
+        models=[
+            ModelConfig(
+                alias="bonsai-a",
+                provider_model="provider-a-model",
+                artifact_fingerprint="sha256:bonsai",
+                capabilities={"chat"},
+            )
+        ],
+    )
+    runtime_b = ProviderConfig(
+        name="runtime-b",
+        type="llama_cpp",
+        base_url="http://runtime-b:38898/v1",
+        quota_class="local",
+        priority=90,
+        models=[
+            ModelConfig(
+                alias="bonsai-b",
+                provider_model="provider-b-model",
+                artifact_fingerprint="sha256:bonsai",
+                capabilities={"chat"},
+            )
+        ],
+    )
+    request = RouterRequest(
+        request_id="artifact-replica-loss",
+        route="chat_completions",
+        local_only=True,
+        metadata={
+            "assistx_service": {
+                "identity": "assistx-internal",
+                "authenticated": True,
+            },
+            "assistx_artifact_fingerprint": "sha256:bonsai",
+        },
+    )
+
+    before = engine_with([runtime_a, runtime_b]).plan(request)
+    after = engine_with([runtime_b]).plan(request)
+
+    assert before.profile_name == after.profile_name == "exact_artifact"
+    assert {
+        candidate.provider.name for candidate in before.stages[0].candidates
+    } == {"runtime-a", "runtime-b"}
+    assert [
+        candidate.provider.name for candidate in after.stages[0].candidates
+    ] == ["runtime-b"]
+    assert all(
+        candidate.model.artifact_fingerprint == "sha256:bonsai"
+        for candidate in after.stages[0].candidates
+    )
+    assert before.stages[0].allow_local_fallback is False
+    assert after.stages[0].allow_local_fallback is False
+
 def test_exact_artifact_identity_rejects_untrusted_metadata_selector() -> None:
     providers = ProviderRegistry(
         providers=[
