@@ -171,6 +171,9 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
         "provider_model": "k2-36b",
         "loadout_fingerprint": "sha256:" + "1" * 64,
         "model_content_sha256": "sha256:" + "2" * 64,
+        "witness_signer_identity": "runtime-witness-operator",
+        "witness_signature_namespace": "lms-runtime-identity-witness",
+        "witness_signing_key_fingerprint": "SHA256:trustedkey",
         "witness_fingerprint": "sha256:" + "3" * 64,
         "admission": {"admitted": False},
         "model_file_identity": {
@@ -186,6 +189,14 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
             "boot_id": "boot",
             "process_start_ticks": 99,
             "executable_sha256": "sha256:" + "4" * 64,
+            "executable_basename": "llama-server",
+            "executable_file_identity": {
+                "device": 10,
+                "inode": 11,
+                "size_bytes": 12,
+                "mtime_ns": 13,
+                "ctime_ns": 14,
+            },
         },
     }
     payload = json.dumps(witness, sort_keys=True, separators=(",", ":")) + "\n"
@@ -215,6 +226,7 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
                     "boot_id": "boot",
                     "process_start_ticks": 99,
                     "executable_basename": "llama-server",
+                    "executable_file_valid": True,
                     "model_file_valid": True,
                     "model_process_binding_valid": True,
                     "model_process_binding": "proc_maps",
@@ -230,6 +242,7 @@ def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
     assert item["runtime_identity_witness_signature"] == signature
     assert item["runtime_identity_continuity"]["valid"] is True
     assert item["runtime_identity_continuity"]["pid"] == 42
+    assert item["runtime_identity_continuity"]["executable_file_valid"] is True
     assert item["runtime_identity_continuity"]["model_file_valid"] is True
     assert item["runtime_identity_continuity"]["model_process_binding_valid"] is True
     assert item["runtime_identity_continuity"]["model_process_binding"] == "proc_maps"
