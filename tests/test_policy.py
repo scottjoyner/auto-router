@@ -99,6 +99,258 @@ def test_exact_model_alias_is_honored() -> None:
     assert plan.stages[0].candidates[0].model.provider_model == "llama"
 
 
+def test_exact_artifact_identity_routes_across_all_eligible_replicas() -> None:
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="runtime-a",
+                type="lmstudio",
+                base_url="http://runtime-a:1234/v1",
+                quota_class="local",
+                priority=100,
+                models=[
+                    ModelConfig(
+                        alias="bonsai-a",
+                        provider_model="provider-a-model",
+                        artifact_fingerprint="sha256:bonsai",
+                        capabilities={"chat"},
+                    )
+                ],
+            ),
+            ProviderConfig(
+                name="runtime-b",
+                type="llama_cpp",
+                base_url="http://runtime-b:38898/v1",
+                quota_class="local",
+                priority=90,
+                models=[
+                    ModelConfig(
+                        alias="bonsai-b",
+                        provider_model="provider-b-model",
+                        artifact_fingerprint="sha256:bonsai",
+                        capabilities={"chat"},
+                    )
+                ],
+            ),
+            ProviderConfig(
+                name="other",
+                type="lmstudio",
+                base_url="http://other:1234/v1",
+                quota_class="local",
+                models=[
+                    ModelConfig(
+                        alias="other",
+                        provider_model="other-model",
+                        artifact_fingerprint="sha256:other",
+                        capabilities={"chat"},
+                    )
+                ],
+            ),
+        ]
+    )
+    policies = PolicyRegistry(
+        profiles={"interactive_balanced": PolicyProfile(stages=[])}
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="artifact-1",
+        route="chat_completions",
+        local_only=True,
+        metadata={"assistx_service": {"identity": "assistx-internal", "authenticated": True}, "assistx_artifact_fingerprint": "sha256:bonsai"},
+    )
+
+    plan = engine.plan(request)
+
+    assert plan.profile_name == "exact_artifact"
+    assert {
+        candidate.provider.name for candidate in plan.stages[0].candidates
+    } == {"runtime-a", "runtime-b"}
+    assert all(
+        candidate.model.artifact_fingerprint == "sha256:bonsai"
+        for candidate in plan.stages[0].candidates
+    )
+    assert plan.stages[0].allow_local_fallback is False
+
+
+
+def test_exact_artifact_identity_survives_replica_loss_without_identity_change() -> None:
+    def engine_with(providers: list[ProviderConfig]) -> PolicyEngine:
+        return PolicyEngine(
+            ProviderRegistry(providers=providers),
+            PolicyRegistry(
+                profiles={"interactive_balanced": PolicyProfile(stages=[])}
+            ),
+            "interactive_balanced",
+        )
+
+    runtime_a = ProviderConfig(
+        name="runtime-a",
+        type="lmstudio",
+        base_url="http://runtime-a:1234/v1",
+        quota_class="local",
+        priority=100,
+        models=[
+            ModelConfig(
+                alias="bonsai-a",
+                provider_model="provider-a-model",
+                artifact_fingerprint="sha256:bonsai",
+                capabilities={"chat"},
+            )
+        ],
+    )
+    runtime_b = ProviderConfig(
+        name="runtime-b",
+        type="llama_cpp",
+        base_url="http://runtime-b:38898/v1",
+        quota_class="local",
+        priority=90,
+        models=[
+            ModelConfig(
+                alias="bonsai-b",
+                provider_model="provider-b-model",
+                artifact_fingerprint="sha256:bonsai",
+                capabilities={"chat"},
+            )
+        ],
+    )
+    request = RouterRequest(
+        request_id="artifact-replica-loss",
+        route="chat_completions",
+        local_only=True,
+        metadata={
+            "assistx_service": {
+                "identity": "assistx-internal",
+                "authenticated": True,
+            },
+            "assistx_artifact_fingerprint": "sha256:bonsai",
+        },
+    )
+
+    before = engine_with([runtime_a, runtime_b]).plan(request)
+    after = engine_with([runtime_b]).plan(request)
+
+    assert before.profile_name == after.profile_name == "exact_artifact"
+    assert {
+        candidate.provider.name for candidate in before.stages[0].candidates
+    } == {"runtime-a", "runtime-b"}
+    assert [
+        candidate.provider.name for candidate in after.stages[0].candidates
+    ] == ["runtime-b"]
+    assert all(
+        candidate.model.artifact_fingerprint == "sha256:bonsai"
+        for candidate in after.stages[0].candidates
+    )
+    assert before.stages[0].allow_local_fallback is False
+    assert after.stages[0].allow_local_fallback is False
+
+def test_exact_artifact_identity_rejects_untrusted_metadata_selector() -> None:
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="runtime-a",
+                type="lmstudio",
+                base_url="http://runtime-a:1234/v1",
+                quota_class="local",
+                models=[
+                    ModelConfig(
+                        alias="allowed-alias",
+                        provider_model="allowed-provider-model",
+                        artifact_fingerprint="sha256:protected",
+                        capabilities={"chat"},
+                    )
+                ],
+            )
+        ]
+    )
+    policies = PolicyRegistry(
+        profiles={"interactive_balanced": PolicyProfile(stages=[])}
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="artifact-untrusted",
+        route="chat_completions",
+        model="allowed-alias",
+        metadata={"assistx_artifact_fingerprint": "sha256:protected"},
+    )
+
+    plan = engine.plan(request)
+
+    assert plan.profile_name == "exact_artifact"
+    assert plan.stages[0].candidates == []
+    assert plan.stages[0].allow_local_fallback is False
+
+
+def test_exact_artifact_identity_fails_closed_when_no_route_exists() -> None:
+    providers = ProviderRegistry(providers=[])
+    policies = PolicyRegistry(
+        profiles={"interactive_balanced": PolicyProfile(stages=[])}
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="artifact-missing",
+        route="chat_completions",
+        metadata={"assistx_service": {"identity": "assistx-internal", "authenticated": True}, "assistx_artifact_fingerprint": "sha256:missing"},
+    )
+
+    plan = engine.plan(request)
+
+    assert plan.profile_name == "exact_artifact"
+    assert plan.stages[0].candidates == []
+    assert plan.stages[0].allow_local_fallback is False
+
+
+def test_exact_artifact_identity_respects_local_only_boundary() -> None:
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="local-replica",
+                type="lmstudio",
+                base_url="http://local:1234/v1",
+                quota_class="local",
+                models=[
+                    ModelConfig(
+                        alias="same-local",
+                        provider_model="same-local-provider",
+                        artifact_fingerprint="sha256:same",
+                        capabilities={"chat"},
+                    )
+                ],
+            ),
+            ProviderConfig(
+                name="cloud-replica",
+                type="openai_compatible",
+                base_url="https://cloud.example/v1",
+                quota_class="fast_free",
+                models=[
+                    ModelConfig(
+                        alias="same-cloud",
+                        provider_model="same-cloud-provider",
+                        artifact_fingerprint="sha256:same",
+                        capabilities={"chat"},
+                    )
+                ],
+            ),
+        ]
+    )
+    policies = PolicyRegistry(
+        profiles={"interactive_balanced": PolicyProfile(stages=[])}
+    )
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="artifact-local-only",
+        route="chat_completions",
+        local_only=True,
+        allow_cloud=False,
+        metadata={"assistx_service": {"identity": "assistx-internal", "authenticated": True}, "assistx_artifact_fingerprint": "sha256:same"},
+    )
+
+    plan = engine.plan(request)
+
+    assert [
+        candidate.provider.name for candidate in plan.stages[0].candidates
+    ] == ["local-replica"]
+
+
 def test_signal_preference_boosts_provider_selection() -> None:
     from auto_router.context import ContextSignal, ContextSnapshot
 

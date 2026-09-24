@@ -138,6 +138,71 @@ class PolicyEngine:
         return ExecutionPlan(profile_name=profile_name, stages=stages)
 
     def _exact_model_plan(self, request: RouterRequest) -> ExecutionPlan | None:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        requested_artifact = str(
+            metadata.get("assistx_artifact_fingerprint") or ""
+        ).strip()
+
+        if requested_artifact:
+            # Exact artifact identity is an internal AssistX control-plane selector.
+            # The inference auth middleware injects this marker only after the
+            # dedicated internal service token authenticates. An executor-scoped
+            # token or arbitrary caller must not be able to smuggle an artifact
+            # fingerprint in metadata and bypass its allowed-model scope.
+            assistx_service = metadata.get("assistx_service")
+            service_authenticated = (
+                isinstance(assistx_service, dict)
+                and assistx_service.get("authenticated") is True
+                and assistx_service.get("identity") == "assistx-internal"
+            )
+            if not service_authenticated:
+                return ExecutionPlan(
+                    profile_name="exact_artifact",
+                    stages=[
+                        ExecutionStage(
+                            purpose=StagePurpose.final,
+                            candidates=[],
+                            required_capabilities=request.required_capabilities,
+                            allow_local_fallback=False,
+                        )
+                    ],
+                )
+
+            candidates: list[ProviderCandidate] = []
+            for provider in self.providers.enabled():
+                if not self._provider_is_eligible(provider, request):
+                    continue
+                for model in provider.models:
+                    if str(model.artifact_fingerprint or "").strip() != requested_artifact:
+                        continue
+                    if not self._model_matches(model, request.required_capabilities):
+                        continue
+                    candidates.append(
+                        ProviderCandidate(
+                            provider=provider,
+                            model=model,
+                            score=float(provider.priority),
+                            reason="exact admitted artifact match",
+                        )
+                    )
+
+            # Artifact identity is authoritative and must fail closed. If AssistX
+            # resolved a mobile handle to an artifact that no longer has an
+            # eligible admitted route, do not fall back to a different model.
+            if candidates:
+                candidates = self._balance_candidates(candidates)
+            return ExecutionPlan(
+                profile_name="exact_artifact",
+                stages=[
+                    ExecutionStage(
+                        purpose=StagePurpose.final,
+                        candidates=candidates,
+                        required_capabilities=request.required_capabilities,
+                        allow_local_fallback=False,
+                    )
+                ],
+            )
+
         requested_model = request.model or ""
         if not requested_model or requested_model.startswith("auto/"):
             return None

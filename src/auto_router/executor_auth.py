@@ -4,7 +4,6 @@ import base64
 import hmac
 import json
 import logging
-logger = logging.getLogger(__name__)
 import math
 import os
 import threading
@@ -15,6 +14,8 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 _PROTECTED_PATHS = {
     "/v1/chat/completions",

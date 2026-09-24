@@ -53,6 +53,50 @@ def _projection_metadata(request_metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _assistx_model_authority_metadata(
+    request_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose server-side model authority only for authenticated AssistX calls.
+
+    The opaque mobile handle and exact artifact selector are useful canary
+    correlation fields, but they must not be accepted as evidence when supplied
+    by an arbitrary caller. Preserve the ordinary artifact field for non-AssistX
+    routes while ignoring spoofed AssistX selectors.
+    """
+
+    service = request_metadata.get("assistx_service")
+    trusted = (
+        isinstance(service, dict)
+        and service.get("authenticated") is True
+        and service.get("identity") == "assistx-internal"
+    )
+    if not trusted:
+        return {
+            "artifact_fingerprint": request_metadata.get("artifact_fingerprint"),
+            "assistx_mobile_model_handle": None,
+            "assistx_mobile_request_id": None,
+        }
+
+    handle = request_metadata.get("assistx_mobile_model_handle")
+    if not isinstance(handle, str) or not handle.startswith("model:v1:"):
+        handle = None
+    artifact = request_metadata.get("assistx_artifact_fingerprint")
+    if not isinstance(artifact, str) or not artifact.strip():
+        artifact = request_metadata.get("artifact_fingerprint")
+    mobile_request_id = request_metadata.get("assistx_mobile_request_id")
+    if (
+        not isinstance(mobile_request_id, str)
+        or not mobile_request_id.startswith("kmr:")
+        or len(mobile_request_id) > 128
+    ):
+        mobile_request_id = None
+    return {
+        "artifact_fingerprint": artifact,
+        "assistx_mobile_model_handle": handle,
+        "assistx_mobile_request_id": mobile_request_id,
+    }
+
+
 def enqueue_route_execution_event(
     state: Any,
     request: RouterRequest,
@@ -123,6 +167,7 @@ def enqueue_route_execution_event(
         or request_metadata.get("correlation_id")
         or str(uuid.uuid4())
     )
+    authority_metadata = _assistx_model_authority_metadata(request_metadata)
     node_id = (
         request_metadata.get("runtime_node_id")
         or getattr(request, "node_id", None)
@@ -168,7 +213,7 @@ def enqueue_route_execution_event(
         "model_instance_id": request_metadata.get("model_instance_id"),
         "provider_model": request_metadata.get("provider_model") or model,
         "provider_model_id": provider_model_id,
-        "artifact_fingerprint": request_metadata.get("artifact_fingerprint"),
+        **authority_metadata,
         "quantization": request_metadata.get("quantization"),
         "context_length": request_metadata.get("context_length"),
         "status": status,
@@ -258,6 +303,7 @@ def enqueue_route_decision_event(
     chosen_provider = chosen_payload.get("provider_id") or chosen_payload.get(
         "provider"
     )
+    authority_metadata = _assistx_model_authority_metadata(request_metadata)
     node_id = (
         request_metadata.get("runtime_node_id")
         or getattr(request, "node_id", None)
@@ -285,6 +331,7 @@ def enqueue_route_decision_event(
         "priority": request.priority.value,
         "local_only": request.local_only,
         "allow_cloud": request.allow_cloud,
+        **authority_metadata,
         "chosen": chosen_payload,
         "candidates": candidate_payloads,
         "rejections": list(rejections or []),
