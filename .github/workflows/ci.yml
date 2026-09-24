@@ -98,6 +98,10 @@ jobs:
 
   integration-smoke:
     runs-on: ubuntu-latest
+    env:
+      # CI-only token. docker-compose.yml intentionally keeps the production
+      # variable required; this satisfies interpolation without weakening it.
+      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: smoke-service-token
     steps:
       - uses: actions/checkout@v4
       - name: Build and start strict-offline router + redis
