@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -158,3 +160,88 @@ def test_empty_models_cannot_claim_ready_and_truncation_is_visible() -> None:
     assert many["ready"] is True
     assert many["observed_model_count"] == 64
     assert many["models_truncated"] is True
+
+
+def test_signed_runtime_identity_witness_is_bounded_but_non_admitting() -> None:
+    witness = {
+        "schema_version": "fleet-runtime-identity-witness.v1",
+        "node_id": "destroyer",
+        "runtime_url": "http://localhost:1235",
+        "runtime_kind": "llama_cpp",
+        "provider_model": "k2-36b",
+        "loadout_fingerprint": "sha256:" + "1" * 64,
+        "model_content_sha256": "sha256:" + "2" * 64,
+        "witness_fingerprint": "sha256:" + "3" * 64,
+        "admission": {"admitted": False},
+        "process": {
+            "pid": 42,
+            "boot_id": "boot",
+            "process_start_ticks": 99,
+            "executable_sha256": "sha256:" + "4" * 64,
+        },
+    }
+    payload = json.dumps(witness, sort_keys=True, separators=(",", ":")) + "\n"
+    signature = (
+        "-----BEGIN SSH SIGNATURE-----\n"
+        "bounded-signature\n"
+        "-----END SSH SIGNATURE-----\n"
+    )
+    observations = fleet_routes._sanitize_runtime_observations(
+        [
+            {
+                "observation_schema": "fleet-runtime-observation.v1",
+                "runtime_observation_id": "runtime-observation:k2",
+                "runtime_kind": "openai_compatible",
+                "protocol": "openai-compatible",
+                "base_url": "http://destroyer:1235",
+                "models": ["k2-36b"],
+                "ready": True,
+                "observed_at": 123,
+                "runtime_identity_witness_json": payload,
+                "runtime_identity_witness_signature": signature,
+                "runtime_identity_continuity": {
+                    "valid": True,
+                    "reason": "match",
+                    "checked_at": 124,
+                    "pid": 42,
+                    "boot_id": "boot",
+                    "process_start_ticks": 99,
+                    "executable_basename": "llama-server",
+                },
+                "admitted": True,
+            }
+        ]
+    )
+
+    assert len(observations) == 1
+    item = observations[0]
+    assert item["runtime_identity_witness_json"] == payload
+    assert item["runtime_identity_witness_signature"] == signature
+    assert item["runtime_identity_continuity"]["valid"] is True
+    assert item["runtime_identity_continuity"]["pid"] == 42
+    assert item["admitted"] is False
+
+
+def test_malformed_runtime_identity_witness_is_dropped_without_dropping_observation() -> None:
+    observations = fleet_routes._sanitize_runtime_observations(
+        [
+            {
+                "observation_schema": "fleet-runtime-observation.v1",
+                "runtime_observation_id": "runtime-observation:k2",
+                "runtime_kind": "openai_compatible",
+                "protocol": "openai-compatible",
+                "base_url": "http://destroyer:1235",
+                "models": ["k2-36b"],
+                "ready": True,
+                "observed_at": 123,
+                "runtime_identity_witness_json": '{"schema_version":"wrong"}',
+                "runtime_identity_witness_signature": "not-a-signature",
+                "runtime_identity_continuity": {"valid": True},
+            }
+        ]
+    )
+
+    assert len(observations) == 1
+    assert "runtime_identity_witness_json" not in observations[0]
+    assert "runtime_identity_witness_signature" not in observations[0]
+    assert observations[0]["admitted"] is False
