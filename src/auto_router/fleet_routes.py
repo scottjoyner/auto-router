@@ -87,6 +87,9 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
             str(witness.get("provider_model") or "").strip(),
             _sha256_identity(witness.get("loadout_fingerprint")),
             _sha256_identity(witness.get("model_content_sha256")),
+            str(witness.get("witness_signer_identity") or "").strip(),
+            str(witness.get("witness_signature_namespace") or "").strip(),
+            str(witness.get("witness_signing_key_fingerprint") or "").startswith("SHA256:"),
             _sha256_identity(witness.get("witness_fingerprint")),
         )
     ):
@@ -103,10 +106,27 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
         return {}
     process = witness.get("process")
     model_file_identity = witness.get("model_file_identity")
-    if not isinstance(process, dict) or not isinstance(model_file_identity, dict):
+    executable_file_identity = (
+        process.get("executable_file_identity")
+        if isinstance(process, dict)
+        else None
+    )
+    if (
+        not isinstance(process, dict)
+        or not isinstance(model_file_identity, dict)
+        or not isinstance(executable_file_identity, dict)
+    ):
         return {}
     try:
         if int(process.get("pid") or 0) <= 0 or int(process.get("process_start_ticks") or 0) <= 0:
+            return {}
+        if (
+            int(executable_file_identity.get("device")) < 0
+            or int(executable_file_identity.get("inode")) <= 0
+            or int(executable_file_identity.get("size_bytes")) <= 0
+            or int(executable_file_identity.get("mtime_ns")) <= 0
+            or int(executable_file_identity.get("ctime_ns")) <= 0
+        ):
             return {}
         if (
             int(model_file_identity.get("device")) < 0
@@ -143,6 +163,9 @@ def _sanitize_runtime_identity_witness(raw: dict[str, Any]) -> dict[str, Any]:
             "executable_basename": str(
                 continuity.get("executable_basename") or ""
             )[:256],
+            "executable_file_valid": bool(
+                continuity.get("executable_file_valid")
+            ),
             "model_file_valid": bool(continuity.get("model_file_valid")),
             "model_process_binding_valid": bool(
                 continuity.get("model_process_binding_valid")
