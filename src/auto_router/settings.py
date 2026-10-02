@@ -1,7 +1,63 @@
 from functools import lru_cache
 import os
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def validate_database_placement(
+    configured_url: str,
+    *,
+    expected_root: str,
+    required: bool,
+    test_context: bool = False,
+) -> dict[str, Any]:
+    """Resolve and validate the SQLite path used by the router.
+
+    The deployment contract treats ``sqlite:///data/...`` as the absolute
+    ``/data/...`` persistent mount. Dot-relative paths are resolved from the
+    process workdir so the historical ``/app/data`` mistake is visible.
+    """
+    root = os.path.abspath(expected_root)
+    prefix = "sqlite:///"
+    if not configured_url.startswith(prefix):
+        return {
+            "configured_url": configured_url,
+            "resolved_path": None,
+            "expected_persistent_root": root,
+            "persistent": None,
+            "supported": False,
+        }
+
+    raw_path = configured_url[len(prefix):]
+    if raw_path == ":memory:":
+        resolved_path = ":memory:"
+    elif raw_path.startswith("/"):
+        resolved_path = os.path.abspath(raw_path)
+    elif raw_path.startswith(("./", "../")):
+        resolved_path = os.path.abspath(raw_path)
+    else:
+        # This is the deployment contract used by Compose: sqlite:///data/x
+        # means /data/x, while sqlite:///./data/x remains workdir-relative.
+        resolved_path = os.path.abspath(os.path.join(os.sep, raw_path))
+
+    persistent = resolved_path != ":memory:" and (
+        resolved_path == root or resolved_path.startswith(root + os.sep)
+    )
+    result = {
+        "configured_url": configured_url,
+        "resolved_path": resolved_path,
+        "expected_persistent_root": root,
+        "persistent": persistent,
+        "supported": True,
+    }
+    if required and not persistent and not test_context:
+        raise ValueError(
+            "SQLite database placement is not persistent: "
+            f"configured URL={configured_url!r}, resolved path={resolved_path!r}, "
+            f"expected persistent root={root!r}; refusing container writable layer"
+        )
+    return result
 
 
 class Settings(BaseSettings):
@@ -17,19 +73,22 @@ class Settings(BaseSettings):
     context_config: str = "config/context.yaml"
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "sqlite:///./data/router.sqlite3"
+    database_persistent_root: str = "/data"
+    database_placement_required: bool = False
+    database_placement_test_context: bool = False
     log_prompts: bool = False
     default_profile: str = "interactive_balanced"
-    request_timeout_seconds: float = 120.0
+    request_timeout_seconds: float = 240.0
     # Fail-fast routing: a single hung/dead node must not stall a request for the
     # full request_timeout. We connect quickly (so unreachable nodes fail fast) and
     # cap each individual candidate attempt at attempt_timeout_seconds, letting the
     # router fail over to the next candidate instead of waiting on a zombie.
-    attempt_timeout_seconds: float = 45.0
+    attempt_timeout_seconds: float = 240.0
     connect_timeout_seconds: float = 5.0
     # Hard bounds on a single request so a fleet full of dead nodes can never make
     # a request hang for (attempt_timeout * candidate_count). Once the deadline is
     # hit or we've tried enough candidates, we stop and return 503 fast.
-    request_deadline_seconds: float = 90.0
+    request_deadline_seconds: float = 300.0
     max_candidate_attempts: int = 4
     # Persisted per-node latency EMA so the router remembers which nodes are snappy
     # across restarts (instead of re-learning from a cold start every boot). The
@@ -92,4 +151,11 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    validate_database_placement(
+        settings.database_url,
+        expected_root=settings.database_persistent_root,
+        required=settings.database_placement_required,
+        test_context=settings.database_placement_test_context,
+    )
+    return settings
