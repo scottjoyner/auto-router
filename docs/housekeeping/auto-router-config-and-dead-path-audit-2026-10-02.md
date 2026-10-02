@@ -14,7 +14,8 @@ come from source, committed configuration, and mocked/local unit tests.
 | Slice 2 | `2f939c3` — duplication consolidation, CI repair, preflight drift |
 | Slice 3 | `28b567b` — S1 blast-radius measurement + corrections to this audit |
 | Slice 4 | `f8e03a0` — U1 dangling dashboard links, D6 README entrypoint drift |
-| Slice 5 | this commit — **X1 applied**, **X2 applied**, **tailnet discovery disabled** |
+| Slice 5 | `85359e8` — **X1 applied**, **X2 applied**, **tailnet discovery disabled** |
+| Slice 6 | this commit — **C9/A5 applied** (entrypoint posture), C2/C3 closed |
 | Production entrypoint | `auto_router.secure_live:app` (Dockerfile `CMD`) |
 | Test command | `bash scripts/test_reconciliation.sh` (blocking CI suite) |
 
@@ -444,16 +445,22 @@ Intentional differences (documented, **not** consolidated):
   `AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED` all resolve to the smoke values CI asserts
   against. **Not run end-to-end** (no Docker stack available here); the render is
   the mechanical guarantee.
-- **C2 — smoke overlay inherits a secret path whose volume mount is overridden away.**
+- **C2 — CLOSED (slice 6) — smoke overlay inherited a secret path whose volume mount
+  is overridden away.**
   `AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE=/run/secrets/assistx_executor_public_key.pem`
   is inherited from the base file, but `docker-compose.integration.yml` replaces
-  `volumes:` with `!override`, so the PEM is never mounted. The file is therefore
-  absent in the smoke container. Every signed executor token is then rejected and
-  reported as `executor token signature is invalid`, which misdirects diagnosis
-  toward the caller instead of the deployment; see **F2** in §9.
-- **C3 — smoke overlay inherits `AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL=http://assistx-api:8000`.**
-  Nothing serves `assistx-api` in the smoke network. It is only reached from
-  `claim_fence` for executor-token requests, which the smoke test does not issue.
+  `volumes:` with `!override`, so the PEM is never mounted. The file was therefore
+  absent in the smoke container, and every signed executor token was rejected as
+  `executor token signature is invalid`, misdirecting diagnosis toward the caller.
+  The overlay now sets `AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: ""` explicitly, so
+  `executor_auth._read_key()` reports "not configured" — the accurate reason — rather
+  than pointing at a path that does not exist. **F2** in §9 made the error type
+  distinguishable; this removes the cause.
+- **C3 — CLOSED (slice 6) — smoke overlay inherited an `assistx-api` claim-status
+  URL** that the `auto-router-smoke` network does not publish. Now explicitly
+  `AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL: ""`. `AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN`
+  is cleared at the same time, so the smoke profile cannot drift with the base file
+  or pick up an operator's real token.
 - **C4 — smoke overlay inherits `AUTO_ROUTER_RUNTIME_PROJECTION_URL=http://host.docker.internal:8000/api/router/runtime-projection`.**
   Nothing serves it in CI. `projection_poll_task` records a `last_error` and keeps
   retrying every 5 s. The CI assertions (`configured is False`, `current is None`)
@@ -479,9 +486,32 @@ Intentional differences (documented, **not** consolidated):
   reachable only when `AUTO_ROUTER_AGENTGATEWAY_ENABLED=true` — `false` everywhere
   canonical. `host.docker.internal` / `gateway.docker.internal` are explicitly
   allow-listed in `offline_guard.host_is_offline_allowed` and `access_paths`.
-- **C9 — console-script entrypoint drift.** `pyproject.toml` ships
-  `auto-router = "auto_router.main_live:run"`, i.e. the v1-HMAC entrypoint, while
-  every container runs `secure_live`. See §3.2.
+- **C9 — APPLIED (slice 6) — the shipped entrypoint was materially weaker than the
+  container.** `pyproject.toml` shipped `auto-router = "auto_router.main_live:run"`
+  and `make dev` ran `uvicorn auto_router.main_live:app`, while every container runs
+  `secure_live`. Measured, each entrypoint imported in a **separate process** (they
+  share one `app` object, so a single-process probe reports `main_live` as
+  already-hardened and hides the difference):
+
+  | | `main_live:app` | `secure_live:app` |
+  |---|---|---|
+  | `ExecutorInferenceAuthMiddleware` (gates every `/v1/*`) | **absent** | present |
+  | durable request idempotency | absent | present |
+  | iterator-final streaming accounting | absent | present |
+  | runtime projection manager | v1 (HMAC) | v2 (Ed25519) |
+
+  So `pip install auto-router && auto-router` — and the README quickstart, which said
+  `make dev` — gave **unauthenticated inference** and a weaker projection trust path
+  on the same source tree as `docker compose up`.
+
+  **Fix (operator-approved).** Added `secure_live.run()`; `pyproject.toml` and the
+  `Makefile` `dev` target now both target `secure_live`, with a comment recording
+  that `main_live:app` is retained only for the schema-v1 HMAC migration path.
+  `auto_router.main_live:app` remains importable, so `tests/test_runtime_projection.py`
+  and the migration path are unaffected. Pinned by
+  `tests/test_entrypoint_posture.py` (7 tests), which asserts the Dockerfile `CMD`,
+  the console script, the `dev` target, the README, and the middleware/executor-auth
+  difference measured in separate processes.
 
 ---
 
@@ -522,14 +552,12 @@ Docs-vs-code drift found:
 - **D4 — `config/providers.yaml` carries `max_concurrency` and `recommended_use` on
   six models.** Neither is a field on `ModelConfig`, and pydantic `extra="ignore"`
   drops both. An operator editing those keys gets no effect and no warning.
-- **D6 — the root `README.md` quickstart starts the v1 HMAC entrypoint.**
-  `README.md:210-212` says `cp .env.example .env && make install && make dev`, and
-  `Makefile`'s `dev` target runs `uvicorn auto_router.main_live:app`. The same README
-  documents the Ed25519 projection model and `AUTO_ROUTER_ADMIN_TOKEN`. So the
-  documented local-start path resolves `runtime_projection` **v1**, while
-  `docker compose up` on the next line resolves **v2** (Dockerfile `CMD` =
-  `secure_live:app`). Same divergence as **C9** / **A5**, but reached by copying the
-  primary quickstart rather than by installing the console script.
+- **D6 — RESOLVED (slice 6) — the root `README.md` quickstart started the weak
+  entrypoint.** `README.md:210-212` said `cp .env.example .env && make install && make dev`,
+  and `Makefile`'s `dev` target ran `uvicorn auto_router.main_live:app`. Same
+  divergence as **C9**, but reached by copying the primary quickstart. Both the
+  `dev` target and the console script now target `secure_live`; see **C9** for the
+  measured middleware/executor-auth difference this closes.
 
   Corroborating detail for **X1**: the README documents
   `curl -H "X-Admin-Token: $AUTO_ROUTER_ADMIN_TOKEN" .../admin/admission` and never
@@ -934,12 +962,14 @@ not contacted.**
 | `tests/test_executor_auth.py` | **6 passed** (3 pre-existing + 3 new) |
 | `pytest -q --ignore=tests/integration` (after slice 2) | **7 failed, 396 passed, 2 skipped** |
 | `pytest -q --ignore=tests/integration` (after slice 5) | **7 failed, 452 passed, 2 skipped** |
+| `pytest -q --ignore=tests/integration` (after slice 6) | **7 failed, 459 passed, 2 skipped** |
 | `bash scripts/test_reconciliation.sh` (after slice 2) | **1 failed, 378 passed, 2 skipped, 1 deselected** |
 | `bash scripts/test_reconciliation.sh` (after slice 5) | **1 failed, 434 passed, 2 skipped, 1 deselected** |
+| `bash scripts/test_reconciliation.sh` (after slice 6) | **1 failed, 441 passed, 2 skipped, 1 deselected** |
 
 Delta versus the `034d108` baseline: **+141 net passing** (311 → 452), **0 new
 failures**. The same 7 pre-existing failures remain, of which only 1 is in the
-blocking suite. Per-slice: slice 1 +13, slice 2 +72, slices 3-5 +56.
+blocking suite. Per-slice: slice 1 +13, slice 2 +72, slices 3-5 +56, slice 6 +7.
 
 ### 10.3 Regression sensitivity of every new test
 
@@ -1005,6 +1035,11 @@ tests/test_env_expansion.py                             (new, 27 tests, slice 2)
 tests/test_sqlite_path.py                               (new, 42 tests, slice 2)
 tests/test_stale_context_cache_repro.py                 (new, 5 tests, slice 3)
 tests/test_admin_auth_surface.py                        (new, 31 tests, slice 5)
+tests/test_entrypoint_posture.py                        (new, 7 tests, slice 6)
+src/auto_router/secure_live.py                          run() console entrypoint
+pyproject.toml                                          auto-router -> secure_live:run
+Makefile                                               dev target -> secure_live:app
+docker-compose.integration.yml                          C2/C3 explicit clears
 tests/test_compose_posture.py                           (new, 20 tests, slice 5)
 src/auto_router/main.py                                 X1 gate + X2 manual-apply refusal
 src/auto_router/ops_dashboard_routes.py                 X1 gate (4 routes)
@@ -1073,12 +1108,10 @@ explicit operator decision and are not safe for an unattended agent.**
    inference paths, and `/api/routes/request` remain open.
 2. ~~**Close X2 (`/admin/load` autoload bypass).**~~ **DONE in slice 5.**
 3. ~~**Fix C1 (CI `integration-smoke` cannot start).**~~ **DONE in slice 2.**
-4. ~~**Fix C2/C3/C4 (smoke overlay inherits base secrets and hosts).**~~ **C4 is now
-   moot in a good way**: the smoke overlay inherits
-   `http://assistx-api:8000/api/router/runtime-projection` from `d3a9258`, and CI now
-   asserts the correct values for the routes it actually exercises. **C2/C3 still
-   open** — the smoke overlay still inherits an executor key path whose volume mount
-   is `!override`d away, and an `assistx-api` claim-status URL nothing serves.
+4. ~~**Fix C2/C3/C4 (smoke overlay inherits base secrets and hosts).**~~ **C2/C3
+   CLOSED in slice 6** (explicit clears). **C4 is moot**: the overlay inherits
+   `http://assistx-api:8000/api/router/runtime-projection` from `d3a9258` and CI
+   asserts the correct values for the routes it actually exercises.
    C4 in particular is a judgement call: clearing
    `AUTO_ROUTER_RUNTIME_PROJECTION_URL` would stop the smoke run exercising
    `projection_poll_task`'s failure path, which may be worth keeping. Needs a
@@ -1122,7 +1155,7 @@ explicit operator decision and are not safe for an unattended agent.**
 | A2 | ~~Is S1 a routing defect?~~ **Resolved by measurement in slice 3: no.** It is operator visibility only. What remains open is whether to fix it at all — five existing tests encode the current expectation, and the fix makes them pass, so it is a deliberate behaviour change to the dashboard rather than a red-to-green cleanup |
 | A3 | Is boot-time tailnet provider merging (**S4**/X3) a deliberate migration shim or a defect? | needs the intent behind `refresh_tailnet_provider_task` being excluded from `strict_offline_lifespan` |
 | A4 | Which unauthenticated `/admin/*` reads (X1) have real consumers? | templates, `ui_pages.py`, and several docs link them; needs operator inventory |
-| A5 | Is the `auto-router` console script intentionally the v1/HMAC entrypoint? | `pyproject.toml` and `Makefile dev` disagree with the Dockerfile; no commit message states intent |
+| A5 | ~~Is the `auto-router` console script intentionally the v1/HMAC entrypoint?~~ **Resolved in slice 6:** it was not intentional — `main_live` omits executor auth, idempotency and stream lifecycle. Repointed at `secure_live`; `main_live:app` kept importable for the schema-v1 migration path only. |
 | A6 | Should `config/context.yaml` and `config/context.example.yaml` (byte-identical) remain in sync with each other? | W-58 retired static context as truth, but the local-file form is still the `Settings` default |
 | A7 | Are `ModelConfig.allow_agent_runtime` / `ProviderConfig.allow_agent_runtime` reserved for AssistX projection use, or abandoned? | never read, never projected, no documentation |
 

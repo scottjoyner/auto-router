@@ -25,6 +25,17 @@ services:
       AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED: "false"
       AUTO_ROUTER_DISCOVER_TAILNET_LMSTUDIO: "0"
       AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "false"
+      # Override the base file rather than inheriting it. `volumes:` below uses
+      # !override and therefore drops the base file's /run/secrets mounts, so
+      # inheriting AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE would point at a path that
+      # does not exist in this container. Cleared so executor auth fails closed
+      # with "not configured" instead of "unreadable".
+      AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: ""
+      # The base default names an assistx-api claim-status service that this
+      # profile's own network does not publish. Cleared; no smoke request reaches
+      # claim_fence.
+      AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL: ""
+      AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN: ""
       AUTO_ROUTER_AGENTGATEWAY_ENABLED: "false"
       AUTO_ROUTER_GATEWAY_MODE: direct
       AUTO_ROUTER_OTEL_ENABLED: "false"

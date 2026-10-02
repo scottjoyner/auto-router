@@ -3,8 +3,13 @@
 install:
 	python -m pip install -e '.[dev]'
 
+# Same app the Dockerfile CMD runs: schema-v2 Ed25519 runtime projections plus
+# claim-scoped executor auth, request idempotency and stream lifecycle. The
+# bare `auto_router.main_live:app` target is intentionally not offered here --
+# it omits all of those. Use it directly only when exercising the schema-v1
+# HMAC migration path.
 dev:
-	uvicorn auto_router.main_live:app --host 0.0.0.0 --port 8088 --reload
+	uvicorn auto_router.secure_live:app --host 0.0.0.0 --port 8088 --reload
 
 test:
 	bash scripts/test_reconciliation.sh
