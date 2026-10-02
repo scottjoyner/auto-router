@@ -43,6 +43,9 @@ class ModelConfig(BaseModel):
     task_family_scores: dict[str, dict[str, Any]] = Field(default_factory=dict)
     routing_roles: set[str] = Field(default_factory=set)
     worker_mode: str | None = None
+    # DEAD: declared but never read by any code path or test. Retained because the
+    # signed AssistX projection schema may populate it. See the housekeeping audit,
+    # "dead and duplicate code" - do not add behaviour on top of it without evidence.
     allow_agent_runtime: bool = False
     allow_code_execution: bool = False
 
@@ -68,7 +71,12 @@ class ProviderConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     models: list[ModelConfig] = Field(default_factory=list)
     gateway_managed: bool = False  # Route through agentgateway when enabled
-    local_gateway_only: bool = False  # Only use gateway for local-only requests
+    # MISLEADING NAME: despite the comment, this never influences gateway routing.
+    # The only read is config._provider_service(), which adds a "local_gateway_only"
+    # context tag. gateway selection is driven solely by AUTO_ROUTER_AGENTGATEWAY_ENABLED
+    # plus gateway_managed (providers.py), and both are forbidden in strict-offline
+    # mode. Do not treat this flag as a routing control.
+    local_gateway_only: bool = False
     routing_roles: set[str] = Field(default_factory=set)
     worker_mode: str | None = None
     allow_agent_runtime: bool = False

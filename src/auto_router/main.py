@@ -34,6 +34,7 @@ from auto_router.config import (
 from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
 from auto_router.model_registry import ModelRegistryStore
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
+from auto_router.offline_guard import enforce_strict_offline_provider_config
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
@@ -76,6 +77,14 @@ state = AppState()
 
 async def load_state() -> None:
     settings = get_settings()
+    # Validate the provider registry before building any provider state, for every
+    # entrypoint. `main_live`/`secure_live` already enforce this at *import* time
+    # (before the application module is constructed), which stays as defence in
+    # depth. Doing it here as well closes the gap for `auto_router.main:app` and
+    # `python -m auto_router.main`, which previously loaded whatever
+    # AUTO_ROUTER_PROVIDER_CONFIG named -- including archived hosted-provider
+    # registries such as archive/providers.yaml.bak, which this guard rejects.
+    enforce_strict_offline_provider_config()
     state.providers = load_provider_registry(settings.provider_config)
     await merge_discovered_lmstudio_providers(state)
     state.policies = load_policy_registry(settings.policy_config)
@@ -1454,6 +1463,16 @@ def _normalize_response_payload(response: ProviderResponse, stage: str, profile_
 
 
 def run() -> None:
+    """Compatibility entrypoint for ``python -m auto_router.main`` only.
+
+    Not registered as a console script and not used by the Makefile, Dockerfile, or
+    any compose file. It is strictly weaker than ``auto_router.secure_live:app``:
+    no claim-scoped executor authentication, no durable request idempotency, no
+    iterator-final streaming accounting, and the schema-v1 HMAC runtime projection.
+    ``load_state`` does now enforce the strict-offline provider registry, so a hosted
+    configuration is still rejected -- but prefer ``secure_live``.
+    """
+
     settings = get_settings()
     uvicorn.run("auto_router.main:app", host=settings.host, port=settings.port, reload=False)
 

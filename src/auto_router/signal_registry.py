@@ -6,7 +6,7 @@ import sqlite3
 import time
 from typing import Any
 
-from auto_router.context import ContextSignal, ContextSnapshot
+from auto_router.context import ContextSignal, ContextSnapshot, merge_signals
 from auto_router.live_models import LiveModelSnapshot
 from auto_router.sqlite_path import sqlite_path
 
@@ -629,11 +629,6 @@ class ContextSignalStore:
         return conn
 
 
-def _merge_signals(*groups: list[ContextSignal]) -> list[ContextSignal]:
-    merged: dict[str, ContextSignal] = {}
-    for group in groups:
-        for signal in group:
-            existing = merged.get(signal.signal_id)
-            if existing is None or signal.observed_at >= existing.observed_at:
-                merged[signal.signal_id] = signal
-    return sorted(merged.values(), key=lambda item: (item.priority, item.source, item.target_type, item.target_id, item.signal_type))
+# Canonical signal merge, shared with signal_registry via context.merge_signals.
+# Kept module-private under the existing name so the call sites are unchanged.
+_merge_signals = merge_signals

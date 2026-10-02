@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from auto_router.context import ContextModel, ContextNode, ContextProvider, ContextService, ContextSnapshot, ContextSignal, ExecutionLane, ServiceStatus
+from auto_router.context import ContextModel, ContextNode, ContextProvider, ContextService, ContextSnapshot, ContextSignal, ExecutionLane, ServiceStatus, merge_signals
 from auto_router.env_expansion import expand_env
 from auto_router.live_models import LiveModelSnapshot
 from auto_router.models import AgentWorkerConfig, ModelConfig, PolicyProfile, ProviderConfig
@@ -617,14 +617,9 @@ def _merge_nodes(*groups: list[ContextNode]) -> list[ContextNode]:
     return list(merged.values())
 
 
-def _merge_signals(*groups: list[ContextSignal]) -> list[ContextSignal]:
-    merged: dict[str, ContextSignal] = {}
-    for group in groups:
-        for signal in group:
-            existing = merged.get(signal.signal_id)
-            if existing is None or signal.observed_at >= existing.observed_at:
-                merged[signal.signal_id] = signal
-    return sorted(merged.values(), key=lambda item: (item.priority, item.source, item.target_type, item.target_id, item.signal_type))
+# Canonical signal merge, shared with signal_registry via context.merge_signals.
+# Kept module-private under the existing name so the call sites are unchanged.
+_merge_signals = merge_signals
 
 
 def _merge_models(

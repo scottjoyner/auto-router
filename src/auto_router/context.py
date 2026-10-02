@@ -142,6 +142,37 @@ class ContextProvider(BaseModel):
         return self.can_use_free_api and self.lane == ExecutionLane.free_api
 
 
+def merge_signals(*groups: list["ContextSignal"]) -> list["ContextSignal"]:
+    """Merge signal groups, keeping the most recently observed copy per signal_id.
+
+    Later groups win ties, and ties are broken by ``observed_at`` (``>=``), so the
+    last group supplying a given ``signal_id`` determines its provenance. The result
+    is ordered by the same key the dashboard and preflight read, so merged output is
+    stable regardless of how the groups were assembled.
+
+    This is the single implementation. It previously existed as two byte-identical
+    private copies, in ``config._merge_signals`` (merging graph-projection signals
+    into a snapshot) and ``signal_registry._merge_signals`` (merging persisted
+    signals back into a snapshot during ``hydrate_context``). Signal identity and
+    merge order feed policy scoring via ``PolicyEngine._context_signals``, so the two
+    copies had to stay in lockstep; they now cannot drift.
+
+    Equivalent by construction to both originals -- see
+    ``tests/test_context_merge.py``.
+    """
+
+    merged: dict[str, ContextSignal] = {}
+    for group in groups:
+        for signal in group:
+            existing = merged.get(signal.signal_id)
+            if existing is None or signal.observed_at >= existing.observed_at:
+                merged[signal.signal_id] = signal
+    return sorted(
+        merged.values(),
+        key=lambda item: (item.priority, item.source, item.target_type, item.target_id, item.signal_type),
+    )
+
+
 class ContextSnapshot(BaseModel):
     revision: str = "bootstrap"
     source: str = ""

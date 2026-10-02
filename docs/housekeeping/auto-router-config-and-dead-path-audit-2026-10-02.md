@@ -15,7 +15,8 @@ come from source, committed configuration, and mocked/local unit tests.
 | Slice 3 | `28b567b` — S1 blast-radius measurement + corrections to this audit |
 | Slice 4 | `f8e03a0` — U1 dangling dashboard links, D6 README entrypoint drift |
 | Slice 5 | `85359e8` — **X1 applied**, **X2 applied**, **tailnet discovery disabled** |
-| Slice 6 | this commit — **C9/A5 applied** (entrypoint posture), C2/C3 closed |
+| Slice 6 | `0d70095` — **C9/A5 applied** (entrypoint posture), C2/C3 closed |
+| Slice 7 | this commit — **X5 applied**, `_merge_signals` consolidated, dead fields annotated |
 | Production entrypoint | `auto_router.secure_live:app` (Dockerfile `CMD`) |
 | Test command | `bash scripts/test_reconciliation.sh` (blocking CI suite) |
 
@@ -626,8 +627,8 @@ pressing the *probe* / *scan* / *discover CLIs* buttons — gets a 404.
 **Not patched.** The two possible fixes are both operator decisions: strip the links
 from the templates and `ui_pages.py`, or mount the routes (which CI currently forbids).
 Stripping them changes a mounted UI; mounting them re-opens retired surfaces.
-| `ModelConfig.allow_agent_runtime`, `ProviderConfig.allow_agent_runtime` | defined on both models; **never read** by any code or test | retain — report as dead schema fields |
-| `ProviderConfig.local_gateway_only` | read only to add a context *tag* (`config.py:575`); never consulted for gateway routing | retain — name is misleading |
+| `ModelConfig.allow_agent_runtime`, `ProviderConfig.allow_agent_runtime` | defined on both models; **never read** by any code or test | retained, now annotated `DEAD` in `models.py` — the signed AssistX projection schema may populate it |
+| `ProviderConfig.local_gateway_only` | read only to add a context *tag* (`config.py:563`); never consulted for gateway routing | retained, now annotated `MISLEADING NAME` in `models.py`, with the real gateway-selection mechanism spelled out |
 | `config/providers.yaml` `max_concurrency`, `recommended_use` | not `ModelConfig` fields; silently dropped | retain — operator-visible, report as drift (**D4**) |
 
 ### 8.3 Confirmed duplication
@@ -636,7 +637,7 @@ Stripping them changes a mounted UI; mounting them re-opens retired surfaces.
 |---|---|---|
 | `${VAR:-default}` expansion | `config._expand_env`, `offline_guard._expand_env`, `fleet_task_dispatcher._expand_env` (divergent regexes) | **RESOLVED (slice 2)** → `auto_router.env_expansion.expand_env` |
 | SQLite URL → path | `ledger`, `service_store`, `memory_store`, `signal_registry`, `model_registry`, `event_outbox` (**6**, not 5) | **RESOLVED (slice 2)** → `auto_router.sqlite_path.sqlite_path` |
-| `_merge_signals` | `config.py:632`, `signal_registry.py:644` (byte-identical bodies) | retained — merging feeds policy scoring; consolidation is low value but non-zero risk |
+| `_merge_signals` | `config.py`, `signal_registry.py` (byte-identical) | **RESOLVED (slice 7)** → `context.merge_signals`, with 15 equivalence/ordering tests |
 | Signal *construction* helpers | `config._graph_signal_context`, `signal_registry` row decoding, `live_model_routes` signal emission | retained — distinct inputs, shared identity semantics |
 
 ### 8.4 Unused templates / static fragments
@@ -874,14 +875,37 @@ That credential is the Basic-auth pair the router presents to
 AssistX outbox sink (`service_routes.py:25`). **Not patched** — changing `:?` makes
 compose refuse to start where it previously started weak.
 
-**X5 — MEDIUM: `auto-router.main:app` bypasses the strict-offline guard.**
-`enforce_strict_offline_provider_config()` runs only in `main_live`/`secure_live`.
-Running `uvicorn auto_router.main:app` (or the `pyproject` console script, which
-targets `main_live`) with `AUTO_ROUTER_STRICT_OFFLINE` unset still defaults to
-`true` inside `host_is_offline_allowed`/`validate_offline_provider_config`, but the
-**startup validation never runs**, so a hosted provider registry such as
-`archive/providers.yaml.bak` would load. Default-offline membership checks still
-apply at request time. **Not patched** — entrypoint/exposure change.
+**X5 — APPLIED (slice 7) — `auto-router.main:app` bypassed the strict-offline guard.**
+`enforce_strict_offline_provider_config()` ran only at *import* of
+`main_live`/`secure_live`. Running `uvicorn auto_router.main:app`, or
+`python -m auto_router.main`, therefore performed no startup validation, so a hosted
+provider registry such as `archive/providers.yaml.bak` would load. Default-offline
+membership checks still applied per request, but a hosted registry that booted at
+all is a configuration failure.
+
+**Fix.** `main.load_state()` now calls `enforce_strict_offline_provider_config()`
+before it builds any provider state. That covers all four entrypoints — `main:app`,
+`main_live:app`, `secure_live:app`, and the `python -m` path — while `main_live` keeps
+its earlier import-time check as defence in depth (it still raises first, so the error
+surfaces at import rather than during lifespan startup).
+
+Verified: with `AUTO_ROUTER_PROVIDER_CONFIG=archive/providers.yaml.bak`,
+`load_state()` raises
+`strict offline provider validation failed: groq: quota_class must be 'local', got
+'fast_free'; groq: public or unresolved provider host 'api.groq.com' is forbidden; …`.
+Pinned by `test_every_entrypoint_enforces_the_offline_provider_guard` (asserts
+`load_state` raises on the archived hosted registry) and
+`test_load_state_accepts_the_canonical_registries` (asserts the three shipped
+registries still pass, so the guard cannot over-reject).
+
+**Also found while fixing it:** `main.run()` at the bottom of `main.py` is a **dead
+entrypoint** — not registered in `pyproject.toml`, not referenced by the Makefile,
+Dockerfile, or any compose file, reachable only via `python -m auto_router.main`. It
+is the weakest path in the tree (no executor auth, no idempotency, no stream
+lifecycle, v1 HMAC projection). It was **not** removed — that would delete a working
+invocation — but it now carries a docstring recording that `secure_live` is preferred,
+and the new offline guard covers it.
+
 
 **X6 — LOW: no CORS middleware is installed.** Verified: `grep -rn
 "CORSMiddleware|allow_origins|CORS" src/` returns nothing. There is no
@@ -963,13 +987,15 @@ not contacted.**
 | `pytest -q --ignore=tests/integration` (after slice 2) | **7 failed, 396 passed, 2 skipped** |
 | `pytest -q --ignore=tests/integration` (after slice 5) | **7 failed, 452 passed, 2 skipped** |
 | `pytest -q --ignore=tests/integration` (after slice 6) | **7 failed, 459 passed, 2 skipped** |
+| `pytest -q --ignore=tests/integration` (after slice 7) | **7 failed, 476 passed, 2 skipped** |
 | `bash scripts/test_reconciliation.sh` (after slice 2) | **1 failed, 378 passed, 2 skipped, 1 deselected** |
 | `bash scripts/test_reconciliation.sh` (after slice 5) | **1 failed, 434 passed, 2 skipped, 1 deselected** |
 | `bash scripts/test_reconciliation.sh` (after slice 6) | **1 failed, 441 passed, 2 skipped, 1 deselected** |
+| `bash scripts/test_reconciliation.sh` (after slice 7) | **1 failed, 458 passed, 2 skipped, 1 deselected** |
 
 Delta versus the `034d108` baseline: **+141 net passing** (311 → 452), **0 new
 failures**. The same 7 pre-existing failures remain, of which only 1 is in the
-blocking suite. Per-slice: slice 1 +13, slice 2 +72, slices 3-5 +56, slice 6 +7.
+blocking suite. Per-slice: slice 1 +13, slice 2 +72, slices 3-5 +56, slice 6 +7, slice 7 +17.
 
 ### 10.3 Regression sensitivity of every new test
 
@@ -1036,6 +1062,11 @@ tests/test_sqlite_path.py                               (new, 42 tests, slice 2)
 tests/test_stale_context_cache_repro.py                 (new, 5 tests, slice 3)
 tests/test_admin_auth_surface.py                        (new, 31 tests, slice 5)
 tests/test_entrypoint_posture.py                        (new, 7 tests, slice 6)
+tests/test_context_merge.py                             (new, 15 tests, slice 7)
+src/auto_router/context.py                              merge_signals (single implementation)
+src/auto_router/config.py                               delegates to context.merge_signals
+src/auto_router/signal_registry.py                      delegates to context.merge_signals
+src/auto_router/models.py                               DEAD / MISLEADING annotations
 src/auto_router/secure_live.py                          run() console entrypoint
 pyproject.toml                                          auto-router -> secure_live:run
 Makefile                                               dev target -> secure_live:app
@@ -1130,8 +1161,11 @@ explicit operator decision and are not safe for an unattended agent.**
    exactly one side.
 7. ~~**Consolidate the triplicated `${VAR:-default}` expander** … Then the SQLite
    `_path_from_url` copies.~~ **DONE in slice 2** (`env_expansion`, `sqlite_path`).
-   Remaining in this family: `_merge_signals` (2 byte-identical copies) and
-   `Settings.latency_cache_path` (deliberately excluded from `sqlite_path`).
+   **Both resolved in slice 7.** `_merge_signals` is now `context.merge_signals`.
+   `Settings.latency_cache_path` stays excluded on purpose — it derives a sibling
+   filename next to the resolved database and has its own absolute/cwd-relative
+   handling, so folding it into `sqlite_path` would change behaviour rather than
+   deduplicate it.
 8. **Decide the fate of the unmounted route registrars**
    (`register_service_routes`, `register_live_model_routes`, `register_cli_routes`,
    `register_backlog_routes`) — move them out of `src/` into a clearly-marked

@@ -150,3 +150,59 @@ def test_env_example_documents_the_new_guards() -> None:
 def test_agentgateway_overlay_is_marked_superseded() -> None:
     text = (REPO_ROOT / "docker-compose.agentgateway.yml").read_text(encoding="utf-8")
     assert "STATUS: SUPERSEDED" in text
+
+
+def test_every_entrypoint_enforces_the_offline_provider_guard() -> None:
+    """X5: the guard must run for `auto_router.main:app`, not just main_live.
+
+    `main_live` and `secure_live` enforce it at import time. `main.load_state`
+    now enforces it too, so `uvicorn auto_router.main:app` and
+    `python -m auto_router.main` cannot load a hosted provider registry such as
+    `archive/providers.yaml.bak`.
+    """
+
+    import asyncio
+    import os
+    from pathlib import Path
+
+    import auto_router.main as main_module
+
+    repo = Path(__file__).resolve().parents[1]
+    original = {
+        key: os.environ.get(key)
+        for key in (
+            "AUTO_ROUTER_STRICT_OFFLINE",
+            "AUTO_ROUTER_PROVIDER_CONFIG",
+            "AUTO_ROUTER_CONTEXT_CONFIG",
+        )
+    }
+    try:
+        os.environ["AUTO_ROUTER_STRICT_OFFLINE"] = "true"
+        os.environ["AUTO_ROUTER_PROVIDER_CONFIG"] = str(repo / "archive" / "providers.yaml.bak")
+        os.environ["AUTO_ROUTER_CONTEXT_CONFIG"] = str(
+            repo / "config" / "context.example.yaml"
+        )
+        from auto_router.settings import get_settings
+
+        get_settings.cache_clear()
+
+        with pytest.raises(RuntimeError, match="strict offline provider validation failed"):
+            asyncio.run(main_module.load_state())
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        from auto_router.settings import get_settings
+
+        get_settings.cache_clear()
+
+
+def test_load_state_accepts_the_canonical_registries() -> None:
+    """The guard must not reject the registries this deployment actually ships."""
+
+    from auto_router.offline_guard import validate_offline_provider_config
+
+    for name in ("providers.yaml", "providers.reconciliation.yaml", "providers.example.yaml"):
+        assert validate_offline_provider_config(REPO_ROOT / "config" / name, env={}) == [], name
