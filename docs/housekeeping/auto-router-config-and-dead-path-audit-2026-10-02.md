@@ -15,6 +15,19 @@ come from source, committed configuration, and mocked/local unit tests.
 | Production entrypoint | `auto_router.secure_live:app` (Dockerfile `CMD`) |
 | Test command | `bash scripts/test_reconciliation.sh` (blocking CI suite) |
 
+> ### ⚠ Concurrent change on `main` after this branch was cut
+>
+> While slices 1 and 2 were in progress, a separate automated actor
+> (**`Remediation Bot <remediation@local>`**) committed `d3a9258` — *pin router
+> projections to canonical AssistX DNS* — directly onto `main`. That commit was
+> **not** made by this campaign and has **not** been modified, reverted, or merged
+> here. This branch is based on `034d108` and therefore does **not** contain
+> `d3a9258`.
+>
+> `d3a9258` touches **only** `docker-compose.yml`, and it materially changes three
+> findings below. Read §14 before acting on C4, C8, S4/X3, or the Compose volume
+> map.
+
 ---
 
 ## 1. Configuration authority map
@@ -966,3 +979,117 @@ explicit operator decision and are not safe for an unattended agent.**
 | A5 | Is the `auto-router` console script intentionally the v1/HMAC entrypoint? | `pyproject.toml` and `Makefile dev` disagree with the Dockerfile; no commit message states intent |
 | A6 | Should `config/context.yaml` and `config/context.example.yaml` (byte-identical) remain in sync with each other? | W-58 retired static context as truth, but the local-file form is still the `Settings` default |
 | A7 | Are `ModelConfig.allow_agent_runtime` / `ProviderConfig.allow_agent_runtime` reserved for AssistX projection use, or abandoned? | never read, never projected, no documentation |
+
+---
+
+## 14. Impact of concurrent commit `d3a9258` on `main`
+
+`d3a9258` (Remediation Bot, 2026-10-02 15:04) changes `docker-compose.yml` only.
+It was not authored by this campaign and was left untouched. Three of its effects
+bear directly on this audit.
+
+### 14.1 X3 / S4 escalate from "latent" to "reachable in the production container"
+
+`d3a9258` mounts the Tailscale daemon socket and CLI into the router container:
+
+```yaml
+- /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock:ro
+- /usr/bin/tailscale:/usr/bin/tailscale:ro
+```
+
+That is exactly what `service_scanner.discover_tailnet_lmstudio_services()` needs in
+order to stop returning `[]` early:
+
+```
+secure_live lifespan
+  → main.load_state()                      (main.py:228 → main.py:80)
+    → merge_discovered_lmstudio_providers(state)
+      → discovered_lmstudio_providers()
+        → discover_tailnet_lmstudio_services()   (live_model_routes.py:264)
+          → subprocess.run(["tailscale", "status", "--json"])   ← now has a binary + socket
+```
+
+Before `d3a9258` this `subprocess.run` raised and the function returned `[]` in the
+container, so the tailnet half of S4 was effectively dead in production. After it,
+`tailscale status --json` can succeed, peers on port 1234 become
+`ContextService` records, and `merge_discovered_lmstudio_providers` can therefore:
+
+* append new `enabled=True` providers into the routing registry, and
+* **flip an operator-disabled provider back to enabled** — `config/providers.yaml`
+  ships `lmstudio-joyner` with `enabled: false`, and the merge computes
+  `bool(current.enabled or provider.enabled)`.
+
+It remains bounded to **one call at boot** (before `state.context` exists), and
+`refresh_tailnet_provider_task` / `refresh_live_models_task` are still not started by
+`strict_offline_lifespan`. Discovered providers also carry **no models**, so they
+cannot directly serve traffic — but they do enter `ProviderRegistry.enabled()`, the
+admission controller, and `/v1/models` enumeration.
+
+**The single lever that disables this is `AUTO_ROUTER_DISCOVER_TAILNET_LMSTUDIO=0`**,
+which `service_scanner._env_flag` already honours and which no canonical compose file
+sets. **This is now the highest-value one-line hardening change available**, because
+it removes the discovery input entirely without altering routing, admission, or
+dispatch semantics for anything the operator configured deliberately.
+
+### 14.2 C8 no longer holds as written
+
+This audit previously recorded: *"No code path depends on a Compose-only hostname."*
+That was true of **Python code** and remains true — `assistx-api` still appears only
+as an environment value. But `d3a9258` makes the canonical compose file **default**
+two URLs to a Compose-network-only name:
+
+```
+AUTO_ROUTER_CONTEXT_CONFIG          → http://assistx-api:8000/api/router/context-projection
+AUTO_ROUTER_RUNTIME_PROJECTION_URL  → http://assistx-api:8000/api/router/runtime-projection
+```
+
+(both were `http://host.docker.internal:8000/...`). The router container joins the
+external `assistx` network, so this resolves only if that external network actually
+publishes an `assistx-api` service. `compose.reconciliation.yml` deliberately uses a
+different name (`assistx-canary-api`) on a different network, so the two profiles now
+disagree on the AssistX DNS name. Worth confirming which name the production AssistX
+network publishes.
+
+### 14.3 C4 changes character under the smoke overlay
+
+`docker-compose.integration.yml` does not override
+`AUTO_ROUTER_RUNTIME_PROJECTION_URL`, so it inherits the base default. Under
+`034d108` that was `host.docker.internal:8000` — resolvable in CI via the inherited
+`extra_hosts: ["host.docker.internal:host-gateway"]`, with nothing listening. Under
+`d3a9258` it becomes `assistx-api:8000`, which does not resolve on the
+`auto-router-smoke` network at all. The projection poll task fails either way and CI's
+`configured is False` / `current is None` assertions still hold, so this is not a
+regression — but the recommended fix in C4 is now *more* clearly correct.
+
+This also retroactively validates a slice-2 decision: the CI `.env` fix writes a
+one-line placeholder rather than copying `.env.example`, and `.env.example` sets
+`AUTO_ROUTER_RUNTIME_PROJECTION_URL=http://assistx-api:8000/...`. Copying it would
+have silently pinned the smoke profile to a live AssistX DNS name. Verified: the
+slice-2 `.env` fix renders cleanly on top of `d3a9258`
+(`docker compose config` exits 0 with the expected smoke values).
+
+### 14.4 New cross-repository coupling not previously audited
+
+`d3a9258` also mounts a file from **another repository** into the router container:
+
+```yaml
+- /media/.../home_scott_git_auto-assist/src/assistx/fleet_reservations.json:/run/assistx/fleet_reservations.json:ro
+```
+
+This campaign made no change to `auto-assist` and did not read that path. Two things
+are worth recording for whoever reviews the deployment:
+
+* No Python code in this repository references
+  `/run/assistx/fleet_reservations.json` (verified: zero hits for
+  `fleet_reservations` in `src/`). The mount is currently inert, or it is consumed by
+  something outside the committed source — which would itself be a finding.
+* It is an unbound host-path dependency on a sibling repo's working tree, in the same
+  style as the two existing `assistx-runtime-projection-ed25519-public.pem` mounts,
+  but pointing at source rather than a config secret.
+
+### 14.5 What this campaign did **not** do about it
+
+`d3a9258` was left exactly as committed. No revert, no amend, no rebase of this
+branch onto it, and no edit to `docker-compose.yml` on `main`. Landing this branch is
+an operator decision: it is two clean, self-contained commits on top of `034d108`,
+and `d3a9258` is a single unrelated commit on top of the same parent.
