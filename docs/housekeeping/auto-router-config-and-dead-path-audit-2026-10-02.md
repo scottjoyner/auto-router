@@ -520,6 +520,25 @@ Docs-vs-code drift found:
 - **D4 — `config/providers.yaml` carries `max_concurrency` and `recommended_use` on
   six models.** Neither is a field on `ModelConfig`, and pydantic `extra="ignore"`
   drops both. An operator editing those keys gets no effect and no warning.
+- **D6 — the root `README.md` quickstart starts the v1 HMAC entrypoint.**
+  `README.md:210-212` says `cp .env.example .env && make install && make dev`, and
+  `Makefile`'s `dev` target runs `uvicorn auto_router.main_live:app`. The same README
+  documents the Ed25519 projection model and `AUTO_ROUTER_ADMIN_TOKEN`. So the
+  documented local-start path resolves `runtime_projection` **v1**, while
+  `docker compose up` on the next line resolves **v2** (Dockerfile `CMD` =
+  `secure_live:app`). Same divergence as **C9** / **A5**, but reached by copying the
+  primary quickstart rather than by installing the console script.
+
+  Corroborating detail for **X1**: the README documents
+  `curl -H "X-Admin-Token: $AUTO_ROUTER_ADMIN_TOKEN" .../admin/admission` and never
+  shows an unauthenticated `/admin/*` call. That is consistent with the *intended*
+  contract in `security.py` and `settings.py`, which strengthens the case that the 20
+  ungated endpoints are a defect rather than an accepted design.
+
+  Otherwise the root README is accurate: it correctly states the strict-offline
+  posture, the hosted-provider exclusion, the reconciliation-overlay workflow with
+  `127.0.0.1:18088`, and (line 273) already flags the unmounted legacy admin code.
+
 - **D5 — `config/providers.yaml` `lmstudio-destroyer-k2` uses a literal
   `base_url: http://destroyer.tailcb8954.ts.net:1235/v1`** while every sibling uses
   `${VAR:-default}`. Intentional (it is the newest commit, `034d108`) but
@@ -547,6 +566,36 @@ history with an explicit CI assertion, or shares a module with live code. See
 | `runtime_projection.py` (v1) | base class of v2; swap mechanics; `projection_poll_task` re-exported by v2 | retain — see §3 |
 | `service_store.py` / `service_scanner.probe_service` writers | only reachable through unmounted routes; DB table written by tests only | retain |
 | `scripts/build_fleet_loadouts.py` (direct Neo4j) | `pyproject` `legacy-loadout` extra documents it as "not used by the reconciliation runtime"; separate CI workflow | retain |
+
+**U1 — the dead registrars have a user-visible consequence: 8 of the 26 paths the
+mounted dashboard links to return 404 in production.**
+
+`/dashboard` *is* mounted (`main.py:472`), and `templates/base.html` renders a nav bar
+plus HTMX actions from `ui_pages.py`. Measured against the live route table built from
+`secure_live` (37 mounted routes):
+
+| dangling path | linked from | defined in (never called) |
+|---|---|---|
+| `/admin/outbox` | `base.html`, `dashboard_summary.html`, `ops_health_gaps.html`, `ops_summary.html`, `ui_pages.py` | `service_routes.register_service_routes` |
+| `/admin/services` | `base.html`, `dashboard_summary.html`, `ui_pages.py` | `service_routes.register_service_routes` |
+| `/admin/services/scan` (`hx-post`) | `dashboard.html` | `service_routes.register_service_routes` |
+| `/admin/live-models` | `base.html`, `ops_health_gaps.html`, `ops_summary.html`, `ui_pages.py` | `live_model_routes.register_live_model_routes` |
+| `/admin/providers/probe` (`hx-post`) | `dashboard.html`, `ops_summary.html` | `live_model_routes.register_live_model_routes` |
+| `/admin/agent-clis` | `base.html`, `ops_summary.html`, `ui_pages.py` | `cli_routes.register_cli_routes` |
+| `/admin/agent-clis/discover` (`hx-post`) | `dashboard.html`, `ops_summary.html` | `cli_routes.register_cli_routes` |
+| `/admin/backlog/assistx/config` | `dashboard_summary.html`, `ui_pages.py` | `backlog_routes.register_backlog_routes` |
+
+The remaining 18 referenced paths resolve, including `/admin/context`,
+`/admin/providers`, `/admin/quota`, `/admin/ops/summary` and `/api/dashboard/summary`.
+
+This is the operator-visible face of §8.2: the CI "forbidden paths" assertions are
+working exactly as intended, but the dashboard was never updated to match. An operator
+clicking **live models**, **services**, **outbox**, or **agent CLIs** in the nav — or
+pressing the *probe* / *scan* / *discover CLIs* buttons — gets a 404.
+
+**Not patched.** The two possible fixes are both operator decisions: strip the links
+from the templates and `ui_pages.py`, or mount the routes (which CI currently forbids).
+Stripping them changes a mounted UI; mounting them re-opens retired surfaces.
 | `ModelConfig.allow_agent_runtime`, `ProviderConfig.allow_agent_runtime` | defined on both models; **never read** by any code or test | retain — report as dead schema fields |
 | `ProviderConfig.local_gateway_only` | read only to add a context *tag* (`config.py:575`); never consulted for gateway routing | retain — name is misleading |
 | `config/providers.yaml` `max_concurrency`, `recommended_use` | not `ModelConfig` fields; silently dropped | retain — operator-visible, report as drift (**D4**) |
@@ -975,7 +1024,8 @@ explicit operator decision and are not safe for an unattended agent.**
    `register_backlog_routes`) — move them out of `src/` into a clearly-marked
    historical package, or delete them once the CI "forbidden paths" assertions are
    updated. Do not do this silently; the CI assertions are the contract that keeps
-   them unmounted.
+   them unmounted. **U1 must be resolved first**: until the dashboard stops linking
+   to them, deleting the modules turns a 404 into an import error.
 9. **D2 is FIXED in slice 2.** Still open: **D4** (drop or implement
    `max_concurrency` / `recommended_use`, three sites each in
    `config/providers.yaml`) and documentation for the dead `allow_agent_runtime`
