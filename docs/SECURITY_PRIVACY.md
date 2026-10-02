@@ -1,5 +1,10 @@
 # Security and Privacy
 
+> **Status: CURRENT_BUT_INCOMPLETE.**
+> The principles still hold. This file predates Ed25519 runtime projections and
+> claim-scoped executor authentication; see
+> [`LOW_LEVEL_DESIGN.md`](LOW_LEVEL_DESIGN.md) for the current enforcement model.
+
 ## Principles
 
 - Default sensitive or private work to local LM Studio endpoints.

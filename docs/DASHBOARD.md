@@ -1,5 +1,10 @@
 # Dashboard Design
 
+> **Status: CURRENT_BUT_INCOMPLETE.**
+> `/dashboard` is mounted by the production entrypoint, but the `/admin/*` JSON
+> links its templates render are not admin-gated. See the security findings in
+> [`housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md`](housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md).
+
 ## 1. Purpose
 
 The dashboard is the operator console for `auto-router`. It should quickly explain what the router is doing, what quota is available to burn, which providers are healthy, whether local fallback is ready, which services are available, and whether AssistX/Neo4j context agrees with the active routing lanes.

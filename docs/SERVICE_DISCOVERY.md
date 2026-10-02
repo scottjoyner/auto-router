@@ -1,5 +1,17 @@
 # Service Discovery and Model Registry
 
+> **Status: SUPERSEDED — describes HTTP surfaces that are no longer mounted.**
+>
+> The service registry / scanner / model-registry split described here is retained
+> as history. `auto_router.secure_live:app` does not mount `/admin/services*` or
+> `/admin/live-models*`; canonical runtime truth arrives through the signed
+> AssistX runtime projection instead.
+>
+> Current authority boundaries:
+> [`HIGH_LEVEL_DESIGN.md`](HIGH_LEVEL_DESIGN.md) and
+> [`HETEROGENEOUS_FLEET_ROUTING.md`](HETEROGENEOUS_FLEET_ROUTING.md).
+> Historical content is retained unchanged below.
+
 ## 1. Purpose
 
 `auto-router` now separates three related but different concerns:

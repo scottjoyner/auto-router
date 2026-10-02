@@ -1,5 +1,8 @@
 # Swarm Unification Backlog
 
+> **Status: PLAN_ONLY — planning record, not an operator instruction.**
+> Cross-repo swarm backlog. Not a deployment or operations source of truth.
+
 This is the execution backlog for turning providers and model endpoints into first-class swarm elements across the router / assignment / execution / graph stack.
 
 Primary goal:

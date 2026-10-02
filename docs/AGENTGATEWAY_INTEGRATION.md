@@ -1,5 +1,13 @@
 # Design Proposal and Implementation Guide: Agentgateway Integration for auto-router
 
+> **Status: SUPERSEDED — broker gateways are unavailable on the current deployment.**
+>
+> `AUTO_ROUTER_AGENTGATEWAY_ENABLED` is `false` in every canonical compose file,
+> the `gateway-*` Makefile targets intentionally exit 2, and
+> `offline_guard.validate_offline_provider_config` rejects
+> `gateway_managed: true`. `docker-compose.agentgateway.yml` is retained as
+> history only. Retained unchanged below.
+
 ## 1. Executive Summary
 
 This proposal adds `agentgateway` as an optional but first-class gateway sidecar for `auto-router`.

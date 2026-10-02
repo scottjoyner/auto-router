@@ -1,5 +1,8 @@
 # Provider Matrix
 
+> **Status: HISTORICAL — hosted provider quota reference.**
+> No hosted provider is configured. Retained unchanged as history.
+
 Provider quotas change frequently. Treat this file as a starting point and verify active limits in each provider console before production use.
 
 ## 1. Google Gemini

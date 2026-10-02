@@ -1,5 +1,8 @@
 # Implementation Plan
 
+> **Status: PLAN_ONLY — pre-strict-offline implementation plan.**
+> Its route-inventory and hosted-provider steps no longer reflect the router.
+
 This plan converts `auto-router` from a limited local-first proxy into the router/scheduler node that can support Sophia realtime requests, AssistX/Paperclip task execution, Neo4j-backed context, and surplus free-quota burn-down.
 
 ## P0 - Repository stabilization

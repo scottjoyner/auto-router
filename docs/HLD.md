@@ -1,5 +1,11 @@
 # High-Level Design: auto-router Architecture
 
+> **Status: SUPERSEDED by [`HIGH_LEVEL_DESIGN.md`](HIGH_LEVEL_DESIGN.md).**
+>
+> This is the pre-strict-offline HLD. It describes hosted/free-quota lanes,
+> Neo4j write-back, and route tables that the current runtime does not implement.
+> Retained unchanged as history.
+
 ## 1. Executive summary
 
 `auto-router` is a local-first LLM routing control plane. It exposes an OpenAI/LM Studio-compatible API while selecting between local LM Studio endpoints, free/hosted model providers, Cerebras flash-start planning, dry-run backlog scheduling, service discovery, model registry, agent CLI discovery, and AssistX/Neo4j provenance write-back.

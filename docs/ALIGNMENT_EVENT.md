@@ -1,5 +1,7 @@
 # Neo4j Context Alignment Event
 
+> **Status: HISTORICAL — Neo4j context alignment event record.**
+
 ## Purpose
 
 This repo should route work using the same graph-backed context that AssistX owns.

@@ -1,3 +1,17 @@
+# ---------------------------------------------------------------------------
+# STATUS: SUPERSEDED / NOT PART OF ANY CURRENT DEPLOYMENT.
+#
+# Broker/hosted gateway targets are forbidden on the strict-offline deployment:
+#   * AUTO_ROUTER_AGENTGATEWAY_ENABLED is "false" in every canonical compose file.
+#   * The gateway-* Makefile targets intentionally exit 2.
+#   * offline_guard.validate_offline_provider_config rejects gateway_managed=true.
+#   * providers.py disables the gateway adapter when AGENTGATEWAY_ENABLED is off.
+#
+# This file is retained as history only. It additionally mounts an *example*
+# gateway config as live configuration and injects hosted provider API keys.
+# See docs/housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md.
+# ---------------------------------------------------------------------------
+
 # Agentgateway sidecar overlay for auto-router
 # Start with: docker compose -f docker-compose.yml -f docker-compose.agentgateway.yml up --build
 

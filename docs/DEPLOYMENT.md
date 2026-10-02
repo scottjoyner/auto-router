@@ -1,5 +1,14 @@
 # Deployment Guide
 
+> **Status: CURRENT_BUT_INCOMPLETE.**
+>
+> The deployment model described here is current, but this file does not cover the
+> strict-offline runtime projection, the `auto_router.secure_live:app` entrypoint,
+> `compose.reconciliation.yml`, or `docker-compose.integration.yml`. For the full
+> Compose profile map and entrypoint matrix see
+> [`housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md`](housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md).
+> Operator recovery: [`fleet_outage_recovery.md`](fleet_outage_recovery.md).
+
 This guide covers the aligned deployment where AssistX is already running and `auto-router` is introduced as a separate OpenAI-compatible service.
 
 ## Deployment model

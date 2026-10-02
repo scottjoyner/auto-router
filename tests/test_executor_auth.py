@@ -9,7 +9,12 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from auto_router.executor_auth import ExecutorInferenceAuthMiddleware
+from auto_router.executor_auth import (
+    ExecutorAuthError,
+    ExecutorInferenceAuthMiddleware,
+    _load_public_key,
+    decode_executor_token,
+)
 
 
 def _b64(value: bytes) -> str:
@@ -185,3 +190,71 @@ async def test_inference_token_enforces_output_and_attempt_budgets(signing_key):
     )
     assert first[0]["status"] == 204
     assert second[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_unreadable_verify_key_file_rejects_rather_than_raising(signing_key, monkeypatch):
+    """A missing key file must be rejected, never raised through the middleware.
+
+    ``docker-compose.integration.yml`` inherits
+    ``AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE`` from the base compose file while
+    replacing ``volumes:`` with ``!override``, so the PEM is absent in the smoke
+    container. The request must be refused without reaching the downstream app.
+    """
+
+    monkeypatch.setenv(
+        "AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE",
+        "/nonexistent/run/secrets/assistx_executor_public_key.pem",
+    )
+    monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_VERIFY_KEY_PEM", raising=False)
+
+    sent, captured = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key),
+        {
+            "model": "auto/code",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 128,
+        },
+    )
+
+    assert sent[0]["status"] == 401
+    assert captured == {}, "the request must never reach the downstream app"
+    # The specific cause is deliberately not leaked to callers: `decode_executor_token`
+    # re-wraps verification failures as a generic signature rejection.
+    body = next(message.get("body") for message in sent if "body" in message)
+    assert json.loads(body)["detail"] == "executor token signature is invalid"
+
+
+def test_unreadable_verify_key_file_is_distinguishable_from_a_bad_token(signing_key, monkeypatch):
+    """The rejection must identify the deployment fault, not the caller.
+
+    ``decode_executor_token`` masks verification failures as
+    "signature is invalid". When the router's own key material is unreadable the
+    chained cause has to stay an ``ExecutorAuthError`` so operators can tell a
+    missing/unreadable key file apart from a genuinely invalid token.
+    """
+
+    monkeypatch.setenv(
+        "AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE",
+        "/nonexistent/run/secrets/assistx_executor_public_key.pem",
+    )
+    monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_VERIFY_KEY_PEM", raising=False)
+
+    with pytest.raises(ExecutorAuthError) as caught:
+        decode_executor_token(_token(signing_key))
+
+    assert isinstance(caught.value.__cause__, ExecutorAuthError)
+    assert "verification key file is unreadable" in str(caught.value.__cause__)
+    assert isinstance(caught.value.__cause__.__cause__, OSError)
+
+
+def test_verify_key_file_oserror_is_wrapped_as_executor_auth_error(monkeypatch):
+    monkeypatch.setenv(
+        "AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE",
+        "/nonexistent/run/secrets/assistx_executor_public_key.pem",
+    )
+    monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_VERIFY_KEY_PEM", raising=False)
+
+    with pytest.raises(ExecutorAuthError, match="verification key file is unreadable"):
+        _load_public_key()

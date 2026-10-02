@@ -61,7 +61,7 @@ def _state() -> SimpleNamespace:
     return SimpleNamespace(
         providers=_providers(),
         policies=_policies(),
-        agents=SimpleNamespace(workers=[]),
+        agents=SimpleNamespace(agent_workers=[]),
         context=ContextSnapshot(
             revision="rev",
             source="assistx",

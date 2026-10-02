@@ -1,5 +1,8 @@
 # Swarm Unification Execution Plan
 
+> **Status: PLAN_ONLY — planning record, not an operator instruction.**
+> Cross-repo swarm execution ordering. Not a deployment or operations source of truth.
+
 This document turns the swarm-unification checklist into an execution-ready plan.
 
 It is meant to answer three questions:

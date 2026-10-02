@@ -1,5 +1,8 @@
 # Swarm Unification Checklist
 
+> **Status: PLAN_ONLY — planning record, not an operator instruction.**
+> Cross-repo swarm scope checklist. Not a deployment or operations source of truth.
+
 This checklist breaks the swarm work down repo by repo and evaluates what is already up, what is partially up, and what is still missing.
 
 For the execution-ready version of this plan, see:

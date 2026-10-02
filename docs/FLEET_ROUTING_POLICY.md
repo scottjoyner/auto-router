@@ -1,5 +1,17 @@
 # Fleet Routing Policy
 
+> **Status: SUPERSEDED — the public lane is forbidden in strict-offline mode.**
+>
+> This policy describes a layered local / hybrid / public routing model. The
+> production router runs with `AUTO_ROUTER_STRICT_OFFLINE=true` and every enabled
+> provider must have `quota_class: local` and an offline-allowed host, so the
+> public lanes cannot be configured.
+>
+> Current routing policy authority: [`LOW_LEVEL_DESIGN.md`](LOW_LEVEL_DESIGN.md),
+> `config/policies.yaml`, and
+> [`HETEROGENEOUS_FLEET_ROUTING.md`](HETEROGENEOUS_FLEET_ROUTING.md). Historical
+> content is retained unchanged below.
+
 Goal: route work across local nodes, auto-router overlays, and public APIs while preserving the privacy wall for personal and internal data.
 
 This policy is intentionally layered. A request is not pinned directly to a machine unless privacy, data locality, model availability, service load, or operator intent requires it. The normal flow is:

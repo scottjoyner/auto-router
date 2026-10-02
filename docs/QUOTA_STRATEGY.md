@@ -1,5 +1,8 @@
 # Quota Strategy
 
+> **Status: HISTORICAL — hosted free-quota burn strategy.**
+> No hosted quota class is reachable. Retained unchanged as history.
+
 ## 1. Strategy summary
 
 The router should intentionally consume free quota on valuable work before reset while protecting enough reserve for high-priority interactive tasks.

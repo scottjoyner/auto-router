@@ -245,7 +245,10 @@ def _check_cli_discovery(state: Any) -> PreflightCheck:
 
 def _check_dry_run_posture(state: Any) -> PreflightCheck:
     agents = getattr(state, "agents", None)
-    workers = getattr(agents, "workers", []) if agents else []
+    # AgentWorkerRegistry exposes `agent_workers`; reading `workers` always yields an
+    # empty list and silently reported "dry-run posture preserved" for every
+    # deployment.
+    workers = getattr(agents, "agent_workers", []) if agents else []
     enabled_workers = [worker.name for worker in workers if getattr(worker, "enabled", False)]
     if enabled_workers:
         return PreflightCheck(

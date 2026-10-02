@@ -1,5 +1,8 @@
 # Router Switching Mechanism Design
 
+> **Status: HISTORICAL — pre-strict-offline lane switching design.**
+> Retained unchanged as history.
+
 ## 1. Purpose
 
 `auto-router` is the decision node that decides when work should burn legitimate free LLM quota, stay local, use a repo agent, or fall back to LM Studio. It serves Sophia realtime requests, AssistX/Paperclip task traffic, and backlog burn-down work.

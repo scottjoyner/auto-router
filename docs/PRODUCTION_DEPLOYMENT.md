@@ -1,5 +1,17 @@
 # Production Deployment Guide
 
+> **Status: SUPERSEDED — do not use as an operator runbook.**
+>
+> This guide predates the strict-offline runtime projection. Its commands assume
+> a local YAML context file, free hosted providers, and an unauthenticated
+> `/admin/*` surface, none of which match the mounted
+> `auto_router.secure_live:app` entrypoint.
+>
+> Current operator guidance: [`DEPLOYMENT.md`](DEPLOYMENT.md),
+> [`fleet_outage_recovery.md`](fleet_outage_recovery.md),
+> [`LOW_LEVEL_DESIGN.md`](LOW_LEVEL_DESIGN.md), and
+> `compose.reconciliation.yml`. Historical content is retained unchanged below.
+
 ## 1. Target role
 
 `auto-router` should run as the routing control plane for the homelab/AssistX stack. In production, it should:

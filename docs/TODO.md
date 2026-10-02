@@ -1,5 +1,13 @@
 # TODO Backlog
 
+> **Status: HISTORICAL — backlog from the pre-projection era.**
+>
+> Entries referencing `flash_start_planner`, Cerebras, and free-quota burn-down
+> describe capabilities that are forbidden in strict-offline mode. Do not treat
+> any unchecked item here as current work. The authoritative open-question list
+> is [`housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md`](housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md).
+> Content retained unchanged below.
+
 ## Recently completed
 
 - Resolved runtime/test merge-conflict debris from the router core.

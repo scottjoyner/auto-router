@@ -1,5 +1,9 @@
 # Cerebras Flash Node Design
 
+> **Status: HISTORICAL — hosted provider design, forbidden in strict-offline mode.**
+> No Cerebras provider exists in `config/providers.yaml`, and the offline guard
+> rejects hosted hosts. Retained unchanged as history.
+
 ## 1. Why this node matters
 
 Cerebras should be treated as a first-class flash-start node in `auto-router`, not just another generic OpenAI-compatible provider. The useful property is speed: it can produce an initial decomposition, task graph, prompt scaffold, file-change plan, or triage summary before slower local or higher-quality refinement lanes finish warming up.

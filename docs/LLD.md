@@ -1,5 +1,12 @@
 # Low-Level Design: auto-router
 
+> **Status: SUPERSEDED by [`LOW_LEVEL_DESIGN.md`](LOW_LEVEL_DESIGN.md).**
+>
+> This is the pre-strict-offline LLD. Its route tables list endpoints that the
+> production entrypoint does not mount, and it predates Ed25519 runtime
+> projections and claim-scoped executor authentication. Retained unchanged as
+> history.
+
 ## 1. Purpose
 
 This low-level design maps the current `auto-router` architecture to concrete modules, APIs, data models, persistence tables, event payloads, and runtime flows.

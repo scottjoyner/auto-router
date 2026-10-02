@@ -1,5 +1,7 @@
 # Ideas and Future Work
 
+> **Status: PLAN_ONLY — future-work notes, not an operator instruction.**
+
 ## Router-as-a-resource-scheduler
 
 Treat every model lane as a resource with a purpose:

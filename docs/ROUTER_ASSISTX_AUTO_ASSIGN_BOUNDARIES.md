@@ -1,5 +1,11 @@
 # Router / AssistX / auto-assign boundary map
 
+> **Status: CURRENT_BUT_INCOMPLETE.**
+> The ownership split is correct. Note that the "live inventory discovery →
+> auto-router" row is now owned by AssistX-signed runtime projections; the router
+> consumes them rather than admitting inventory itself. See
+> [`housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md`](housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md).
+
 This document defines the ownership split that the migration plan is converging on.
 
 ## Canonical ownership

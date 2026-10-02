@@ -1,5 +1,17 @@
 # Operator Runbook
 
+> **Status: SUPERSEDED — do not use as an operator runbook.**
+>
+> This runbook describes the "enhanced app wrapper", router-owned backlog
+> scheduling, the service launchpad, and agent-CLI discovery. Those surfaces are
+> intentionally *not mounted* by the production entrypoint
+> (`auto_router.secure_live:app`), and `/admin/*` now requires
+> `AUTO_ROUTER_ADMIN_TOKEN`.
+>
+> Current operator guidance: [`DEPLOYMENT.md`](DEPLOYMENT.md) and
+> [`fleet_outage_recovery.md`](fleet_outage_recovery.md). Historical content is
+> retained unchanged below.
+
 ## 1. Purpose
 
 This runbook is the practical checklist for running `auto-router` as the local routing, quota, service-launchpad, backlog-selection, and agent-capability discovery node.

@@ -1,5 +1,7 @@
 # Next Version Plan — 2026-06-09
 
+> **Status: PLAN_ONLY — cross-repo plan with a completed-session checklist.**
+
 Cross-repo plan covering auto-assist, auto-router, and auto-assign.
 
 ---

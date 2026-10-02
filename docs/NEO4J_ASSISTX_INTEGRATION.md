@@ -1,5 +1,8 @@
 # Neo4j and AssistX Integration Design
 
+> **Status: HISTORICAL — direct-Neo4j design, superseded by HTTP projection over AssistX.**
+> The router no longer writes to Neo4j; it consumes `AUTO_ROUTER_CONTEXT_CONFIG`.
+
 ## 1. Integration boundary
 
 AssistX is the source of truth for task state, Sophia ingestion, policy decisions, agent runs, service inventory, and artifacts. `auto-router` is an execution-selection service. It reads graph-backed context from AssistX and emits routing outcomes back to AssistX, but it should not become a competing task database.

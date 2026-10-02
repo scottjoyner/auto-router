@@ -59,8 +59,16 @@ def _b64decode(value: str) -> bytes:
 def _read_key() -> bytes:
     path = os.getenv("AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE", "").strip()
     if path:
-        with open(path, "rb") as handle:
-            return handle.read()
+        # An unreadable or absent key file must fail closed with the same explicit
+        # error as an unconfigured key. Letting the OSError escape surfaces as an
+        # opaque 500 from the auth middleware instead of a 401 rejection.
+        try:
+            with open(path, "rb") as handle:
+                return handle.read()
+        except OSError as exc:
+            raise ExecutorAuthError(
+                f"auto-router executor verification key file is unreadable: {path}"
+            ) from exc
     value = os.getenv("AUTO_ROUTER_EXECUTOR_VERIFY_KEY_PEM", "")
     return value.replace("\\n", "\n").encode("utf-8") if value else b""
 
