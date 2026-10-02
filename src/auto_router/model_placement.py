@@ -50,6 +50,15 @@ UNLOAD_ENABLED = os.getenv("AUTO_ROUTER_PLACEMENT_UNLOAD", "false").lower() in (
     "yes",
     "on",
 )
+# `POST /admin/load?apply=true` is a *manual* fleet mutation. Previously the
+# `apply` query parameter bypassed AUTOLOAD_ENABLED entirely, so anyone who could
+# reach the route could load models onto any node regardless of the deployment's
+# autoload posture. Realising a manual apply now requires this separate opt-in so
+# that an operator has to enable it deliberately. The background reconcile loop
+# calls reconcile_once() directly under AUTOLOAD_ENABLED and is unaffected.
+MANUAL_APPLY_ENABLED = os.getenv(
+    "AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED", "false"
+).lower() in ("1", "true", "yes", "on")
 
 # Models we are permitted to unload when UNLOAD_ENABLED is true. Empty by
 # default so the controller never evicts a model it was not told to manage.

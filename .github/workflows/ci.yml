@@ -162,7 +162,8 @@ jobs:
           assert not (forbidden & paths), sorted(forbidden & paths)
           PY
 
-          curl -sf http://127.0.0.1:8088/v1/models > /tmp/router-models.json
+          curl -sf -H 'X-Admin-Token: smoke-admin-token' \
+            http://127.0.0.1:8088/v1/models > /tmp/router-models.json
           python - <<'PY'
           import json
           from pathlib import Path
@@ -215,19 +216,59 @@ jobs:
           echo "duplicate authenticated inference: $duplicate_code"
           test "$duplicate_code" = "409"
 
-          # Administrative status must require the local admin token.
-          for path in /admin/quota /admin/admission /admin/runtime-projection; do
+          # Every fleet-disclosure and operator surface must require the admin
+          # token. This list is the contract that main.py / ops_dashboard_routes.py
+          # keep every /admin/*, /jobs/agent*, /dashboard and /api/dashboard/* route
+          # behind require_admin. A newly added ungated route fails here.
+          for path in \
+            /admin/quota /admin/admission /admin/runtime-projection \
+            /admin/placement /admin/load /admin/context /admin/context/graph \
+            /admin/providers /admin/providers/health /admin/agent-workers \
+            /admin/agent-jobs /admin/usage /admin/circuits /admin/circuits/reset \
+            /admin/memory /admin/ops/summary /admin/ops/preflight \
+            /dashboard /api/dashboard/summary /api/dashboard/ops-summary \
+            /v1/models /metrics/ops \
+            /jobs/agent/some-job-id /jobs/agent/some-job-id/artifacts; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088$path")
             echo "unauthenticated $path: $code"
             test "$code" = "401"
           done
 
+          # Health and the Prometheus scrape must stay reachable without a token.
+          for path in /health /api/health /metrics; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088$path")
+            echo "unauthenticated $path: $code"
+            test "$code" = "200"
+          done
+
           # The same endpoints succeed with the local admin token.
-          code=$(curl -s -o /dev/null -w '%{http_code}' \
+          for path in /admin/quota /admin/context /admin/providers /admin/placement /dashboard; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H 'X-Admin-Token: smoke-admin-token' \
+              "http://127.0.0.1:8088$path")
+            echo "authenticated $path: $code"
+            test "$code" = "200"
+          done
+
+          # POST /admin/load?apply=true must be refused: manual model loading is
+          # refused unless AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED is true, so a
+          # caller with admin credentials still cannot mutate the fleet by default.
+          load_code=$(curl -s -o /tmp/router-admin-load.json -w '%{http_code}' \
+            -X POST \
             -H 'X-Admin-Token: smoke-admin-token' \
-            http://127.0.0.1:8088/admin/quota)
-          echo "authenticated admin status: $code"
-          test "$code" = "200"
+            'http://127.0.0.1:8088/admin/load?apply=true')
+          echo "admin load apply=true: $load_code"
+          test "$load_code" = "200"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/router-admin-load.json").read_text())
+          assert payload.get("applied") is False, payload
+          assert "AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED" in payload.get(
+              "apply_refused", ""
+          ), payload
+          PY
 
           curl -sf \
             -H 'X-Admin-Token: smoke-admin-token' \

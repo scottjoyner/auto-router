@@ -79,7 +79,9 @@ reconciliation-up:
 reconciliation-status:
 	@$(RECON_COMPOSE) ps
 	@curl -fsS http://127.0.0.1:18088/health | jq
-	@curl -fsS http://127.0.0.1:18088/v1/models | jq
+	@test -n "$$AUTO_ROUTER_ADMIN_TOKEN" || \
+		{ echo "set AUTO_ROUTER_ADMIN_TOKEN: /admin/* and /v1/models require it" >&2; exit 2; }
+	@curl -fsS -H "X-Admin-Token: $$AUTO_ROUTER_ADMIN_TOKEN" http://127.0.0.1:18088/v1/models | jq
 
 reconciliation-network-verify:
 	@python scripts/verify_reconciliation_network.py

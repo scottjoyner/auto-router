@@ -470,7 +470,7 @@ async def metrics() -> str:
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request) -> Any:
+async def dashboard(request: Request, _: None = Depends(require_admin)) -> Any:
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -479,7 +479,7 @@ async def dashboard(request: Request) -> Any:
 
 
 @app.get("/api/dashboard/summary", response_class=HTMLResponse)
-async def dashboard_summary(request: Request) -> Any:
+async def dashboard_summary(request: Request, _: None = Depends(require_admin)) -> Any:
     settings = get_settings()
     provider_health_summary = state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else []
     model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
@@ -529,17 +529,17 @@ async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
 
 
 @app.get("/admin/providers/health")
-async def admin_provider_health() -> dict[str, Any]:
+async def admin_provider_health(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": await _provider_health_reports()}
 
 
 @app.get("/admin/context")
-async def admin_context() -> dict[str, Any]:
+async def admin_context(_: None = Depends(require_admin)) -> dict[str, Any]:
     return state.context.model_dump()
 
 
 @app.get("/admin/context/graph")
-async def admin_context_graph() -> dict[str, Any]:
+async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {
         "revision": state.context.revision,
         "source": state.context.source,
@@ -549,61 +549,79 @@ async def admin_context_graph() -> dict[str, Any]:
 
 
 @app.get("/admin/providers")
-async def admin_providers() -> dict[str, Any]:
+async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
 @app.get("/admin/placement")
-async def admin_placement() -> dict[str, Any]:
+async def admin_placement(_: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import compute_plan
 
     return compute_plan(state)
 
 
 @app.post("/admin/load")
-async def admin_load(apply: bool | None = None) -> dict[str, Any]:
-    from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
+async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)) -> dict[str, Any]:
+    from auto_router.model_placement import (
+        AUTOLOAD_ENABLED,
+        MANUAL_APPLY_ENABLED,
+        compute_plan,
+        reconcile_once,
+    )
 
     do_apply = apply if apply is not None else AUTOLOAD_ENABLED
+    if do_apply and not MANUAL_APPLY_ENABLED:
+        # Never let the `apply` query parameter load models onto the fleet on its
+        # own authority. Realising a manual apply is a separate, explicit opt-in.
+        return {
+            **compute_plan(state),
+            "applied": False,
+            "apply_refused": (
+                "manual model loading is disabled; set "
+                "AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED=true to allow it"
+            ),
+            "autoload_enabled": AUTOLOAD_ENABLED,
+            "manual_apply_enabled": MANUAL_APPLY_ENABLED,
+        }
     return await reconcile_once(state, apply=do_apply)
 
 
 @app.get("/admin/agent-workers")
-async def admin_agent_workers() -> dict[str, Any]:
+async def admin_agent_workers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
 
 
 @app.get("/admin/usage")
-async def admin_usage(limit: int = 50) -> dict[str, Any]:
+async def admin_usage(limit: int = 50, _: None = Depends(require_admin)) -> dict[str, Any]:
     return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
 
 
 @app.get("/admin/circuits")
-async def admin_circuits() -> dict[str, Any]:
+async def admin_circuits(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
 
 
 @app.post("/admin/circuits/reset")
-async def admin_circuits_reset() -> dict[str, Any]:
+async def admin_circuits_reset(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear all circuit breakers (recover from tripped providers immediately)."""
     cleared = state.circuits.reset()
     return {"cleared": cleared}
 
 
 @app.post("/admin/circuits/reset/{owner:path}")
-async def admin_circuits_reset_owner(owner: str) -> dict[str, Any]:
+async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear a single circuit breaker by owner (provider/model)."""
     cleared = state.circuits.reset(owner)
     return {"owner": owner, "cleared": cleared}
 
 
 @app.get("/admin/agent-jobs")
-async def admin_agent_jobs() -> dict[str, Any]:
+async def admin_agent_jobs(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"jobs": [record_as_dict(record) for record in state.agent_jobs.list_records()]}
 
 
 @app.get("/v1/models")
-async def list_models() -> dict[str, Any]:
+async def list_models(_: None = Depends(require_admin)) -> dict[str, Any]:
     data = []
     for provider in state.providers.enabled():
         canonical_provider = state.context.canonical_provider_name(provider.name)
@@ -683,7 +701,7 @@ async def create_agent_job(request: Request, _: None = Depends(require_admin)) -
 
 
 @app.get("/jobs/agent/{job_id}")
-async def get_agent_job(job_id: str) -> dict[str, Any]:
+async def get_agent_job(job_id: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     record = state.agent_jobs.get(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail={"error": "job not found"})
@@ -691,7 +709,7 @@ async def get_agent_job(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/jobs/agent/{job_id}/artifacts")
-async def get_agent_job_artifacts(job_id: str) -> dict[str, Any]:
+async def get_agent_job_artifacts(job_id: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     record = state.agent_jobs.get(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail={"error": "job not found"})

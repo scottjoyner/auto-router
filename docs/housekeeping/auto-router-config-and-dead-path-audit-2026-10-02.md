@@ -12,7 +12,9 @@ come from source, committed configuration, and mocked/local unit tests.
 | Branch | `housekeeping/config-dead-path-audit-2026-10-02` |
 | Slice 1 | `c7d6f57` — audit, archive-unreachability proof, two fail-closed fixes |
 | Slice 2 | `2f939c3` — duplication consolidation, CI repair, preflight drift |
-| Slice 3 | this commit — S1 blast-radius measurement + corrections to this audit |
+| Slice 3 | `28b567b` — S1 blast-radius measurement + corrections to this audit |
+| Slice 4 | `f8e03a0` — U1 dangling dashboard links, D6 README entrypoint drift |
+| Slice 5 | this commit — **X1 applied**, **X2 applied**, **tailnet discovery disabled** |
 | Production entrypoint | `auto_router.secure_live:app` (Dockerfile `CMD`) |
 | Test command | `bash scripts/test_reconciliation.sh` (blocking CI suite) |
 
@@ -704,12 +706,13 @@ These are new assertions only; no existing assertion was weakened.
 Each of these is on the STOP list (routing/admission/dispatch/model eligibility,
 model load-unload, or production network exposure).
 
-**X1 — CRITICAL: 20 mounted endpoints have no admin guard.**
-`auto_router.security.require_admin` gates only `/admin/quota`, `/admin/memory`,
-`/admin/admission`, and `/admin/runtime-projection`. Every other `/admin/*`
-endpoint defined in `main.py` is inherited by `main_live` (which removes only
-`/jobs/agent`) and therefore **mounted in production**, unauthenticated. Verified by
-introspecting the live ASGI app built from `secure_live`:
+**X1 — APPLIED (slice 5) — 16 mounted endpoints had no admin guard.**
+`auto_router.security.require_admin` gated only `/admin/quota`, `/admin/memory`,
+`/admin/admission`, and `/admin/runtime-projection`. Every other `/admin/*` endpoint
+defined in `main.py` and `ops_dashboard_routes.py` is inherited by `main_live` (which
+removes only `/jobs/agent`) and was therefore **mounted in production**,
+unauthenticated. State before the fix, from introspecting the live ASGI app built from
+`secure_live`:
 
 ```
 /health                              GET     NO
@@ -735,41 +738,105 @@ introspecting the live ASGI app built from `secure_live`:
 /admin/ops/preflight                 GET     NO
 ```
 
-This directly contradicts three in-repo statements of intent:
-`security.py` ("gates the sensitive `/admin/*` and `/jobs/agent` endpoints"),
-`settings.py` ("the `/admin/*` and `/jobs/agent` endpoints require this shared
-token"), and `LLD §3.5 W-64`. Information disclosure covers the entire fleet
-topology (Tailscale hostnames, `100.x` CGNAT addresses, node IDs, base URLs,
-runtime instance IDs) plus job artifacts and usage history.
-**Not patched** — closing it changes production network exposure and could break
-unknown automation that reads `/admin/context` (which `templates/base.html`,
-`ui_pages.py`, and several docs link from the dashboard UI). Requires an operator
-decision on which read-only endpoints stay open.
+This contradicted three in-repo statements of intent — `security.py` ("gates the
+sensitive `/admin/*` and `/jobs/agent` endpoints"), `settings.py` ("the `/admin/*`
+and `/jobs/agent` endpoints require this shared token"), `LLD §3.5 W-64` — plus the
+root `README.md`, which never shows an unauthenticated `/admin/*` call. Disclosure
+covered the entire fleet topology (Tailscale hostnames, `100.x` CGNAT addresses, node
+IDs, base URLs, runtime instance IDs) plus job artifacts and usage history.
 
-**X2 — CRITICAL: `POST /admin/load?apply=true` bypasses both autoload gates, unauthenticated.**
-`model_placement.reconcile_once(state, apply=...)` treats an explicit `apply` as
+**Fix (operator-approved in slice 5).** `require_admin` was added to 17 routes in
+`main.py` and 4 in `ops_dashboard_routes.py`. Verified against the live route table —
+the complete set still reachable without an admin token is now:
+
+| route | why it stays open |
+|---|---|
+| `GET /health`, `GET /api/health` | liveness probes |
+| `GET /metrics` | Prometheus scrape |
+| `POST /v1/{chat/completions,completions,embeddings,responses}` | gated separately by `ExecutorInferenceAuthMiddleware` |
+| `POST /api/routes/request` | AssistX route intake, guarded by `install_strict_assistx_route_guard` |
+
+Nothing fleet-disclosing is open. `tests/test_admin_auth_surface.py` builds the real
+production app in a subprocess and asserts the whole route table is either gated or on
+a four-entry allowlist, that allowlist entries still exist (so a rename cannot hide a
+regression), and that `/health`, `/api/health` and `/metrics` stay open.
+
+**Collateral updates required by the new gates**, all in the same change:
+`.github/workflows/ci.yml` (the 3-path admin 401 loop became the full 24-path matrix,
+plus explicit `200` assertions for health/metrics), `Makefile`
+`reconciliation-status` (now sends the token and fails fast with a clear message if
+unset), and `README.md` (quickstart curls plus a new full description of the auth
+boundary). All three compose profiles still render (`docker compose config` exits 0).
+
+**Known consequence**: `/dashboard` is now gated, so its HTMX fetches of
+`/api/dashboard/summary` need the token too (HTTP Basic works in a browser). This does
+**not** resolve **U1** — the dashboard still links to 8 routes that were never
+mounted, and now returns 401 where it previously returned 404. U1 remains open.
+
+**X2 — APPLIED (slice 5) — `POST /admin/load?apply=true` bypassed the autoload gate.**
+`model_placement.reconcile_once(state, apply=...)` treated an explicit `apply` as
 authoritative: `do_apply = apply if apply is not None else AUTOLOAD_ENABLED`
-(`model_placement.py:409`). `main.admin_load` passes the query parameter straight
-through, so `?apply=true` reaches the load/unload loops
-(`model_placement.py:411-464`) with `swappable_only=False`, ignoring
-`AUTO_ROUTER_AUTOLOAD_ENABLED=false` and `AUTO_ROUTER_PLACEMENT_UNLOAD=false`
-(set in all three canonical compose files). `UNLOAD_ENABLED` only gates whether
-unloads appear in `compute_plan` (`model_placement.py:304`), not whether an
-already-planned unload executes. An unauthenticated caller can therefore load and
-unload models on every fleet node.
-**Not patched** — model load/unload and dispatch authority. Recommended: require
-`require_admin` on `/admin/load` *and* refuse `apply=true` unless
-`AUTOLOAD_AUTOMATION_ENABLED` is separately set, keeping the documented
-`/admin/placement` (dry-run, `swappable_only=False`, `apply=None`) as the safe
-manual surface.
+(`model_placement.py:409`). `main.admin_load` passed the query parameter straight
+through, so `?apply=true` reached the load loop with `swappable_only=False`,
+ignoring `AUTO_ROUTER_AUTOLOAD_ENABLED=false` (set in all three canonical compose
+files). Any caller who could reach the route — before X1, that was *anyone* — could
+load models onto arbitrary nodes.
 
-**X3 — HIGH: tailnet-observed peers mutate the routing registry (S4).**
+**Scope correction, verified before fixing**: the loop is **load-only** in practice.
+`compute_plan` emits `unloads_needed` *only* when `UNLOAD_ENABLED` is true
+(`model_placement.py:304`), so with `AUTO_ROUTER_PLACEMENT_UNLOAD=false` there was
+nothing to unload and the query parameter could only cause loads. The earlier
+description of this finding as "load and unload" was wrong.
+
+**Fix (operator-approved in slice 5).** Two changes:
+1. `/admin/load` now requires `require_admin` (part of X1).
+2. A new `model_placement.MANUAL_APPLY_ENABLED`, read from
+   `AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED` (default `false`). When an apply is
+   requested and the flag is not set, `admin_load` returns `compute_plan(state)` with
+   `applied: false` and an `apply_refused` explanation **without calling
+   `reconcile_once` at all**.
+
+The check lives in the route, not inside `reconcile_once`, deliberately: the background
+loop calls `reconcile_once(state, apply=True, swappable_only=True)` directly under
+`AUTOLOAD_ENABLED`, and gating inside `reconcile_once` would have silently disabled
+legitimate background autoload for operators who enable it. Dry runs
+(`/admin/placement`, and `POST /admin/load` with `apply` omitted) are unaffected.
+Pinned by `test_admin_load_refuses_apply_without_the_opt_in`,
+`test_admin_load_still_allows_dry_run_and_opted_in_apply`, and a new CI assertion that
+`?apply=true` returns `applied: false`.
+
+
+**X3 — PARTIALLY MITIGATED (slice 5) — tailnet-observed peers mutate the routing
+registry (S4).**
 `merge_discovered_lmstudio_providers` can re-enable a deliberately disabled provider
 and overwrite operator-configured `base_url`/`priority` from observation alone.
-Bounded in production to a single boot-time call (see S4), and discovered providers
-carry **no models**, so they cannot directly serve traffic — but they do enter
-`ProviderRegistry.enabled()`, the admission controller, and `/v1/models`
-enumeration. **Not patched** — admission/routing authority.
+Discovered providers carry **no models**, so they cannot serve traffic directly — but
+they do enter `ProviderRegistry.enabled()`, the admission controller, and
+`/v1/models` enumeration.
+
+**After `d3a9258`** (which mounts the tailscale socket and CLI into the container) this
+input became reachable in production; see §14.1. The operator-approved mitigation is
+the existing `AUTO_ROUTER_DISCOVER_TAILNET_LMSTUDIO` flag, which
+`service_scanner.discover_tailnet_lmstudio_services()` already honoured and which no
+canonical compose file set. It is now pinned to `"0"` in **all three** compose
+profiles and documented in `.env.example`.
+
+**What this does and does not fix.** `discover_tailnet_lmstudio_services()` is the
+*tailnet* source. `discovered_lmstudio_providers()` has a **second** source —
+`context.all_services()` filtered by `is_lmstudio_service()` — which comes from the
+AssistX projection and `config/context.yaml`, and is **not** disabled by this flag. At
+boot `load_state()` calls the merge before `state.context` exists, so only the tailnet
+source can contribute; and per S4 `refresh_tailnet_provider_task` /
+`refresh_live_models_task` are not started by `strict_offline_lifespan`. So with the
+flag off, the boot-time merge becomes a no-op in practice.
+
+**Still open:** the context-services source remains theoretically able to re-enable a
+provider if those background tasks are ever added to the strict-offline lifespan, and
+the merge still uses `bool(current.enabled or provider.enabled)` rather than
+respecting an operator's `enabled: false`. Having `_provider_from_service` emit
+`enabled: False`, or having the merge refuse a `False → True` flip, would close it at
+the source — but that changes admission semantics, so it remains an operator decision.
+`tests/test_compose_posture.py` pins the flag so the compose level cannot regress.
 
 **X4 — MEDIUM: default credentials via `:-` compose interpolation (C5).**
 `AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS` falls back to `change-me` /
@@ -866,11 +933,13 @@ not contacted.**
 | `tests/test_preflight.py` | **4 passed** |
 | `tests/test_executor_auth.py` | **6 passed** (3 pre-existing + 3 new) |
 | `pytest -q --ignore=tests/integration` (after slice 2) | **7 failed, 396 passed, 2 skipped** |
+| `pytest -q --ignore=tests/integration` (after slice 5) | **7 failed, 452 passed, 2 skipped** |
 | `bash scripts/test_reconciliation.sh` (after slice 2) | **1 failed, 378 passed, 2 skipped, 1 deselected** |
+| `bash scripts/test_reconciliation.sh` (after slice 5) | **1 failed, 434 passed, 2 skipped, 1 deselected** |
 
-Delta versus the `034d108` baseline: **+85 net passing** (311 → 396), **0 new
+Delta versus the `034d108` baseline: **+141 net passing** (311 → 452), **0 new
 failures**. The same 7 pre-existing failures remain, of which only 1 is in the
-blocking suite. Per-slice: slice 1 +13, slice 2 +72.
+blocking suite. Per-slice: slice 1 +13, slice 2 +72, slices 3-5 +56.
 
 ### 10.3 Regression sensitivity of every new test
 
@@ -934,6 +1003,18 @@ src/auto_router/executor_auth.py                        _read_key OSError -> Exe
 src/auto_router/preflight.py                            _check_dry_run_posture + policy profile names
 tests/test_env_expansion.py                             (new, 27 tests, slice 2)
 tests/test_sqlite_path.py                               (new, 42 tests, slice 2)
+tests/test_stale_context_cache_repro.py                 (new, 5 tests, slice 3)
+tests/test_admin_auth_surface.py                        (new, 31 tests, slice 5)
+tests/test_compose_posture.py                           (new, 20 tests, slice 5)
+src/auto_router/main.py                                 X1 gate + X2 manual-apply refusal
+src/auto_router/ops_dashboard_routes.py                 X1 gate (4 routes)
+src/auto_router/model_placement.py                      MANUAL_APPLY_ENABLED
+docker-compose.yml                                      tailnet discovery off, manual apply off
+compose.reconciliation.yml                              same, stated explicitly
+docker-compose.integration.yml                          same, stated explicitly
+.env.example                                            documents both new guards
+Makefile                                               reconciliation-status sends the admin token
+README.md                                              auth boundary section + gated curls
 tests/test_executor_auth.py                              3 new tests for F2
 tests/test_preflight.py                                 fixtures + 3 new tests
 .github/workflows/ci.yml                                integration-smoke .env step for C1
@@ -987,24 +1068,23 @@ registry and that edit belongs to an operator, not to housekeeping.
 Ordered by risk-reduction per unit of operator review. **Items 1–3 require an
 explicit operator decision and are not safe for an unattended agent.**
 
-1. **Close X1 (unauthenticated `/admin/*`).** Decide which read-only endpoints stay
-   open (`/health`, `/metrics`?) and gate the rest with the existing
-   `require_admin`. Update the dashboard templates, `ui_pages.py`, and the CI
-   `integration-smoke` assertions in the same change so the UI and the smoke test do
-   not silently break.
-2. **Close X2 (`/admin/load` autoload bypass).** Require `require_admin` *and* a
-   separate opt-in env for `apply=true`, leaving `/admin/placement` (dry-run) as the
-   default manual surface.
-3. **Fix C1 (CI `integration-smoke` cannot start).** Either add a CI step that writes
-   a `.env` from `.env.example`, or make `env_file` optional
-   (`required: false`, Compose ≥ 2.24) — this also unblocks C4 by letting the
-   overlay set `AUTO_ROUTER_RUNTIME_PROJECTION_URL: ""`.
-4. ~~**Fix C2/C3/C4 (smoke overlay inherits base secrets and hosts).**~~ Still open.
+1. ~~**Close X1 (unauthenticated `/admin/*`).**~~ **DONE in slice 5.** 21 routes
+   gated; only `/health`, `/api/health`, `/metrics`, the four `executor_auth`
+   inference paths, and `/api/routes/request` remain open.
+2. ~~**Close X2 (`/admin/load` autoload bypass).**~~ **DONE in slice 5.**
+3. ~~**Fix C1 (CI `integration-smoke` cannot start).**~~ **DONE in slice 2.**
+4. ~~**Fix C2/C3/C4 (smoke overlay inherits base secrets and hosts).**~~ **C4 is now
+   moot in a good way**: the smoke overlay inherits
+   `http://assistx-api:8000/api/router/runtime-projection` from `d3a9258`, and CI now
+   asserts the correct values for the routes it actually exercises. **C2/C3 still
+   open** — the smoke overlay still inherits an executor key path whose volume mount
+   is `!override`d away, and an `assistx-api` claim-status URL nothing serves.
    C4 in particular is a judgement call: clearing
    `AUTO_ROUTER_RUNTIME_PROJECTION_URL` would stop the smoke run exercising
    `projection_poll_task`'s failure path, which may be worth keeping. Needs a
    deliberate decision, not a mechanical change.
-5. **Resolve S1 (`ContextSnapshot` cache invalidation).** The correct fix is to
+5. **Resolve S1 (`ContextSnapshot` cache invalidation).** Blast radius measured in
+   slice 3: operator visibility only. The correct fix is to
    invalidate the private-attr caches whenever `_project_live_models` (or any other
    in-place mutator) replaces `snapshot.models` / `provider.models` — e.g. a
    `ContextSnapshot.invalidate_caches()` called from the mutators, or making those

@@ -41,6 +41,17 @@ services:
       AUTO_ROUTER_STRICT_OFFLINE: "true"
       AUTO_ROUTER_AUTOLOAD_ENABLED: "false"
       AUTO_ROUTER_PLACEMENT_UNLOAD: "false"
+      # Manual model loading via POST /admin/load?apply=true is refused unless this
+      # is explicitly turned on. Without it, the `apply` query parameter used to
+      # bypass AUTO_ROUTER_AUTOLOAD_ENABLED entirely.
+      AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED: "false"
+      # The container mounts the tailscale socket and CLI, so tailnet discovery can
+      # actually run here. Left off deliberately: discovery calls
+      # merge_discovered_lmstudio_providers(), which can re-enable an operator-
+      # disabled provider (e.g. lmstudio-joyner) and overwrite its base_url/priority
+      # from observation alone. The provider registry is the authority for what may
+      # serve traffic. Flip to "true" only if you accept that.
+      AUTO_ROUTER_DISCOVER_TAILNET_LMSTUDIO: "0"
       AUTO_ROUTER_FLEET_DISPATCHER_ENABLED: "true"
       AUTO_ROUTER_AGENTGATEWAY_ENABLED: "false"
       AUTO_ROUTER_GATEWAY_MODE: direct

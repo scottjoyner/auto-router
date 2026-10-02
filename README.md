@@ -197,9 +197,34 @@ AssistX integration:
 - `POST /api/memory/context`
 - metadata-only event outbox dispatch to AssistX
 
-Operator diagnostics:
+Operator diagnostics (all require `AUTO_ROUTER_ADMIN_TOKEN` via the
+`X-Admin-Token` header or HTTP Basic auth; they return 401 without it):
 
-- `GET /admin/admission` — authenticated ephemeral slot, queue, approved-path, and selected-path state.
+- `GET /health`, `GET /api/health`, `GET /metrics` — the only unauthenticated
+  surfaces. `/metrics` is the Prometheus scrape endpoint.
+- `GET /admin/admission` — ephemeral slot, queue, approved-path, and selected-path state.
+- `GET /admin/runtime-projection`, `POST /admin/runtime-projection` — signed projection status and apply.
+- `GET /admin/context`, `GET /admin/context/graph`, `GET /admin/providers`,
+  `GET /admin/providers/health` — fleet topology and health.
+- `GET /admin/placement` — dry-run placement plan.
+- `POST /admin/load` — realise a placement. Refuses `?apply=true` unless
+  `AUTO_ROUTER_PLACEMENT_MANUAL_APPLY_ENABLED=true`, so an admin credential alone
+  cannot load models onto the fleet.
+- `GET /admin/circuits`, `POST /admin/circuits/reset[/{owner}]` — breaker state and reset.
+- `GET /admin/quota`, `GET /admin/usage`, `GET /admin/memory` — usage surfaces.
+- `GET /admin/ops/summary`, `GET /admin/ops/preflight` — ops rollups and preflight.
+- `GET /admin/agent-workers`, `GET /admin/agent-jobs` — worker registry and job queue.
+- `GET /dashboard`, `GET /v1/models` — operator UI and model listing.
+- Inference (`POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
+  `/v1/responses`) is gated separately by claim-scoped executor authentication, not
+  by the admin token.
+
+**Tailnet discovery is off by default.** `AUTO_ROUTER_DISCOVER_TAILNET_LMSTUDIO=0`
+is set in the canonical Compose file because the container mounts the tailscale
+socket and CLI. With discovery on, `merge_discovered_lmstudio_providers()` can
+re-enable an operator-disabled provider and overwrite its `base_url` and `priority`
+from observation alone. The provider registry is the authority for what may serve
+traffic.
 
 Operations snapshots are not canonical when they differ from AssistX/Neo4j.
 
@@ -237,7 +262,8 @@ docker compose \
   up -d --build redis llm-router
 
 curl -fsS http://127.0.0.1:18088/health | jq
-curl -fsS http://127.0.0.1:18088/v1/models | jq
+curl -fsS -H "X-Admin-Token: $AUTO_ROUTER_ADMIN_TOKEN" \
+  http://127.0.0.1:18088/v1/models | jq
 curl -fsS -H "X-Admin-Token: $AUTO_ROUTER_ADMIN_TOKEN" \
   http://127.0.0.1:18088/admin/admission | jq
 ```
@@ -261,7 +287,8 @@ pytest -q tests/test_admission.py
 pytest -q tests/test_offline_guard.py
 pytest -q
 curl http://127.0.0.1:8088/health | jq
-curl http://127.0.0.1:8088/v1/models | jq
+curl -H "X-Admin-Token: $AUTO_ROUTER_ADMIN_TOKEN" \
+  http://127.0.0.1:8088/v1/models | jq
 ```
 
 A deployment is not admitted merely because `/v1/models` succeeds. Each physical model instance also needs a completion canary, fresh health/capacity observation, explicit container reachability evidence, and benchmark evidence before AssistX routes real work.
