@@ -10,7 +10,6 @@ file itself is absent; they never override a present registry.
 
 import json
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 import yaml
 
+from .env_expansion import expand_env
 from .offline_guard import host_is_offline_allowed
 
 
@@ -43,7 +43,6 @@ DEFAULT_STATS_PATH = Path(
 )
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("AUTO_ROUTER_DISCOVERY_TIMEOUT_SECONDS", "3"))
 DEFAULT_MAX_WORKERS = int(os.getenv("AUTO_ROUTER_DISCOVERY_MAX_WORKERS", "8"))
-_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
 
 
 class DiscoveryConfigError(ValueError):
@@ -83,13 +82,10 @@ def _load_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _expand_env(value: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        name = match.group(1)
-        default = match.group(2) or ""
-        return os.getenv(name, default)
-
-    return _ENV_PATTERN.sub(replace, value)
+# Canonical ${VAR:-default} expansion, shared with config and offline_guard.
+# This module only ever expands a single base_url string, so the shared
+# recursive expander is equivalent to the previous string-only version.
+_expand_env = expand_env
 
 
 def _api_root(base_url: str) -> str:

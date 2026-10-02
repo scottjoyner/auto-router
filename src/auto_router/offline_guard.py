@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -10,7 +9,8 @@ from urllib.parse import urlparse
 
 import yaml
 
-_ENV_PATTERN = re.compile(r"\$\{([^}:]+)(?::-([^}]*))?\}")
+from auto_router.env_expansion import expand_env
+
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _ALLOWED_PROVIDER_TYPES = {
     "lmstudio",
@@ -26,20 +26,6 @@ _TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 def strict_offline_enabled(env: Mapping[str, str] | None = None) -> bool:
     source = env if env is not None else os.environ
     return str(source.get("AUTO_ROUTER_STRICT_OFFLINE", "true")).strip().lower() in _TRUE_VALUES
-
-
-def _expand_env(value: Any, env: Mapping[str, str]) -> Any:
-    if isinstance(value, str):
-        def replace(match: re.Match[str]) -> str:
-            name, default = match.group(1), match.group(2) or ""
-            return str(env.get(name, default))
-
-        return _ENV_PATTERN.sub(replace, value)
-    if isinstance(value, list):
-        return [_expand_env(item, env) for item in value]
-    if isinstance(value, dict):
-        return {key: _expand_env(item, env) for key, item in value.items()}
-    return value
 
 
 def _explicit_allowed_hosts(env: Mapping[str, str]) -> set[str]:
@@ -99,7 +85,7 @@ def validate_offline_provider_config(
         return [f"provider config does not exist: {config_path}"]
 
     with config_path.open("r", encoding="utf-8") as handle:
-        loaded = _expand_env(yaml.safe_load(handle) or {}, source)
+        loaded = expand_env(yaml.safe_load(handle) or {}, source)
 
     providers = loaded.get("providers", []) if isinstance(loaded, dict) else []
     if not isinstance(providers, list):

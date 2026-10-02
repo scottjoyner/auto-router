@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from auto_router.config import PolicyRegistry, ProviderRegistry
@@ -47,11 +48,11 @@ def _providers(local: bool = True) -> ProviderRegistry:
 
 
 def _policies() -> PolicyRegistry:
-    stage = PolicyStage(purpose=StagePurpose.draft, provider_classes=["fast_free"])
+    stage = PolicyStage(purpose=StagePurpose.draft, provider_classes=["local"])
     return PolicyRegistry(
         profiles={
-            "backlog_burn": PolicyProfile(description="backlog", stages=[stage]),
-            "flash_start_planner": PolicyProfile(description="flash", stages=[stage]),
+            "backlog_local": PolicyProfile(description="backlog", stages=[stage]),
+            "local_planner": PolicyProfile(description="planner", stages=[stage]),
             "sophia_realtime": PolicyProfile(description="sophia", stages=[stage]),
         }
     )
@@ -131,3 +132,61 @@ def test_preflight_warns_when_assistx_projection_falls_back() -> None:
     assert context_check["status"] == "warn"
     assert context_check["details"]["projection_status"] == "bootstrap_fallback"
     assert context_check["details"]["projection_degraded"] is True
+
+
+def test_policy_check_passes_against_the_canonical_registry() -> None:
+    """config/policies.yaml must satisfy the preflight policy check.
+
+    The check previously required the retired hosted names ``flash_start_planner``
+    and ``backlog_burn``, so it reported a permanent warning against the correct
+    configuration. Reading the real file keeps that drift from recurring.
+    """
+
+    from auto_router.config import load_policy_registry
+
+    config_path = Path(__file__).resolve().parents[1] / "config" / "policies.yaml"
+    state = _state()
+    state.policies = load_policy_registry(config_path)
+
+    report = build_preflight_report(state, Settings(log_prompts=False))
+
+    check = next(check for check in report["checks"] if check["name"] == "policies")
+    assert check["status"] == "pass", check
+    assert "missing" not in check["details"]
+
+
+def test_policy_check_still_detects_a_genuinely_missing_profile() -> None:
+    state = _state()
+    state.policies = PolicyRegistry(
+        profiles={"sophia_realtime": PolicyProfile(description="sophia")}
+    )
+
+    report = build_preflight_report(state, Settings(log_prompts=False))
+
+    check = next(check for check in report["checks"] if check["name"] == "policies")
+    assert check["status"] == "warn"
+    assert check["details"]["missing"] == ["backlog_local", "local_planner"]
+
+
+def test_dry_run_posture_detects_enabled_agent_workers() -> None:
+    """The check reads AgentWorkerRegistry.agent_workers, not a nonexistent .workers."""
+
+    from auto_router.models import AgentWorkerConfig
+
+    state = _state()
+    state.agents = SimpleNamespace(
+        agent_workers=[
+            AgentWorkerConfig(name="hermes", type="hermes", command="hermes", enabled=True),
+            AgentWorkerConfig(name="hermes-mini", type="hermes", command="hermes", enabled=False),
+        ]
+    )
+
+    report = build_preflight_report(state, Settings(log_prompts=False))
+
+    check = next(
+        check for check in report["checks"] if check["name"] == "agent_execution_posture"
+    )
+    assert check["status"] == "warn"
+    assert check["details"]["enabled_workers"] == ["hermes"]
+    # warn must not demote the overall readiness verdict
+    assert report["status"] == "ready"

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import re
 import time
 from pathlib import Path
 
@@ -12,24 +10,14 @@ import yaml
 from pydantic import BaseModel, Field
 
 from auto_router.context import ContextModel, ContextNode, ContextProvider, ContextService, ContextSnapshot, ContextSignal, ExecutionLane, ServiceStatus
+from auto_router.env_expansion import expand_env
 from auto_router.live_models import LiveModelSnapshot
 from auto_router.models import AgentWorkerConfig, ModelConfig, PolicyProfile, ProviderConfig
 
-_ENV_PATTERN = re.compile(r"\$\{([^}:]+)(?::-([^}]*))?\}")
-
-
-def _expand_env(value: Any) -> Any:
-    if isinstance(value, str):
-        def replace(match: re.Match[str]) -> str:
-            name, default = match.group(1), match.group(2) or ""
-            return os.getenv(name, default)
-
-        return _ENV_PATTERN.sub(replace, value)
-    if isinstance(value, list):
-        return [_expand_env(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _expand_env(item) for key, item in value.items()}
-    return value
+# Canonical ${VAR:-default} expansion, shared with offline_guard and
+# fleet_task_dispatcher. Kept module-private under the existing name so the
+# loader call sites below are unchanged.
+_expand_env = expand_env
 
 
 def load_yaml(path: str | Path, default: Any | None = None) -> Any:

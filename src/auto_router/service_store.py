@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
-from urllib.parse import urlparse
 
 from auto_router.context import ServiceStatus
 from auto_router.service_scanner import ServiceProbeResult
+from auto_router.sqlite_path import sqlite_path
 
 
 class ServiceStatusStore:
@@ -17,7 +16,7 @@ class ServiceStatusStore:
     """
 
     def __init__(self, database_url: str):
-        self.database_path = self._path_from_url(database_url)
+        self.database_path = sqlite_path(database_url)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -151,13 +150,3 @@ class ServiceStatusStore:
         conn = sqlite3.connect(self.database_path)
         conn.row_factory = sqlite3.Row
         return conn
-
-    def _path_from_url(self, database_url: str) -> Path:
-        if database_url.startswith("sqlite:///./"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        if database_url.startswith("sqlite:////"):
-            parsed = urlparse(database_url)
-            return Path(parsed.path)
-        if database_url.startswith("sqlite:///"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        return Path(database_url)

@@ -5,9 +5,9 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+
+from auto_router.sqlite_path import sqlite_path
 
 
 @dataclass
@@ -33,7 +33,7 @@ class EventOutbox:
     """
 
     def __init__(self, database_url: str):
-        self.database_path = self._path_from_url(database_url)
+        self.database_path = sqlite_path(database_url)
         self._in_memory = database_url == "sqlite:///:memory:"
         self._memory_connection: sqlite3.Connection | None = None
         if not self._in_memory:
@@ -242,13 +242,3 @@ class EventOutbox:
         except sqlite3.OperationalError:
             pass
         return conn
-
-    def _path_from_url(self, database_url: str) -> Path:
-        if database_url.startswith("sqlite:///./"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        if database_url.startswith("sqlite:////"):
-            parsed = urlparse(database_url)
-            return Path(parsed.path)
-        if database_url.startswith("sqlite:///"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        return Path(database_url)

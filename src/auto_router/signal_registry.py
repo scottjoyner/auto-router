@@ -4,12 +4,11 @@ import json
 import os
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from auto_router.context import ContextSignal, ContextSnapshot
 from auto_router.live_models import LiveModelSnapshot
+from auto_router.sqlite_path import sqlite_path
 
 
 def signal_snapshot(signals: list[ContextSignal], revision: str = "swarm-signals", source: str = "signals") -> ContextSnapshot:
@@ -444,7 +443,7 @@ class ContextSignalStore:
     """Durable store for swarm signals projected from AssistX/Sophia context."""
 
     def __init__(self, database_url: str):
-        self.database_path = self._path_from_url(database_url)
+        self.database_path = sqlite_path(database_url)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         # `latest_signals` (called on EVERY request via hydrate_context) was a
@@ -628,17 +627,6 @@ class ContextSignalStore:
         except sqlite3.OperationalError:
             pass
         return conn
-
-
-    def _path_from_url(self, database_url: str) -> Path:
-        if database_url.startswith("sqlite:///./"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        if database_url.startswith("sqlite:////"):
-            parsed = urlparse(database_url)
-            return Path(parsed.path)
-        if database_url.startswith("sqlite:///"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        return Path(database_url)
 
 
 def _merge_signals(*groups: list[ContextSignal]) -> list[ContextSignal]:

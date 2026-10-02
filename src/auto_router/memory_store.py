@@ -6,8 +6,6 @@ import re
 import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from urllib.parse import urlparse
 
 from auto_router.memory_models import (
     MemoryContext,
@@ -20,6 +18,7 @@ from auto_router.memory_models import (
     MemoryRecord,
     MemoryRetrievalTrace,
 )
+from auto_router.sqlite_path import sqlite_path
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_./:-]+")
 
@@ -37,7 +36,7 @@ class MemoryStore:
     """
 
     def __init__(self, database_url: str):
-        self.database_path = self._path_from_url(database_url)
+        self.database_path = sqlite_path(database_url)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -513,13 +512,3 @@ class MemoryStore:
             r"developer message|do not follow)"
         )
         return suspicious.sub("[untrusted instruction removed]", value)
-
-    @staticmethod
-    def _path_from_url(database_url: str) -> Path:
-        if database_url.startswith("sqlite:///./"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        if database_url.startswith("sqlite:////"):
-            return Path(urlparse(database_url).path)
-        if database_url.startswith("sqlite:///"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        return Path(database_url)

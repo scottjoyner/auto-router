@@ -100,6 +100,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Provide the parse-time env file required by docker-compose.yml
+        # docker-compose.yml declares `env_file: [.env]`, and Compose treats a
+        # missing env file as a hard error, so a fresh checkout cannot start the
+        # overlay at all. It also interpolates AUTO_ROUTER_INTERNAL_SERVICE_TOKEN
+        # with `:?`, which is evaluated while parsing the *base* file even though
+        # docker-compose.integration.yml overrides the container value.
+        #
+        # Only that one variable is written, and it is never used by the container:
+        # the overlay sets AUTO_ROUTER_INTERNAL_SERVICE_TOKEN=smoke-service-token
+        # explicitly. Copying .env.example wholesale would also change the rendered
+        # AUTO_ROUTER_CONTEXT_CONFIG / AUTO_ROUTER_RUNTIME_PROJECTION_URL, which the
+        # overlay expects to inherit from the base defaults.
+        run: |
+          printf '%s\n' \
+            'AUTO_ROUTER_INTERNAL_SERVICE_TOKEN=ci-parse-time-placeholder' \
+            > .env
       - name: Build and start strict-offline router + redis
         run: docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
       - name: Wait for health

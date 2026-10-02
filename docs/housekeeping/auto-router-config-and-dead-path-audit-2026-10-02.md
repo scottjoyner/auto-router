@@ -10,6 +10,8 @@ come from source, committed configuration, and mocked/local unit tests.
 | Repository | `scottjoyner/auto-router` |
 | Base commit | `034d108` — *Add lmstudio-destroyer-k2 provider* |
 | Branch | `housekeeping/config-dead-path-audit-2026-10-02` |
+| Slice 1 | `c7d6f57` — audit, archive-unreachability proof, two fail-closed fixes |
+| Slice 2 | this commit — duplication consolidation, CI repair, preflight drift |
 | Production entrypoint | `auto_router.secure_live:app` (Dockerfile `CMD`) |
 | Test command | `bash scripts/test_reconciliation.sh` (blocking CI suite) |
 
@@ -99,16 +101,31 @@ Findings:
   503-on-every-request (fail-closed for routing, but not fail-clear). Under
   `main_live`/`secure_live` the import-time `enforce_strict_offline_provider_config`
   raises first, so the production path is fail-closed.
-- **L5 — triplicated `${VAR:-default}` expansion.** `config._expand_env`
-  (`\$\{([^}:]+)(?::-([^}]*))?\}`), `offline_guard._expand_env` (same regex,
-  explicit `env` mapping), and `fleet_task_dispatcher._expand_env`
-  (`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}`, string-only). The dispatcher
-  variant rejects non-identifier variable names that the other two accept, so the
-  same YAML can expand differently depending on which reader touches it.
-- **L6 — six copies of SQLite URL → path.** `ledger`, `service_store`,
-  `memory_store`, `signal_registry`, `model_registry` each carry an identical
-  `_path_from_url`; `Settings.latency_cache_path` carries a sixth variant.
-  No behavioural divergence today, but a single-URL fix must touch six sites.
+- **L5 — RESOLVED (slice 2) — triplicated `${VAR:-default}` expansion.**
+  `config._expand_env` (`\$\{([^}:]+)(?::-([^}]*))?\}`), `offline_guard._expand_env`
+  (same regex, explicit `env` mapping), and `fleet_task_dispatcher._expand_env`
+  (`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}`, string-only) now all delegate to
+  `auto_router.env_expansion.expand_env`, which keeps the **stricter**
+  shell-identifier pattern. The dispatcher previously rejected non-identifier names
+  the other two accepted, so the same YAML could expand differently per reader.
+  Unifying on the strict pattern can only *narrow* substitution.
+  Safety was established before the change: every `${...}` token in `config/` and
+  `archive/` uses an identifier-shaped name, and
+  `tests/test_env_expansion.py::test_all_committed_tokens_use_identifier_safe_names`
+  now enforces that permanently (and was confirmed to fail when a `${bad-name}`
+  token is introduced).
+- **L6 — RESOLVED (slice 2) — six copies of SQLite URL → path.** `ledger`,
+  `service_store`, `memory_store`, `signal_registry`, `model_registry`, **and
+  `event_outbox`** (a sixth copy the first pass of this audit under-counted) each
+  carried an identical `_path_from_url`. All six now call
+  `auto_router.sqlite_path.sqlite_path`.
+  `tests/test_sqlite_path.py` keeps the pre-consolidation algorithm verbatim as a
+  reference implementation and asserts string-form equality for every URL form,
+  including the two preserved quirks: `sqlite:////x` renders as `//x` (POSIX keeps
+  the leading double slash) and an unrecognised URL is handed to `Path()` verbatim.
+  `Settings.latency_cache_path` is deliberately **not** folded in — it derives a
+  sibling filename and has its own absolute/cwd-relative handling, so sharing it
+  would change behaviour rather than deduplicate it.
 - **L7 — `Settings` has no `model_config` guard against unknown env keys** — it uses
   `extra="ignore"`, which is intended. However `ModelConfig`/`ProviderConfig` also
   default to pydantic `extra="ignore"`, so **unknown provider keys are silently
@@ -374,15 +391,28 @@ Intentional differences (documented, **not** consolidated):
 
 ### 6.2 Defects
 
-- **C1 — CI `integration-smoke` cannot start.** `docker-compose.yml` declares
-  `env_file: [".env"]` and `.env` is gitignored. Compose treats a missing env file as
-  a hard error, verified:
-  `env file …/.env not found: … No such file or directory`. A fresh CI checkout has
-  no `.env` and no step creates one, so `docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build`
-  fails before building. Additionally, base-file `${VAR:?}` interpolation is
-  evaluated at parse time even when the overlay overrides the variable, so
-  `AUTO_ROUTER_INTERNAL_SERVICE_TOKEN` must exist in the environment regardless of
-  the overlay's `smoke-service-token`. Reproduced locally with `docker compose config`.
+- **C1 — FIXED (slice 2) — CI `integration-smoke` could not start.**
+  `docker-compose.yml` declares `env_file: [".env"]` and `.env` is gitignored.
+  Compose treats a missing env file as a hard error, verified:
+  `env file …/.env not found: … No such file or directory`. A fresh CI checkout had
+  no `.env` and no step created one, so
+  `docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build`
+  failed before building. Second, independent blocker: base-file `${VAR:?}`
+  interpolation is evaluated while parsing the *base* file even when the overlay
+  overrides the variable, so `AUTO_ROUTER_INTERNAL_SERVICE_TOKEN` had to exist in
+  the environment regardless of the overlay's `smoke-service-token`. Reproduced
+  locally with `docker compose config`.
+  **Fix**: `.github/workflows/ci.yml` gained a step writing a one-line `.env`
+  containing only `AUTO_ROUTER_INTERNAL_SERVICE_TOKEN=ci-parse-time-placeholder`.
+  Deliberately **not** a copy of `.env.example`: that file also defines
+  `AUTO_ROUTER_CONTEXT_CONFIG` and `AUTO_ROUTER_RUNTIME_PROJECTION_URL`, which would
+  change the *rendered* values the overlay expects to inherit from the base
+  defaults (see C4). Verified with `docker compose config` — the render is
+  unchanged apart from the interpolation placeholder, and `AUTO_ROUTER_ADMIN_TOKEN`,
+  `AUTO_ROUTER_INTERNAL_SERVICE_TOKEN`, `AUTO_ROUTER_CONTEXT_CONFIG` and
+  `AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED` all resolve to the smoke values CI asserts
+  against. **Not run end-to-end** (no Docker stack available here); the render is
+  the mechanical guarantee.
 - **C2 — smoke overlay inherits a secret path whose volume mount is overridden away.**
   `AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE=/run/secrets/assistx_executor_public_key.pem`
   is inherited from the base file, but `docker-compose.integration.yml` replaces
@@ -444,12 +474,17 @@ Docs-vs-code drift found:
 - **D1 — `PRODUCTION_DEPLOYMENT.md:104` recommends `AUTO_ROUTER_CONTEXT_CONFIG=config/context.yaml`.**
   Every canonical compose file sets an `http(s)` AssistX projection instead, so the
   documented local-file configuration is not the deployed posture.
-- **D2 — `preflight._check_policy_registry` requires `{backlog_burn, flash_start_planner, sophia_realtime}`.**
-  Canonical `config/policies.yaml` ships `backlog_local` and `local_planner`
-  (the hosted flash-start lane was removed). Only `sophia_realtime` still matches, so
-  `/admin/ops/preflight` reports a permanent "recommended policy profiles are
-  missing" warning against the *correct* configuration. The stale names live in
-  `config/policies.example.yaml`, which is where the check's expectations came from.
+- **D2 — FIXED (slice 2) — `preflight._check_policy_registry` required retired
+  profile names.** The check asked for `{backlog_burn, flash_start_planner,
+  sophia_realtime}`; canonical `config/policies.yaml` ships `backlog_local` and
+  `local_planner` (the hosted flash-start lane was removed). Only `sophia_realtime`
+  matched, so `/admin/ops/preflight` reported a permanent "recommended policy
+  profiles are missing" warning against the *correct* configuration. The stale names
+  live in `config/policies.example.yaml`, which is where the check's expectations
+  came from. The check now requires the canonical names, and
+  `test_policy_check_passes_against_the_canonical_registry` reads the real
+  `config/policies.yaml` so the drift cannot recur. Read-only operator report;
+  `report["status"]` is unaffected because `warn` does not demote readiness.
 - **D3 — `docs/LLD.md:105-107` route table** lists `/admin/context`,
   `/admin/circuits` and neighbours as operator endpoints; the security posture for
   them changed (see §9 X1).
@@ -487,14 +522,14 @@ history with an explicit CI assertion, or shares a module with live code. See
 | `ProviderConfig.local_gateway_only` | read only to add a context *tag* (`config.py:575`); never consulted for gateway routing | retain — name is misleading |
 | `config/providers.yaml` `max_concurrency`, `recommended_use` | not `ModelConfig` fields; silently dropped | retain — operator-visible, report as drift (**D4**) |
 
-### 8.3 Confirmed duplication (reported, not consolidated)
+### 8.3 Confirmed duplication
 
-| duplication | sites | risk of consolidation |
+| duplication | sites | disposition |
 |---|---|---|
-| `${VAR:-default}` expansion | `config._expand_env`, `offline_guard._expand_env`, `fleet_task_dispatcher._expand_env` (different regexes) | changes parsing semantics of live provider YAML |
-| SQLite URL → path | `ledger`, `service_store`, `memory_store`, `signal_registry`, `model_registry` + `Settings.latency_cache_path` | low risk, but touches 5 persistence roots |
-| `_merge_signals` | `config.py:632`, `signal_registry.py:644` (byte-identical bodies) | low |
-| Signal *construction* helpers | `config._graph_signal_context`, `signal_registry` row decoding, `live_model_routes` signal emission | medium — signal identity/merging feeds policy |
+| `${VAR:-default}` expansion | `config._expand_env`, `offline_guard._expand_env`, `fleet_task_dispatcher._expand_env` (divergent regexes) | **RESOLVED (slice 2)** → `auto_router.env_expansion.expand_env` |
+| SQLite URL → path | `ledger`, `service_store`, `memory_store`, `signal_registry`, `model_registry`, `event_outbox` (**6**, not 5) | **RESOLVED (slice 2)** → `auto_router.sqlite_path.sqlite_path` |
+| `_merge_signals` | `config.py:632`, `signal_registry.py:644` (byte-identical bodies) | retained — merging feeds policy scoring; consolidation is low value but non-zero risk |
+| Signal *construction* helpers | `config._graph_signal_context`, `signal_registry` row decoding, `live_model_routes` signal emission | retained — distinct inputs, shared identity semantics |
 
 ### 8.4 Unused templates / static fragments
 
@@ -561,9 +596,29 @@ report**; `report["status"]` remains `ready` because only `fail` demotes it. The
 `tests/test_preflight.py` fixture mirrored the same typo (`SimpleNamespace(workers=[])`)
 and was corrected.
 
-**F4 — new focused tests (13 total).** `tests/test_housekeeping_config_authority.py`
-(10) plus 3 in `tests/test_executor_auth.py` and 1 corrected fixture in
-`tests/test_preflight.py`. Pins §2.2.
+**F4 — new focused tests.** Slice 1: `tests/test_housekeeping_config_authority.py`
+(10) plus 3 in `tests/test_executor_auth.py`. Slice 2: `tests/test_env_expansion.py`
+(27) and `tests/test_sqlite_path.py` (42), plus 3 in `tests/test_preflight.py`.
+Every new test was confirmed to **fail** when its fix is reverted (see §10.3).
+
+**F5 — `auto_router.env_expansion.expand_env` replaces three divergent
+`${VAR:-default}` expanders.** See **L5**. Unifying on the stricter
+shell-identifier pattern can only narrow substitution, never widen it, and no
+committed configuration uses a non-identifier name.
+`config._expand_env` and `fleet_task_dispatcher._expand_env` are kept as aliases of
+the shared function so every existing call site — including
+`discovery_enabled_policy`, which reaches the dispatcher copy through the
+`discovery` alias — is unchanged.
+
+**F6 — `auto_router.sqlite_path.sqlite_path` replaces six identical
+`_path_from_url` methods.** See **L6**. `tests/test_sqlite_path.py` carries the
+original algorithm verbatim as a reference and asserts equality for every URL form.
+
+**F7 — `preflight._check_policy_registry` requires the canonical profile names.**
+See **D2**. Read-only operator report; `warn` does not demote `report["status"]`.
+
+**F8 — CI `integration-smoke` can start again.** See **C1**. Workflow-only change;
+no compose file, image, or runtime configuration was modified. Pins §2.2.
 These are new assertions only; no existing assertion was weakened.
 
 ### 9.2 Findings NOT patched — deliberately stopped
@@ -732,11 +787,30 @@ not contacted.**
 | `tests/test_housekeeping_config_authority.py` (new) | **10 passed** |
 | `tests/test_preflight.py` | **4 passed** |
 | `tests/test_executor_auth.py` | **6 passed** (3 pre-existing + 3 new) |
-| `pytest -q --ignore=tests/integration` | **7 failed, 324 passed, 2 skipped** |
-| `bash scripts/test_reconciliation.sh` | **1 failed, 306 passed, 2 skipped, 1 deselected** |
+| `pytest -q --ignore=tests/integration` (after slice 2) | **7 failed, 396 passed, 2 skipped** |
+| `bash scripts/test_reconciliation.sh` (after slice 2) | **1 failed, 378 passed, 2 skipped, 1 deselected** |
 
-Delta versus baseline: **+13 net passing**, **0 new failures** (the same 7 pre-existing
-failures, of which only 1 is in the blocking suite). The remaining failure in
+Delta versus the `034d108` baseline: **+85 net passing** (311 → 396), **0 new
+failures**. The same 7 pre-existing failures remain, of which only 1 is in the
+blocking suite. Per-slice: slice 1 +13, slice 2 +72.
+
+### 10.3 Regression sensitivity of every new test
+
+Each new or amended test was re-run against the reverted fix to confirm it actually
+fails. Results:
+
+| test | fix reverted → |
+|---|---|
+| `test_unreadable_verify_key_file_is_distinguishable_from_a_bad_token` | **fails** |
+| `test_verify_key_file_oserror_is_wrapped_as_executor_auth_error` | **fails** |
+| `test_dry_run_posture_detects_enabled_agent_workers` | **fails** |
+| `test_policy_check_passes_against_the_canonical_registry` | **fails** |
+| `test_policy_check_still_detects_a_genuinely_missing_profile` | **fails** |
+| `test_all_committed_tokens_use_identifier_safe_names` (with a `${bad-name}` token injected into `config/providers.reconciliation.yaml`) | **fails** |
+
+`test_unreadable_verify_key_file_rejects_rather_than_raising` does **not**
+discriminate on its own — it pins behaviour that was already correct (401, downstream
+never reached) and is retained as a contract guard, not a regression detector. The remaining failure in
 both runs is the pre-existing `test_macbook_air_provider_registry_includes_live_tailnet_models`
 config/test drift.
 
@@ -748,10 +822,15 @@ editing `config/providers.yaml` would change live model eligibility. Both are
 out of bounds.
 
 `ruff check src tests` is **non-blocking by existing CI policy** (pre-existing
-backlog, `continue-on-error: true`). The blocking gate
+backlog, `continue-on-error: true`). Verified net-zero: `ruff check --select
+I001,F401,F811 src/auto_router/` reports **27 findings, identical to the `034d108`
+baseline** — slice 1 and slice 2 each left the count unchanged, and the two
+pre-existing `I001` findings in `config.py` and `fleet_task_dispatcher.py` were
+deliberately left in place rather than swept up into an unrelated reformat. All
+four new test files report clean. The blocking gate
 (`ruff check --ignore I001,E501,UP012,UP018` over the reconciliation path list)
-passes; `executor_auth.py` and `preflight.py` are both inside it. `mypy src/auto_router`
-remains `continue-on-error: true` and is unchanged in policy.
+passes; `executor_auth.py` and `preflight.py` are both inside it. `mypy
+src/auto_router` remains `continue-on-error: true` and is unchanged in policy.
 
 ---
 
@@ -762,10 +841,24 @@ docs/README.md                                          rewritten as a classifie
 docs/housekeeping/auto-router-config-and-dead-path-audit-2026-10-02.md   (new)
 archive/README.md                                       (new)
 tests/test_housekeeping_config_authority.py             (new, 10 tests)
+src/auto_router/env_expansion.py                        (new, slice 2) shared ${VAR:-default} expander
+src/auto_router/sqlite_path.py                          (new, slice 2) shared SQLite URL -> Path resolver
+src/auto_router/config.py                               delegates to env_expansion
+src/auto_router/offline_guard.py                        delegates to env_expansion
+src/auto_router/fleet_task_dispatcher.py                delegates to env_expansion
+src/auto_router/ledger.py                               delegates to sqlite_path
+src/auto_router/service_store.py                        delegates to sqlite_path
+src/auto_router/memory_store.py                         delegates to sqlite_path
+src/auto_router/signal_registry.py                      delegates to sqlite_path
+src/auto_router/model_registry.py                       delegates to sqlite_path
+src/auto_router/event_outbox.py                         delegates to sqlite_path
 src/auto_router/executor_auth.py                        _read_key OSError -> ExecutorAuthError
-src/auto_router/preflight.py                            _check_dry_run_posture attribute fix
+src/auto_router/preflight.py                            _check_dry_run_posture + policy profile names
+tests/test_env_expansion.py                             (new, 27 tests, slice 2)
+tests/test_sqlite_path.py                               (new, 42 tests, slice 2)
 tests/test_executor_auth.py                              3 new tests for F2
-tests/test_preflight.py                                 fixture attribute fix
+tests/test_preflight.py                                 fixtures + 3 new tests
+.github/workflows/ci.yml                                integration-smoke .env step for C1
 docker-compose.agentgateway.yml                         SUPERSEDED banner (comments only)
 docs/DEPLOYMENT.md                                      banner
 docs/PRODUCTION_DEPLOYMENT.md                           banner
@@ -797,8 +890,17 @@ No changes to: `config/*.yaml` (any), `archive/context.yaml.static-fallback`,
 `archive/context.yaml.static-fallback.note`, `archive/providers.yaml.bak`,
 `docker-compose.yml`, `docker-compose.integration.yml`,
 `compose.reconciliation.yml`, `examples/docker-compose.tailscale-sidecar.yml`,
-`Dockerfile`, `pyproject.toml`, `Makefile`, `.github/workflows/*`, `.env.example`,
-`scripts/*`, or any routing/admission/policy/provider/dispatch module.
+`Dockerfile`, `pyproject.toml`, `Makefile`, `.env.example`, `scripts/*`, or any
+routing / admission / policy / provider / dispatch module.
+
+`.github/workflows/ci.yml` **is** changed, but only by adding a step that writes a
+one-line CI-local `.env`. No workflow gate, assertion, image, or compose file was
+altered, and no workflow behaviour outside `integration-smoke` was touched.
+
+Slice 2 deliberately did **not** touch `config/providers.yaml`, even though
+`max_concurrency` and `recommended_use` are proven-inert keys (**D4**). Removing
+them is behaviour-neutral in pydantic terms, but the file is the live fleet
+registry and that edit belongs to an operator, not to housekeeping.
 
 ---
 
@@ -819,10 +921,11 @@ explicit operator decision and are not safe for an unattended agent.**
    a `.env` from `.env.example`, or make `env_file` optional
    (`required: false`, Compose ≥ 2.24) — this also unblocks C4 by letting the
    overlay set `AUTO_ROUTER_RUNTIME_PROJECTION_URL: ""`.
-4. **Fix C2/C3/C4 (smoke overlay inherits base secrets and hosts).** Add explicit
-   overrides for `AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE`, `AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL`,
-   `AUTO_ROUTER_RUNTIME_PROJECTION_URL`, and `AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN`
-   so the smoke profile cannot drift with the base file.
+4. ~~**Fix C2/C3/C4 (smoke overlay inherits base secrets and hosts).**~~ Still open.
+   C4 in particular is a judgement call: clearing
+   `AUTO_ROUTER_RUNTIME_PROJECTION_URL` would stop the smoke run exercising
+   `projection_poll_task`'s failure path, which may be worth keeping. Needs a
+   deliberate decision, not a mechanical change.
 5. **Resolve S1 (`ContextSnapshot` cache invalidation).** The correct fix is to
    invalidate the private-attr caches whenever `_project_live_models` (or any other
    in-place mutator) replaces `snapshot.models` / `provider.models` — e.g. a
@@ -834,18 +937,21 @@ explicit operator decision and are not safe for an unattended agent.**
 6. **Reconcile the macbook-air config/test drift** (D5/pre-existing failure). Requires
    confirming the node's real resident inventory from the fleet, then updating
    exactly one side.
-7. **Consolidate the triplicated `${VAR:-default}` expander** behind one helper with
-   the *stricter* identifier regex, after auditing every provider YAML for
-   non-identifier variable names. Then the five SQLite `_path_from_url` copies.
+7. ~~**Consolidate the triplicated `${VAR:-default}` expander** … Then the SQLite
+   `_path_from_url` copies.~~ **DONE in slice 2** (`env_expansion`, `sqlite_path`).
+   Remaining in this family: `_merge_signals` (2 byte-identical copies) and
+   `Settings.latency_cache_path` (deliberately excluded from `sqlite_path`).
 8. **Decide the fate of the unmounted route registrars**
    (`register_service_routes`, `register_live_model_routes`, `register_cli_routes`,
    `register_backlog_routes`) — move them out of `src/` into a clearly-marked
    historical package, or delete them once the CI "forbidden paths" assertions are
    updated. Do not do this silently; the CI assertions are the contract that keeps
    them unmounted.
-9. **Fix D2 (`preflight` policy-profile names)** and **D4 (drop or implement
-   `max_concurrency` / `recommended_use`)**, plus document the dead
-   `allow_agent_runtime` fields and the misleading `local_gateway_only` name.
+9. **D2 is FIXED in slice 2.** Still open: **D4** (drop or implement
+   `max_concurrency` / `recommended_use`, three sites each in
+   `config/providers.yaml`) and documentation for the dead `allow_agent_runtime`
+   fields and the misleading `local_gateway_only` name. Both need an operator
+   decision on the live fleet registry.
 
 ---
 

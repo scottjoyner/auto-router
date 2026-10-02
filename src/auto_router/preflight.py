@@ -94,7 +94,11 @@ def _check_provider_registry(state: Any) -> PreflightCheck:
 def _check_policy_registry(state: Any) -> PreflightCheck:
     policies = getattr(state, "policies", None)
     profiles = getattr(policies, "profiles", {}) if policies else {}
-    required = {"backlog_burn", "flash_start_planner", "sophia_realtime"}
+    # These are the profiles config/policies.yaml actually ships. The previous set
+    # named the retired hosted flash-start lane (``flash_start_planner``) and the
+    # pre-rename backlog lane (``backlog_burn``), so this check reported a permanent
+    # "recommended policy profiles are missing" warning against correct config.
+    required = {"backlog_local", "local_planner", "sophia_realtime"}
     missing = sorted(required - set(profiles.keys()))
     if missing:
         return PreflightCheck(

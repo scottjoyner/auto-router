@@ -4,10 +4,10 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from statistics import mean
 from typing import Any
-from urllib.parse import urlparse
+
+from auto_router.sqlite_path import sqlite_path
 
 
 @dataclass
@@ -60,7 +60,7 @@ class UsageLedger:
     """
 
     def __init__(self, database_url: str):
-        self.database_path = self._path_from_url(database_url)
+        self.database_path = sqlite_path(database_url)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -506,16 +506,6 @@ class UsageLedger:
         except sqlite3.OperationalError:
             pass
         return conn
-
-    def _path_from_url(self, database_url: str) -> Path:
-        if database_url.startswith("sqlite:///./"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        if database_url.startswith("sqlite:////"):
-            parsed = urlparse(database_url)
-            return Path(parsed.path)
-        if database_url.startswith("sqlite:///"):
-            return Path(database_url.removeprefix("sqlite:///"))
-        return Path(database_url)
 
     def _runtime_ok(self, sample: dict[str, Any]) -> bool:
         if sample.get("error_type") or sample.get("error_message"):
