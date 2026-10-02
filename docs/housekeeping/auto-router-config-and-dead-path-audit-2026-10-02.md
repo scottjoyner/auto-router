@@ -11,7 +11,8 @@ come from source, committed configuration, and mocked/local unit tests.
 | Base commit | `034d108` — *Add lmstudio-destroyer-k2 provider* |
 | Branch | `housekeeping/config-dead-path-audit-2026-10-02` |
 | Slice 1 | `c7d6f57` — audit, archive-unreachability proof, two fail-closed fixes |
-| Slice 2 | this commit — duplication consolidation, CI repair, preflight drift |
+| Slice 2 | `2f939c3` — duplication consolidation, CI repair, preflight drift |
+| Slice 3 | this commit — S1 blast-radius measurement + corrections to this audit |
 | Production entrypoint | `auto_router.secure_live:app` (Dockerfile `CMD`) |
 | Test command | `bash scripts/test_reconciliation.sh` (blocking CI suite) |
 
@@ -289,11 +290,26 @@ selected                       route_events / event_outbox → AssistX
   is **deselected in the blocking suite** because of this, and the four
   `tests/test_live_models.py` / `tests/test_live_model_routes.py` cases fail for the
   same reason. **Five tests in total encode the current behaviour.**
-  *Current blast radius*: routing reads `state.providers[].models` (not the context
-  caches), so **model selection is unaffected**. Affected surfaces are
-  `ops_dashboard_routes` (`context.all_models()`, `local_models()`,
-  `free_api_models()`) and any `context.model_for(...)` alias resolution.
-  **Not patched** — see §9.
+
+  *Measured blast radius* (`tests/test_stale_context_cache_repro.py`, added in slice 3
+  specifically to settle this rather than assert it):
+
+  | surface | affected? | why |
+  |---|---|---|
+  | `all_models()` / `local_models()` / `free_api_models()` / `model_for()` | **yes** | memoised before the mutation |
+  | `ops_dashboard_routes` model counts and lists | **yes** | sole consumer of the above |
+  | model selection | **no** | `PolicyEngine` reads `state.providers[].models`; `config._project_live_models` never writes to the provider registry (that is `live_model_routes.sync_live_models_to_providers`, a different function) |
+  | signal-based blocking (`_provider_signal_blocked`) | **no** | `canonical_model_id` falls back to `str(model_id).strip().lower()` on an index miss, and `ContextModel.model_id` is always lowercase (`config._provider_scoped_model_id`), so the fallback reproduces the canonical id and the signal is found |
+  | `_signal_index_cache` | **no** | `save_snapshot()` iterates `snapshot.signals` directly and never populates it, so it is still `None` across the `model_copy` and is rebuilt from the hydrated list |
+  | `graph_objects()` / `all_services()` | **no** | iterate the fields directly, not the caches |
+
+  **Correction to the first pass of this audit**: I initially suspected this opened a
+  fail-open path, because `policy._context_signals` does route through
+  `canonical_model_id` → `model_for` → the stale index. It does not — the lowercase
+  fallback absorbs it, and the blocking-penalty assertion holds
+  (`test_model_scoped_blocking_signal_still_resolves`). The defect is **operator
+  visibility only**: the dashboard under-reports live-discovered models.
+  **Not patched** — see §9 and §12.
 - **S2 — two independent "is this model usable" truths.**
   `live_model_routes.sync_live_models_to_providers` is authoritative for the
   provider registry; `config._project_live_models` builds a parallel context view.
@@ -973,7 +989,7 @@ explicit operator decision and are not safe for an unattended agent.**
 | # | ambiguity | why unresolved |
 |---|---|---|
 | A1 | Is `qwen3.5-0.8b-mlx` or `qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled` the correct macbook-air resident? | requires live fleet observation, which is out of scope |
-| A2 | Should the stale-context-cache behaviour (**S1**) be considered a defect or an intentional trade? | fixing it changes live-model visibility; five existing tests encode the current expectation |
+| A2 | ~~Is S1 a routing defect?~~ **Resolved by measurement in slice 3: no.** It is operator visibility only. What remains open is whether to fix it at all — five existing tests encode the current expectation, and the fix makes them pass, so it is a deliberate behaviour change to the dashboard rather than a red-to-green cleanup |
 | A3 | Is boot-time tailnet provider merging (**S4**/X3) a deliberate migration shim or a defect? | needs the intent behind `refresh_tailnet_provider_task` being excluded from `strict_offline_lifespan` |
 | A4 | Which unauthenticated `/admin/*` reads (X1) have real consumers? | templates, `ui_pages.py`, and several docs link them; needs operator inventory |
 | A5 | Is the `auto-router` console script intentionally the v1/HMAC entrypoint? | `pyproject.toml` and `Makefile dev` disagree with the Dockerfile; no commit message states intent |
