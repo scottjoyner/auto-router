@@ -175,3 +175,41 @@ a hidden dependency of scheduling.
 For loadout reports and operator dashboards the report is consumed directly -
 `entries[].role`, `entries[].role_floors`, and `summary.roles` are already
 populated with the advisory guard keys attached.
+
+## Response-derived evidence
+
+`classify_failure` reads `failure_mode` off a row when one is declared, so a
+harness that reports a reasoning-only response as a timeout is believed. That is
+the wrong direction of trust for exactly the failures that matter here.
+
+`evidence_from_response(row, content=..., reasoning=..., finish_reason=...,
+timed_out=..., response_field_used=..., expected_field=...)` inverts it. The
+caller supplies what actually came back and the outcome is **derived**, with
+precedence: `timeout` > `length_truncated` > `wrong_response_field` >
+`reasoning_only_output` > `empty_usable_content`. A declared failure cannot
+relabel a content-derived one.
+
+Only the response can disprove a failure, never silently clear one: a patch can
+apply and still fail its tests, so a harness-reported `test_failure` survives a
+clean response. The mislabel hole runs the other way.
+
+## Endpoint progress ladder
+
+The three transport axes (`endpoint_reachable`, `model_visible`, `model_loaded`)
+are measured **independently** - a harness that only reported `model_visible`
+has still measured it, and folding that into a cumulative ladder would destroy
+the distinction the capability block exists to keep.
+
+Alongside them, `classify_endpoint_observation` reports a cumulative
+`endpoint_status` across `UNREACHABLE -> REACHABLE -> MODEL_VISIBLE ->
+MODEL_LOADED -> PROTOCOL_UNUSABLE -> PROTOCOL_USABLE`. Two properties matter:
+
+* `PROTOCOL_UNUSABLE` is a rung of its own, so a host that answers HTTP but
+  cannot complete a usable exchange is not rounded up to `MODEL_LOADED`. That
+  rounding is how a broken runtime keeps looking available.
+* An unmeasured rung stays unmeasured rather than defaulting to "usable",
+  because defaulting would report a capability nobody verified.
+
+Mutation-tested: trusting a declared failure mode, rounding an unmeasured
+protocol rung up, collapsing `PROTOCOL_UNUSABLE`, and letting the cumulative
+ladder drive the independent axes each fail at least one test.

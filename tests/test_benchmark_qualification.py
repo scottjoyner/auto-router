@@ -4,6 +4,8 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 from auto_router.benchmark_qualification import (
     CAPABILITIES,
     FAILURE_MODES,
@@ -12,9 +14,11 @@ from auto_router.benchmark_qualification import (
     REJECTED_SENTINEL,
     apply_qualification_to_benchmark_plan,
     build_qualification_report,
+    classify_endpoint_observation,
     classify_failure,
     derive_capabilities,
     derive_role,
+    evidence_from_response,
     next_benchmark_targets,
     normalize_evidence,
 )
@@ -630,3 +634,189 @@ def test_plan_annotation_ignores_non_dict_requests():
     after = apply_qualification_to_benchmark_plan(plan, report)
 
     assert after["requests"][-1] == "not-a-request"
+
+
+# --- response-derived evidence -------------------------------------------
+#
+# classify_failure reads failure_mode off the row, so a harness that asserts the
+# wrong cause is believed. evidence_from_response inverts that: the caller says
+# what came back and the outcome is derived. These pin the precedence and, most
+# importantly, that a declared failure cannot override a derived one.
+
+
+def test_derived_outcome_overrides_a_declared_failure_mode():
+    row = _row(succeeded=False, failure_mode="test_failure", usable_content_chars=0)
+
+    built = evidence_from_response(row, content=None, reasoning="thinking out loud")
+
+    assert built["failure_mode"] == "reasoning_only_output"
+    assert built["succeeded"] is False
+
+
+def test_timeout_beats_every_other_signal():
+    row = _row(succeeded=False, failure_mode="test_failure")
+
+    built = evidence_from_response(
+        row, content=None, reasoning="partial", finish_reason="length", timed_out=True
+    )
+
+    assert built["failure_mode"] == "timeout"
+
+
+def test_length_truncation_beats_empty_content():
+    built = evidence_from_response(
+        _row(), content=None, reasoning=None, finish_reason="length"
+    )
+
+    assert built["failure_mode"] == "length_truncated"
+
+
+def test_wrong_response_field_is_detected():
+    built = evidence_from_response(
+        _row(), content="actual answer", response_field_used="reasoning", expected_field="content"
+    )
+
+    assert built["failure_mode"] == "wrong_response_field"
+
+
+def test_empty_content_with_populated_reasoning_is_reasoning_only():
+    built = evidence_from_response(_row(), content="", reasoning="step 1\nstep 2")
+
+    assert built["failure_mode"] == "reasoning_only_output"
+    assert built["usable_content_chars"] == 0
+    assert built["reasoning_chars"] == len("step 1\nstep 2")
+
+
+def test_fully_empty_response_is_empty_usable_content():
+    built = evidence_from_response(_row(), content=None, reasoning=None)
+
+    assert built["failure_mode"] == "empty_usable_content"
+    assert built["succeeded"] is False
+
+
+def test_a_declared_failure_is_not_erased_by_a_clean_response():
+    """Only the response can disprove a failure, never silently clear one.
+
+    A patch can apply and still fail its tests, so a non-content failure the
+    harness reports is real signal and is preserved. The mislabel hole this
+    builder closes runs the other way: a harness cannot *relabel* a
+    content-derived failure, because the derived mode always wins.
+    """
+
+    built = evidence_from_response(
+        _row(failure_mode="test_failure"), content="a real grounded answer"
+    )
+
+    assert built["succeeded"] is False
+    assert built["failure_mode"] == "test_failure"
+
+
+def test_clean_response_succeeds_when_nothing_is_declared():
+    built = evidence_from_response(_row(), content="a real grounded answer")
+
+    assert built["succeeded"] is True
+    assert built["failure_mode"] is None
+
+
+def test_declared_failure_survives_when_the_response_itself_showed_nothing_wrong():
+    """A harness still gets to explain a non-content failure."""
+
+    built = evidence_from_response(_row(failure_mode="test_failure"), content="a patch")
+
+    assert built["failure_mode"] == "test_failure"
+    assert built["succeeded"] is False
+
+
+def test_derived_rows_feed_straight_into_the_report():
+    rows = [
+        evidence_from_response(
+            _row(test_level=level, succeeded=True, grounding_correct=True),
+            content="ok",
+            patch_valid=True if level == "L4_PATCH" else None,
+            tests_passed=True if level == "L4_PATCH" else None,
+        )
+        for level in QUALIFICATION_LEVELS
+    ]
+
+    report = build_qualification_report(rows)
+    entry = report["entries"][0]
+
+    assert entry["role"] == "CODE_QUALIFIED"
+    assert report["summary"]["rejected_rows"] == 0
+
+
+def test_derived_evidence_still_refuses_to_buy_a_role_with_throughput():
+    rows = [
+        evidence_from_response(
+            _row(test_level=level, tokens_per_second=9999.0, grounding_correct=True),
+            content=None,
+            reasoning="lots of thinking, no answer",
+        )
+        for level in QUALIFICATION_LEVELS
+    ]
+
+    report = build_qualification_report(rows)
+
+    entry = report["entries"][0]
+    assert entry["role"] == "UNQUALIFIED"
+    assert entry["failures"]["counts"]["reasoning_only_output"] == len(QUALIFICATION_LEVELS)
+    assert entry["failures"]["generic_buckets"] == []
+
+
+# --- endpoint progress ladder -------------------------------------------
+
+
+def test_endpoint_status_distinguishes_loaded_but_protocol_broken():
+    broken = classify_endpoint_observation(
+        {"endpoint_reached": True, "model_visible": True, "model_loaded": True,
+         "protocol_usable": False}
+    )
+    working = classify_endpoint_observation(
+        {"endpoint_reached": True, "model_visible": True, "model_loaded": True,
+         "protocol_usable": True}
+    )
+
+    assert broken == "PROTOCOL_UNUSABLE"
+    assert working == "PROTOCOL_USABLE"
+
+
+def test_endpoint_status_does_not_round_an_unmeasured_rung_up():
+    unmeasured = classify_endpoint_observation(
+        {"endpoint_reached": True, "model_visible": True, "model_loaded": True}
+    )
+
+    assert unmeasured == "MODEL_LOADED"
+
+
+@pytest.mark.parametrize(
+    ("observation", "expected"),
+    [
+        ({"endpoint_reached": False}, "UNREACHABLE"),
+        ({"endpoint_reached": True}, "REACHABLE"),
+        ({"endpoint_reached": True, "model_visible": True}, "MODEL_VISIBLE"),
+    ],
+)
+def test_endpoint_status_stops_at_the_last_demonstrated_rung(observation, expected):
+    assert classify_endpoint_observation(observation) == expected
+
+
+def test_transport_axes_stay_independently_measurable():
+    """The progress ladder must not collapse the independent axes.
+
+    A harness that only reported model_visible has still measured
+    model_visible; folding it into a cumulative ladder would destroy the
+    distinction the capability block exists to keep.
+    """
+
+    caps = derive_capabilities(
+        [_row(model_visible=True, endpoint_reached=None, model_loaded=None,
+              protocol_usable=None, succeeded=False)]
+    )
+
+    # The independent axis records what was measured...
+    assert caps["model_visible"] is True
+    assert caps["model_loaded"] is False
+    assert caps["endpoint_reachable"] is False
+    # ...while the cumulative ladder starts from the first unproven rung rather
+    # than rounding visibility up into a health claim.
+    assert caps["endpoint_status"] == "UNREACHABLE"

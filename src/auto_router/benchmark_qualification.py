@@ -342,6 +342,84 @@ def normalize_evidence_rows(rows: object) -> list[dict[str, Any]]:
 # --- Failure taxonomy --------------------------------------------------------
 
 
+def evidence_from_response(
+    row: dict[str, Any],
+    *,
+    content: str | None,
+    reasoning: str | None = None,
+    finish_reason: str | None = None,
+    timed_out: bool = False,
+    response_field_used: str | None = None,
+    expected_field: str = "content",
+    patch_valid: bool | None = None,
+    tests_passed: bool | None = None,
+) -> dict[str, Any]:
+    """Build one evidence row from the raw response, deriving the outcome.
+
+    ``classify_failure`` reads ``failure_mode`` from the row when present, which
+    means a harness that asserts "timeout" for a reasoning-only response is
+    believed. This builder inverts that: the caller supplies what actually came
+    back and the outcome is *derived*, so the failure taxonomy cannot be
+    mislabelled at the source. It is the only sanctioned way to turn a live
+    model response into evidence.
+
+    Precedence, most specific first:
+
+    1. ``timed_out`` -> ``timeout``
+    2. a length-ish ``finish_reason`` -> ``length_truncated``
+    3. ``response_field_used`` set to something other than ``expected_field``
+       -> ``wrong_response_field``
+    4. no usable content but reasoning present -> ``reasoning_only_output``
+    5. no usable content at all -> ``empty_usable_content``
+
+    The caller's ``succeeded`` and ``failure_mode`` are overridden, not trusted.
+    """
+
+    if not isinstance(row, dict):
+        raise ValueError("evidence row must be a mapping")
+
+    built = dict(row)
+    usable_chars = len(content or "")
+    reasoning_chars = len(reasoning or "")
+    built["usable_content_chars"] = usable_chars
+    built["reasoning_chars"] = reasoning_chars
+    if finish_reason is not None:
+        built["finish_reason"] = finish_reason
+    if patch_valid is not None:
+        built["patch_valid"] = patch_valid
+    if tests_passed is not None:
+        built["tests_passed"] = tests_passed
+
+    mode: str | None = None
+    if timed_out:
+        mode = "timeout"
+    elif any(hint in str(finish_reason or "").lower() for hint in _LENGTH_FINISH_REASONS):
+        mode = "length_truncated"
+    elif response_field_used is not None and response_field_used != expected_field:
+        mode = "wrong_response_field"
+    elif usable_chars <= 0 and reasoning_chars > 0:
+        mode = "reasoning_only_output"
+    elif usable_chars <= 0:
+        mode = "empty_usable_content"
+
+    # A derived failure always wins over a declared one. A declared failure is
+    # preserved only when the response itself showed nothing wrong, so a harness
+    # still gets to explain a non-content failure such as a failed test.
+    if mode is None and _text(row.get("failure_mode")):
+        mode = str(row.get("failure_mode"))
+        built["succeeded"] = False
+    elif mode is not None:
+        built["succeeded"] = False
+        built["failure_mode"] = mode
+    else:
+        # Keep the key present and None rather than deleting it: a normalised
+        # row should have a stable key set, so downstream code never has to
+        # guard on the key existing at all.
+        built["succeeded"] = True
+        built["failure_mode"] = None
+    return built
+
+
 def classify_failure(row: dict[str, Any]) -> str | None:
     """Name the cause of a non-passing observation.
 
@@ -410,6 +488,60 @@ def failure_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 # --- Capability ladder -------------------------------------------------------
 
 
+#: Endpoint progress ladder. These are distinct capabilities, not one health
+#: signal, and the order matters: a node stops at the last rung actually
+#: demonstrated. ``PROTOCOL_UNUSABLE`` is a rung of its own so a host that
+#: answers HTTP but cannot complete a usable exchange is not rounded up to
+#: ``MODEL_LOADED`` - that rounding is how a broken runtime keeps looking
+#: available. An unmeasured rung stays unmeasured rather than defaulting to
+#: "usable", because defaulting would report a capability nobody verified.
+ENDPOINT_STATUS: tuple[str, ...] = (
+    "UNREACHABLE",
+    "REACHABLE",
+    "MODEL_VISIBLE",
+    "MODEL_LOADED",
+    "PROTOCOL_UNUSABLE",
+    "PROTOCOL_USABLE",
+)
+
+
+def classify_endpoint_observation(observation: object) -> str:
+    """Classify one transport observation into the endpoint progress ladder.
+
+    Each rung is returned distinctly. In particular a loaded model whose
+    protocol usability was never measured stays at ``MODEL_LOADED`` rather than
+    being reported healthy.
+    """
+
+    if not isinstance(observation, dict):
+        return "UNREACHABLE"
+    if observation.get("endpoint_reached") is not True and observation.get("reachable") is not True:
+        return "UNREACHABLE"
+    if observation.get("model_visible") is not True:
+        return "REACHABLE"
+    if observation.get("model_loaded") is not True:
+        return "MODEL_VISIBLE"
+    if "protocol_usable" not in observation:
+        return "MODEL_LOADED"
+    return "PROTOCOL_USABLE" if observation["protocol_usable"] else "PROTOCOL_UNUSABLE"
+
+
+def _endpoint_status_summary(rows: list[dict[str, Any]]) -> str:
+    """Best endpoint rung demonstrated across observations, or UNREACHABLE.
+
+    Cumulative by design: this is the *progress* view, complementing the three
+    independently measured transport axes.
+    """
+
+    statuses = [classify_endpoint_observation(row) for row in rows]
+    if not statuses:
+        return "UNREACHABLE"
+    best = 0
+    for status in statuses:
+        best = max(best, ENDPOINT_STATUS.index(status))
+    return ENDPOINT_STATUS[best]
+
+
 def derive_capabilities(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Evaluate the seven capability axes independently for one model."""
     observed = [row for row in rows if isinstance(row, dict)]
@@ -423,10 +555,22 @@ def derive_capabilities(rows: list[dict[str, Any]]) -> dict[str, Any]:
     grounded = [row for row in grounding_graded if row.get("grounding_correct") is True]
     patch_rows = [row for row in observed if str(row.get("test_level")) == "L4_PATCH"]
 
-    endpoint_reachable = any(row.get("endpoint_reached") is True for row in observed)
+    # The three transport axes are measured INDEPENDENTLY. A harness that only
+    # reported model_visible has still measured model_visible, and collapsing it
+    # into a cumulative progress ladder would destroy exactly the distinction
+    # this function exists to keep. The ladder is reported alongside as
+    # endpoint_status, where it is genuinely cumulative.
+    endpoint_reachable = any(
+        row.get("endpoint_reached") is True or row.get("reachable") is True
+        for row in observed
+    )
     model_visible = any(row.get("model_visible") is True for row in observed)
     model_loaded = any(row.get("model_loaded") is True for row in observed)
-    protocol_usable = level_passed["L0_PROTOCOL"]
+    # A rung is usable only if it was demonstrated. L0 passing is the usual
+    # proof; an explicit protocol_usable observation is the other.
+    protocol_usable = level_passed["L0_PROTOCOL"] or any(
+        classify_endpoint_observation(row) == "PROTOCOL_USABLE" for row in observed
+    )
     grounding_usable = bool(
         model_loaded
         and level_passed["L1_EXACT_GROUNDING"]
@@ -450,6 +594,7 @@ def derive_capabilities(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "endpoint_reachable": endpoint_reachable,
+        "endpoint_status": _endpoint_status_summary(observed),
         "model_visible": model_visible,
         "model_loaded": model_loaded,
         "protocol_usable": protocol_usable,
