@@ -75,13 +75,22 @@ class QualificationRole(StrEnum):
 
 
 class EndpointStatus(StrEnum):
-    """How far a node/model pair got before quality was even reachable."""
+    """How far a node/model pair got before quality was even reachable.
+
+    These are distinct capabilities, not one health signal. A model can be
+    loaded and still have an unusable protocol; conflating the two is exactly the
+    "the endpoint answered, so it must be fine" mistake this pipeline exists to
+    prevent. ``protocol_unusable`` is therefore a rung of its own, a fully
+    healthy transport reports ``protocol_usable``, and a loaded model whose
+    protocol was never measured stays at ``model_loaded``.
+    """
 
     unreachable = "unreachable"
     reachable = "reachable"
     model_visible = "model_visible"
     model_loaded = "model_loaded"
     protocol_unusable = "protocol_unusable"
+    protocol_usable = "protocol_usable"
 
 
 class TestOutcome(StrEnum):
@@ -273,16 +282,31 @@ def evidence_from_response(
 
 
 def classify_observation(observation: dict[str, Any]) -> EndpointStatus:
-    """Separate transport reachability from protocol usability."""
+    """Separate transport reachability from protocol usability.
+
+    Each rung is checked and returned distinctly. In particular a loaded model
+    with a broken protocol reports ``protocol_unusable`` rather than being
+    rounded up to ``model_loaded``: a node that answers HTTP but cannot complete
+    a usable exchange has not passed the protocol rung, and reporting it as
+    healthy is how a broken runtime keeps looking available.
+
+    The status is a *progress* ladder: you stop at the last rung actually
+    demonstrated. A loaded model whose protocol usability was never measured
+    stays at ``model_loaded``. Defaulting an unmeasured field to "usable" would
+    report a capability nobody verified, which is the same mistake as reporting
+    an unexercised model as useful.
+    """
     if not bool(observation.get("reachable")):
         return EndpointStatus.unreachable
     if not bool(observation.get("model_visible")):
         return EndpointStatus.reachable
     if not bool(observation.get("model_loaded")):
         return EndpointStatus.model_visible
-    if not bool(observation.get("protocol_usable", True)):
+    if "protocol_usable" not in observation:
         return EndpointStatus.model_loaded
-    return EndpointStatus.model_loaded
+    if not bool(observation["protocol_usable"]):
+        return EndpointStatus.protocol_unusable
+    return EndpointStatus.protocol_usable
 
 
 def highest_passed_level(

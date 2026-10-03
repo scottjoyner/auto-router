@@ -127,6 +127,36 @@ Folding it into "empty" would send an operator to the wrong subsystem.
 `TRANSPORT_FAILURES` groups the harness-level causes so a flaky node is not
 misfiled as a weak model.
 
+## Endpoint status ladder
+
+`endpoint_status` is separate from `role`, and deliberately so: a node can be
+perfectly reachable and still useless. It is a *progress* ladder — you stop at
+the last rung actually demonstrated.
+
+| Status | Demonstrated |
+|---|---|
+| `unreachable` | Nothing responded |
+| `reachable` | Endpoint answered, model not yet visible |
+| `model_visible` | Model listed, not loaded |
+| `model_loaded` | Loaded, **protocol usability not measured** |
+| `protocol_unusable` | Loaded, protocol measured and broken |
+| `protocol_usable` | Loaded, protocol measured and working |
+
+Two properties this ladder must keep:
+
+- **Every rung is reachable.** A member that no input can produce is a
+  dimension that cannot be reported, which is worse than not having it. An
+  earlier revision declared `protocol_unusable` while both branches of the final
+  `if` returned `model_loaded`, so a broken protocol was indistinguishable from a
+  healthy one.
+- **An unmeasured rung is not a passed rung.** A loaded model whose
+  `protocol_usable` was never recorded stays at `model_loaded`. Defaulting an
+  absent field to `True` would report a capability nobody verified — the same
+  mistake as reporting an unexercised model as useful.
+
+Note the `endpoint_status` in `fleet_task_dispatcher.py` is an unrelated,
+pre-existing per-endpoint probe dictionary. They are not connected.
+
 ## Integration boundary
 
 `build_qualification_report()` output may feed:
@@ -167,7 +197,7 @@ left untouched rather than defaulted into a lane.
 
 ## Tests
 
-`tests/test_benchmark_qualification.py` — 26 deterministic tests covering:
+`tests/test_benchmark_qualification.py` — 30 deterministic tests covering:
 
 ```text
 fast but wrong            -> UNQUALIFIED for coding

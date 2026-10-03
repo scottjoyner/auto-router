@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from auto_router.benchmark_qualification import (
     QUALITY_FLOOR,
+    EndpointStatus,
     LadderLevel,
     QualificationFailure,
     QualificationRole,
     apply_qualification_to_benchmark_plan,
     build_qualification_report,
+    classify_observation,
     derive_role,
     evidence_from_response,
     highest_passed_level,
@@ -379,8 +381,113 @@ def test_report_separates_endpoint_status_from_role():
     entry = report["entries"][0]
 
     # Fully healthy transport, but only qualified to summarize.
-    assert entry["endpoint_status"] == "model_loaded"
+    assert entry["endpoint_status"] == "protocol_usable"
     assert entry["role"] == "summary_only"
+
+
+# --- endpoint status ladder is not collapsed --------------------------------
+
+
+def test_endpoint_status_distinguishes_every_capability():
+    """Reachability, visibility, loading and protocol are separate claims."""
+    ladder = [
+        ({}, "unreachable"),
+        ({"reachable": True}, "reachable"),
+        ({"reachable": True, "model_visible": True}, "model_visible"),
+        (
+            # loaded, protocol never measured -> stop at model_loaded
+            {"reachable": True, "model_visible": True, "model_loaded": True},
+            "model_loaded",
+        ),
+        (
+            {
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+                "protocol_usable": False,
+            },
+            "protocol_unusable",
+        ),
+        (
+            {
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+                "protocol_usable": True,
+            },
+            "protocol_usable",
+        ),
+    ]
+
+    for observation, expected in ladder:
+        assert classify_observation(observation).value == expected
+
+
+def test_unmeasured_protocol_rung_is_not_reported_as_healthy():
+    """Absence of evidence is a failure, on the status ladder too.
+
+    An observation that never recorded protocol usability defaults to True, so a
+    loaded model that was never protocol-probed reported the same status as one
+    that passed the protocol rung.
+    """
+    unmeasured = {"reachable": True, "model_visible": True, "model_loaded": True}
+
+    assert classify_observation(unmeasured).value == "model_loaded"
+    assert classify_observation(unmeasured).value != "protocol_usable"
+
+
+def test_every_endpoint_status_member_is_reachable():
+    """No rung may be declared and then be impossible to produce.
+
+    `protocol_unusable` existed as a member while both branches of the final
+    `if` returned `model_loaded`, so it could never be emitted. That made the
+    protocol dimension silently unrepresentable.
+    """
+    produced = {
+        classify_observation(observation).value
+        for observation in (
+            {},
+            {"reachable": True},
+            {"reachable": True, "model_visible": True},
+            {"reachable": True, "model_visible": True, "model_loaded": True},
+            {
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+                "protocol_usable": False,
+            },
+            {
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+                "protocol_usable": True,
+            },
+        )
+    }
+
+    assert produced == {member.value for member in EndpointStatus}
+
+
+def test_broken_protocol_is_reported_even_for_a_fully_qualified_model():
+    """A qualified model on a broken protocol is still a broken endpoint."""
+    report = build_qualification_report(
+        observations=[
+            {
+                "node_id": "node-a",
+                "model_id": "model-x",
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+                "protocol_usable": False,
+            }
+        ],
+        evidence=ladder_up_to(LadderLevel.l4_patch),
+    )
+
+    entry = report["entries"][0]
+
+    assert entry["role"] == "code_qualified"
+    assert entry["endpoint_status"] == "protocol_unusable"
 
 
 def test_benchmark_evidence_cannot_create_provider_eligibility():
