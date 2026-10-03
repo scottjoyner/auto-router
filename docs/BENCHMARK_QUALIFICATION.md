@@ -144,3 +144,34 @@ histogram and the rejected-row count.
 `next_benchmark_targets(report)` suggests the next rung to measure per model. It
 emits `execution_mode: "dry_run"`, `requires_model_load: False`,
 `requires_admission: True`. It suggests; it never schedules, loads, or admits.
+
+## Integration boundary
+
+The ticket allows this evidence to feed the benchmark planner, benchmark routing
+policy, loadout reports, and operator dashboards, while forbidding it from making
+an unadmitted node routable.
+
+`apply_qualification_to_benchmark_plan(plan, report)` is that boundary in
+practice. It **annotates** an existing plan and is the only sanctioned shape:
+
+* no request is added, removed, reordered, or promoted;
+* the only keys it adds are `benchmark_role` and `benchmark_role_confidence`;
+* every other request field is byte-identical to the input;
+* it never mutates the caller's document - it returns a new one;
+* `advisory_only` and `auto_load_allowed` are forced to the safe values **even if
+  the incoming plan claims otherwise**, so an authoritative-looking plan cannot
+  launder its flags through this function;
+* `creates_provider_eligibility` is pinned false and `signed_admission_required`
+  true.
+
+That last point is mutation-tested rather than asserted: deleting the
+`advisory_only` assignment, and reprioritising an annotated request, each fail a
+test.
+
+The function does not import the planner. It accepts and returns plain dicts, so
+the planner's own module graph is never pulled in and this module cannot become
+a hidden dependency of scheduling.
+
+For loadout reports and operator dashboards the report is consumed directly -
+`entries[].role`, `entries[].role_floors`, and `summary.roles` are already
+populated with the advisory guard keys attached.

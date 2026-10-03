@@ -729,6 +729,53 @@ def build_qualification_report(
     }
 
 
+def apply_qualification_to_benchmark_plan(
+    plan: dict[str, Any],
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Annotate an existing benchmark plan with qualification outcomes.
+
+    The plan is left structurally intact: no request is added, removed,
+    reordered, or promoted, and the plan's own ``advisory_only`` and
+    ``auto_load_allowed`` flags are preserved. This only attaches the roles so a
+    planner or dashboard can see which requests point at models that actually
+    earned the lane.
+
+    It deliberately does not touch provider eligibility, admission, or routing:
+    benchmark evidence must never be able to make an unadmitted node routable.
+    """
+
+    roles = {
+        (str(entry["node_id"]), str(entry["model_id"])): entry
+        for entry in report.get("entries", [])
+        if isinstance(entry, dict)
+    }
+
+    annotated = dict(plan)
+    requests: list[dict[str, Any]] = []
+    for request in plan.get("requests", []):
+        if not isinstance(request, dict):
+            requests.append(request)
+            continue
+        entry = roles.get(
+            (str(request.get("node_id", "")), str(request.get("model_id", "")))
+        )
+        updated = dict(request)
+        if entry is not None:
+            updated["benchmark_role"] = entry.get("role")
+            updated["benchmark_role_confidence"] = entry.get("role_stats", {}).get(
+                "confidence"
+            )
+        requests.append(updated)
+
+    annotated["requests"] = requests
+    annotated["advisory_only"] = True
+    annotated["auto_load_allowed"] = False
+    annotated["creates_provider_eligibility"] = False
+    annotated["signed_admission_required"] = True
+    return annotated
+
+
 def next_benchmark_targets(
     report: dict[str, Any],
     *,

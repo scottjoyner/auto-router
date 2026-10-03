@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 from auto_router.benchmark_qualification import (
@@ -9,6 +10,7 @@ from auto_router.benchmark_qualification import (
     QUALIFICATION_LEVELS,
     QUALIFICATION_ROLES,
     REJECTED_SENTINEL,
+    apply_qualification_to_benchmark_plan,
     build_qualification_report,
     classify_failure,
     derive_capabilities,
@@ -492,3 +494,139 @@ def test_blocking_failure_modes_block_coding_role() -> None:
     assert role["role"] != "CODE_QUALIFIED"
     assert role["qualified_for_coding"] is False
     assert "test_failure" in role["blocking_failure_modes"]
+
+
+# --- integration boundary: may feed the benchmark planner ----------------
+#
+# The ticket's integration boundary says benchmark evidence MAY feed the
+# benchmark planner, benchmark routing policy, loadout reports, and operator
+# dashboards, but MUST NOT make an unadmitted node routable. Annotation is the
+# only admissible shape: nothing added, removed, reordered, or promoted.
+
+
+def _evidence_rows() -> list[dict[str, object]]:
+    """A code-qualifying evidence set: two passes at each required rung."""
+
+    rows: list[dict[str, object]] = []
+    for level in ("L1_EXACT_GROUNDING", "L3_DIAGNOSIS", "L4_PATCH"):
+        rows.extend(
+            _repeat(
+                _row(
+                    test_level=level,
+                    succeeded=True,
+                    grounding_correct=True,
+                    **(
+                        {"patch_applied": True, "patch_valid": True, "tests_passed": True}
+                        if level == "L4_PATCH"
+                        else {}
+                    ),
+                ),
+                2,
+            )
+        )
+    return rows
+
+
+def _plan() -> dict:
+    return {
+        "advisory_only": True,
+        "auto_load_allowed": False,
+        "summary": {"requests": 2},
+        "requests": [
+            {"node_id": "x1", "model_id": "qwen-code", "priority": 50},
+            {"node_id": "destroyer", "model_id": "llama-8b", "priority": 30},
+        ],
+    }
+
+
+def test_plan_annotation_attaches_roles_without_structural_change():
+    report = build_qualification_report(_evidence_rows())
+    before = _plan()
+
+    after = apply_qualification_to_benchmark_plan(before, report)
+
+    assert len(after["requests"]) == len(before["requests"])
+    assert [r["node_id"] for r in after["requests"]] == [
+        r["node_id"] for r in before["requests"]
+    ]
+    assert after["summary"] == before["summary"]
+    assert after["advisory_only"] is True
+    assert after["auto_load_allowed"] is False
+    assert after["creates_provider_eligibility"] is False
+    annotated = [r for r in after["requests"] if "benchmark_role" in r]
+    assert annotated, "a qualifying entry must be attached"
+    assert all(r["benchmark_role"] == "CODE_QUALIFIED" for r in annotated)
+
+
+def test_plan_annotation_does_not_mutate_its_input():
+    report = build_qualification_report(_evidence_rows())
+    before = _plan()
+    snapshot = json.loads(json.dumps(before))
+
+    apply_qualification_to_benchmark_plan(before, report)
+
+    assert before == snapshot, "the planner's own document must not be mutated"
+
+
+def test_plan_annotation_never_promotes_an_unmeasured_request():
+    report = build_qualification_report(_evidence_rows())
+    plan = _plan()
+    plan["requests"].append({"node_id": "nowhere", "model_id": "ghost"})
+
+    after = apply_qualification_to_benchmark_plan(plan, report)
+
+    ghost = next(r for r in after["requests"] if r["node_id"] == "nowhere")
+    assert "benchmark_role" not in ghost
+    assert len(after["requests"]) == 3
+
+
+def test_plan_annotation_survives_an_empty_report():
+    after = apply_qualification_to_benchmark_plan(_plan(), {"entries": []})
+
+    assert len(after["requests"]) == 2
+    assert all("benchmark_role" not in r for r in after["requests"])
+
+
+def test_plan_annotation_leaves_every_other_request_field_untouched():
+    """Annotation may only ADD role keys.
+
+    Anything else - reprioritising, promoting, reordering, dropping fields - is
+    benchmark evidence reaching into planning authority, which the integration
+    boundary forbids.
+    """
+
+    report = build_qualification_report(_evidence_rows())
+    before = _plan()
+
+    after = apply_qualification_to_benchmark_plan(before, report)
+
+    added = {"benchmark_role", "benchmark_role_confidence"}
+    for original, updated in zip(before["requests"], after["requests"], strict=True):
+        assert {k: v for k, v in updated.items() if k not in added} == original
+
+
+def test_plan_annotation_forces_advisory_flags_even_if_the_plan_claims_otherwise():
+    """A plan that arrives claiming authority must not pass it through."""
+
+    report = build_qualification_report(_evidence_rows())
+    hostile = _plan()
+    hostile["advisory_only"] = False
+    hostile["auto_load_allowed"] = True
+    hostile["creates_provider_eligibility"] = True
+
+    after = apply_qualification_to_benchmark_plan(hostile, report)
+
+    assert after["advisory_only"] is True
+    assert after["auto_load_allowed"] is False
+    assert after["creates_provider_eligibility"] is False
+    assert after["signed_admission_required"] is True
+
+
+def test_plan_annotation_ignores_non_dict_requests():
+    report = build_qualification_report(_evidence_rows())
+    plan = _plan()
+    plan["requests"].append("not-a-request")
+
+    after = apply_qualification_to_benchmark_plan(plan, report)
+
+    assert after["requests"][-1] == "not-a-request"
