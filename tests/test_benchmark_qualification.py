@@ -7,6 +7,8 @@ distinction: reachability is not usefulness, and throughput is not quality.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from auto_router.benchmark_qualification import (
     QUALITY_FLOOR,
     EndpointStatus,
@@ -545,3 +547,109 @@ def test_evidence_record_cannot_hold_a_raw_prompt():
 
     with pytest.raises(ValidationError):
         type(record).model_validate(document)
+
+# --- consumer contract ----------------------------------------------------
+#
+# my-jev's fleet-qualification bridge consumes these entries. Its model refuses
+# hostnames, so it needs a caller-supplied handle map; but it cannot invent the
+# fields below. If one is dropped here, the consumer silently loses its freshness
+# filter, so both sides pin the required set.
+
+REQUIRED_FOR_ADVISORY_CONSUMERS = (
+    "role",
+    "confidence",
+    "observed_at",
+    "median_ttft_ms",
+    "max_tokens_per_second",
+    "task_families",
+)
+
+
+def test_report_entries_carry_every_field_the_advisory_bridge_needs():
+    report = build_qualification_report(
+        observations=[{"node_id": "n", "model_id": "m", "reachable": True}],
+        evidence=ladder_up_to(LadderLevel.l3_diagnosis),
+    )
+
+    entry = report["entries"][0]
+    for field in REQUIRED_FOR_ADVISORY_CONSUMERS:
+        assert field in entry, f"advisory consumers need entry['{field}']"
+
+
+def test_report_entries_carry_a_machine_readable_observed_at():
+    """An untimestamped role cannot be age-checked downstream."""
+    report = build_qualification_report(
+        observations=[{"node_id": "n", "model_id": "m", "reachable": True}],
+        evidence=ladder_up_to(LadderLevel.l1_exact_grounding),
+    )
+
+    observed_at = report["entries"][0]["observed_at"]
+    assert isinstance(observed_at, str)
+    datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+
+
+def test_report_entries_expose_first_and_last_observation_times():
+    records = [
+        evidence(LadderLevel.l0_protocol, observed_at="2026-10-01T00:00:00+00:00"),
+        evidence(LadderLevel.l1_exact_grounding, observed_at="2026-10-02T00:00:00+00:00"),
+    ]
+    report = build_qualification_report(
+        observations=[{"node_id": "n", "model_id": "m", "reachable": True}],
+        evidence=records,
+    )
+
+    entry = report["entries"][0]
+    assert entry["first_observed_at"] == "2026-10-01T00:00:00+00:00"
+    assert entry["observed_at"] == "2026-10-02T00:00:00+00:00"
+    assert entry["observation_count"] == 2
+
+
+def test_median_ttft_is_reported_for_consumers():
+    records = [
+        evidence(LadderLevel.l0_protocol, ttft_ms=100.0),
+        evidence(LadderLevel.l1_exact_grounding, ttft_ms=200.0),
+        evidence(LadderLevel.l2_source_grounding, ttft_ms=300.0),
+    ]
+    report = build_qualification_report(
+        observations=[{"node_id": "n", "model_id": "m", "reachable": True}],
+        evidence=records,
+    )
+
+    assert report["entries"][0]["median_ttft_ms"] == 200.0
+
+
+def test_protocol_unusable_is_its_own_endpoint_rung():
+    """A loaded model with a broken protocol must not read as healthy."""
+    report = build_qualification_report(
+        observations=[
+            {
+                "node_id": "node-a",
+                "model_id": "model-x",
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+                "protocol_usable": False,
+            }
+        ],
+        evidence=ladder_up_to(LadderLevel.l2_source_grounding),
+    )
+
+    assert report["entries"][0]["endpoint_status"] == "protocol_unusable"
+
+
+def test_unmeasured_protocol_stays_at_model_loaded():
+    """Defaulting an unmeasured field to 'usable' reports an unverified capability."""
+    report = build_qualification_report(
+        observations=[
+            {
+                "node_id": "node-a",
+                "model_id": "model-x",
+                "reachable": True,
+                "model_visible": True,
+                "model_loaded": True,
+            }
+        ],
+        evidence=ladder_up_to(LadderLevel.l2_source_grounding),
+    )
+
+    assert report["entries"][0]["endpoint_status"] == "model_loaded"

@@ -281,6 +281,17 @@ def evidence_from_response(
     )
 
 
+def _median(values: Iterable[float | None]) -> float | None:
+    """Median of the non-None values, rounded for stable serialization."""
+    present = sorted(value for value in values if value is not None)
+    if not present:
+        return None
+    middle = len(present) // 2
+    if len(present) % 2:
+        return round(present[middle], 3)
+    return round((present[middle - 1] + present[middle]) / 2, 3)
+
+
 def classify_observation(observation: dict[str, Any]) -> EndpointStatus:
     """Separate transport reachability from protocol usability.
 
@@ -475,6 +486,22 @@ def build_qualification_report(
                     ),
                     default=None,
                 ),
+                # Newest and oldest observation timestamps. Downstream advisory
+                # consumers (my-jev fleet-qualification) must be able to reject
+                # stale role claims, and they cannot do that from an aggregated
+                # report that discarded when the evidence was gathered. A role
+                # without a timestamp cannot be age-checked, which makes it
+                # indistinguishable from a permanent fact.
+                "observed_at": max(
+                    (record.observed_at for record in records),
+                    default=None,
+                ),
+                "first_observed_at": min(
+                    (record.observed_at for record in records),
+                    default=None,
+                ),
+                "observation_count": len(records),
+                "median_ttft_ms": _median(record.ttft_ms for record in records),
                 "quality_floor": QUALITY_FLOOR,
                 "role_confidence_floor": ROLE_CONFIDENCE_FLOOR,
                 "advisory_only": True,
