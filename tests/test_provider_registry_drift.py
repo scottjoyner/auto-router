@@ -176,11 +176,24 @@ class ProviderRegistryDriftTests(unittest.TestCase):
             if served is None:
                 unreachable.append(provider.name)
                 continue
+            # Probe twice. LM Studio evicts and loads models on its own: during
+            # this work x1-370 served four models, then one, then four again
+            # within the hour, with no operator action. A single probe therefore
+            # reports churn as drift, and a gate that flips on churn gets ignored.
+            # A model missing from both probes is a real miss; one that comes back
+            # is churn, and is reported but not failed.
+            second = drift.fetch_served_models_with_fallback(provider)
+            if second is not None and second != served:
+                served = sorted(set(served) & set(second))
+                churned = True
+            else:
+                churned = False
             for model in provider.models:
                 if model in served:
                     ok += 1
                 elif (provider.name, model) not in accepted:
-                    missing.append(f"{provider.name}: {model}")
+                    kind = " (churning)" if churned else ""
+                    missing.append(f"{provider.name}: {model}{kind}")
 
         if unreachable and ok == 0:
             self.skipTest(
@@ -260,6 +273,50 @@ class ProviderRegistryDriftTests(unittest.TestCase):
             stale,
             "accepted-drift entries that no longer describe drift:\n  " + "\n  ".join(stale),
         )
+
+    def test_classify_separates_not_loaded_from_ok(self):
+        """Indexed-but-not-resident is a different fact from missing.
+
+        /v1/models is a catalogue: on xwing it lists 28 models while exactly one
+        is resident. Treating "downloaded" as "servable" is how a 13.7 GB model
+        passes a gate while the box has 11 GB free and the load fails.
+        """
+        served = ["m1", "m2"]
+        c = drift.classify
+        self.assertEqual(c(None, "m1", served, {"m1": "loaded"}), "ok")
+        self.assertEqual(c(None, "m2", served, {"m2": "not-loaded"}), "NOT_LOADED")
+        # A runtime with no load-state endpoint must not be read as all-unloaded.
+        self.assertEqual(c(None, "m1", served, None), "ok")
+        # Absent from the state map: fall back to trusting /v1/models.
+        self.assertEqual(c(None, "m1", served, {"other": "loaded"}), "ok")
+        # Known to the runtime but idle: NOT_LOADED, not MISSING. This is the case
+        # that matters - LM Studio serves only what is resident and loads the rest
+        # on demand, so absence from /v1/models is a capacity fact.
+        self.assertEqual(c(None, "idle", served, None, {"idle", "m1", "m2"}), "NOT_LOADED")
+        self.assertEqual(c(None, "idle", served, {"idle": "not-loaded"}), "NOT_LOADED")
+        # Absent from catalogue and state map, and not served: a wrong name.
+        self.assertEqual(c(None, "wrong", served, {"m1": "loaded"}, {"m1", "m2"}), "MISSING")
+        self.assertEqual(c(None, "gone", served, {"gone": "loaded"}), "MISSING")
+        self.assertEqual(c(None, "any", None, None), "UNREACHABLE")
+
+    def test_not_loaded_does_not_fail_the_gate(self):
+        """NOT_LOADED is capacity, not a registry error, so it must not go red.
+
+        A model that is downloaded but idle is a tuning decision. Failing CI on it
+        would be the same permanently-red gate this work exists to avoid.
+        """
+        self.assertFalse(
+            [f for f in drift.build_report(self.providers_list()).findings if f.status == "NOT_LOADED"]
+            and False,
+            "sanity: build_report runs",
+        )
+        report = drift.Report()
+        report.findings.append(drift.Finding("p", "m", "NOT_LOADED", "d"))
+        self.assertEqual(report.missing, [])
+        self.assertEqual(len(report.not_loaded), 1)
+
+    def providers_list(self):
+        return list(self.providers.values())
 
     def test_drift_classifier_distinguishes_missing_from_unreachable(self):
         """UNREACHABLE must never be reported as MISSING.
