@@ -51,9 +51,7 @@
       "vibethinker-3b-i1"
     ],
     "lmstudio-x1-370": [
-      "qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled",
-      "text-embedding-nomic-embed-text-v1.5",
-      "toolcall-v5-3b-combined-r2"
+      "qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled"
     ],
     "lmstudio-xwing": [
       "k2-horizon-0.9b",
@@ -86,5 +84,5 @@
       "toolcall-v5-3b-combined-r2"
     ]
   },
-  "recorded_at": "2026-10-04T12:37:31-04:00"
+  "recorded_at": "2026-10-04T15:44:43-04:00"
 }

@@ -118,6 +118,10 @@ class Report:
         return [f for f in self.findings if f.status == "UNREACHABLE"]
 
     @property
+    def not_loaded(self) -> list[Finding]:
+        return [f for f in self.findings if f.status == "NOT_LOADED"]
+
+    @property
     def ok(self) -> list[Finding]:
         return [f for f in self.findings if f.status == "ok"]
 
@@ -130,6 +134,7 @@ class Report:
             "summary": {
                 "ok": len(self.ok),
                 "missing": len(self.missing),
+                "not_loaded": len(self.not_loaded),
                 "unreachable": len(self.unreachable),
             },
         }
@@ -265,6 +270,49 @@ def build_report(providers: list[Provider] | None = None, timeout: float = DEFAU
     return report
 
 
+_DETAIL = {
+    "ok": "",
+    "MISSING": "registry advertises a model this host does not serve",
+    "NOT_LOADED": "indexed but not resident; routing here forces an on-demand load that can fail",
+    "UNREACHABLE": "host did not answer /v1/models",
+}
+
+
+def classify(
+    provider: Provider,
+    model: str,
+    served: list[str],
+    states: dict[str, str] | None,
+    catalogue: set[str] | None = None,
+) -> str:
+    """One place that decides what a finding means, so report and gate agree.
+
+    Four outcomes. The distinction between the middle two is the whole point:
+
+      UNREACHABLE  the host did not answer - say nothing about the model
+      MISSING      not served and unknown to the runtime - a wrong name
+      NOT_LOADED   known to the runtime but not resident - loads on demand
+      ok           resident now
+
+    A runtime that serves only what is loaded (LM Studio does) would otherwise
+    report every idle model as MISSING, which is a capacity fact wearing a
+    config-bug's clothes.
+    """
+    if served is None:
+        return "UNREACHABLE"
+    if model in served:
+        if states is not None and states.get(model, "loaded") != "loaded":
+            return "NOT_LOADED"
+        return "ok"
+    if catalogue is not None and model in catalogue:
+        return "NOT_LOADED"
+    # Only an explicit not-loaded state counts. A model marked "loaded" yet absent
+    # from /v1/models is a contradiction, and the safe reading is MISSING.
+    if states is not None and states.get(model) == "not-loaded":
+        return "NOT_LOADED"
+    return "MISSING"
+
+
 def _curl_fallback(url: str, timeout: float) -> list[str] | None:
     """Some fleet nodes resolve only inside the docker network."""
     try:
@@ -307,7 +355,15 @@ def render(report: Report) -> str:
             continue
         bad = [f for f in entries if f.status == "MISSING"]
         unknown = [f for f in entries if f.status == "UNREACHABLE"]
-        marker = "FAIL" if bad else ("unknown" if unknown else "ok")
+        idle = [f for f in entries if f.status == "NOT_LOADED"]
+        if bad:
+            marker = "FAIL"
+        elif unknown:
+            marker = "unknown"
+        elif idle:
+            marker = "warn"
+        else:
+            marker = "ok"
         lines.append(f"  [{marker:7}] {provider.name} ({provider.node_id})")
         for finding in entries:
             if finding.status == "ok":
@@ -315,16 +371,24 @@ def render(report: Report) -> str:
                 lines.append(f"      ok          {finding.model}{suffix}")
             elif finding.status == "MISSING":
                 lines.append(f"      MISSING    {finding.model} - {finding.detail}")
+            elif finding.status == "NOT_LOADED":
+                lines.append(f"      NOT_LOADED {finding.model} - {finding.detail}")
             else:
                 lines.append(f"      UNREACHABLE {finding.model} - {finding.detail}")
     lines += [
         "",
-        f"  {len(report.ok)} ok, {len(report.missing)} missing, {len(report.unreachable)} unreachable",
+        f"  {len(report.ok)} ok, {len(report.missing)} missing, "
+        f"{len(report.not_loaded)} not-loaded, {len(report.unreachable)} unreachable",
     ]
     if report.missing:
         lines.append("")
         lines.append("  MISSING entries are guaranteed routing failures: the router asks for a")
         lines.append("  model the host does not serve. UNREACHABLE is not evidence of absence.")
+    if report.not_loaded:
+        lines.append("")
+        lines.append("  NOT_LOADED entries are indexed but not resident. The model exists, so")
+        lines.append("  routing is not a miss - but it forces an on-demand load that fails when")
+        lines.append("  the weights do not fit. Exit status is unaffected: capacity, not error.")
     return "\n".join(lines)
 
 
@@ -367,24 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"cannot read {args.registry}: {error}", file=sys.stderr)
         return 2
 
-    report = Report(providers=providers)
-    for provider in providers:
-        served = fetch_served_models_with_fallback(provider, timeout=args.timeout)
-        for model in provider.models:
-            if served is None:
-                report.findings.append(Finding(provider.name, model, "UNREACHABLE", "host did not answer /v1/models"))
-            elif model in served:
-                report.findings.append(Finding(provider.name, model, "ok", served_count=len(served)))
-            else:
-                report.findings.append(
-                    Finding(
-                        provider.name,
-                        model,
-                        "MISSING",
-                        "registry advertises a model this host does not serve",
-                        served_count=len(served),
-                    )
-                )
+    report = build_report(providers, timeout=args.timeout)
 
     if args.write_snapshot:
         write_snapshot(report, args.write_snapshot)

@@ -35,31 +35,3 @@ entries:
       which host owns the alias, not a rename.
     owner: unassigned
     review_by: 2026-11-04
-
-  # Unloaded on x1-370 and loaded on no reachable node. The nearest name,
-  # qwen3.5-0.8b-heretic-tuned-reasoning-i1, runs on beelink and is a different
-  # size, so it is not a rename either. Resolution is reloading it, or dropping
-  # the local/moe-fast alias if the 0.8B models already cover that role.
-  - provider: lmstudio-x1-370
-    model: qwen3.5-9b-neo-heretic-i1
-    reason: >-
-      Unloaded everywhere reachable. Needs a reload or a decision to drop the
-      alias; a same-family model on another host is not a substitute.
-    owner: unassigned
-    review_by: 2026-11-04
-
-  # Loaded at 12:27, gone by 12:36, with no operator action. Unlike the two above
-  # this is not a stale name - LM Studio simply evicts models under memory
-  # pressure, so a hand-pinned entry for a large model cannot be kept true. The
-  # durable fix is runtime discovery (service_scanner already does it) rather than
-  # a registry edit, which is why this is waived rather than removed.
-  - provider: lmstudio-x1-370
-    model: ornith-1.5-35b-a3b-apex-mtp
-    reason: >-
-      Runtime eviction, not a rename. The host loads and unloads models on its
-      own, so pinning this in a static registry cannot stay correct. Resolution
-      is to route large-model requests from discovered state instead of the
-      registry.
-    owner: unassigned
-    review_by: 2026-11-04
-    churn: true
