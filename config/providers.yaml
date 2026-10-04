@@ -12,8 +12,8 @@ providers:
     priority: 90
     quota_class: local
     models:
-      - alias: local/ornith-1.0-9b
-        provider_model: ornith-1.0-9b
+      - alias: local/ornith-1.5-35b
+        provider_model: ornith-1.5-35b-a3b-apex-mtp
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 32768
 
@@ -50,11 +50,14 @@ providers:
     quota_class: local
     models:
       - alias: local/reasoning-large
-        provider_model: ornith-1.0-35b
+        provider_model: ornith-1.5-35b-a3b-apex-mtp
+        # Verified loaded 12:27, unloaded by 12:36 without anyone asking. LM
+        # Studio evicts and loads models at runtime, so this entry is recorded
+        # but not asserted: see config/provider_registry_drift.yaml.
         capabilities: [chat, reasoning, json, local_only, large_context, hermes_worker]
         context_window: 131072
       - alias: local/tool-call-x1
-        provider_model: refinedtoolcallv5-3b
+        provider_model: toolcall-v5-3b-combined-r2
         capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
         context_window: 131072
       - alias: local/moe-fast
@@ -119,7 +122,7 @@ providers:
     quota_class: local
     models:
       - alias: local/lenovo-fast
-        provider_model: headless
+        provider_model: lenovo-lfm-cpu
         capabilities: [chat, streaming, json, local_only, quick_iteration, reasoning, moe]
         context_window: 32768
 
