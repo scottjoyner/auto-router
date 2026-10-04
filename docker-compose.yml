@@ -1,8 +1,14 @@
 services:
   llm-router:
     build: .
+    # Optional: CI supplies the environment inline through
+    # docker-compose.integration.yml and has no .env, while a developer checkout
+    # usually has one. Required-mode made the job fail on a missing local file
+    # that it never intended to use - an error that was previously masked by an
+    # earlier interpolation failure.
     env_file:
-      - .env
+      - path: .env
+        required: false
     container_name: ${AUTO_ROUTER_CONTAINER_NAME:-auto-router}
     ports:
       - "${AUTO_ROUTER_BIND:-0.0.0.0}:${AUTO_ROUTER_HOST_PORT:-8088}:8088"

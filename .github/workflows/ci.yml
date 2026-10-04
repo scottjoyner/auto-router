@@ -98,6 +98,19 @@ jobs:
 
   integration-smoke:
     runs-on: ubuntu-latest
+    # Job-level, not step-level: the teardown step runs `if: always()` and compose
+    # interpolates on `down` exactly as it does on `up`, so a step-scoped value
+    # left teardown failing on a missing variable after the build had passed.
+    #
+    # AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE is required (`:?`) by
+    # docker-compose.yml so a missing key file fails at `up` rather than being
+    # silently bind-mounted as an empty directory by docker. The integration
+    # override replaces llm-router's volumes wholesale, so this path is never read
+    # here - it only has to satisfy interpolation, which compose performs on the
+    # base file before the override is merged.
+    env:
+      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: smoke-service-token
+      AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE: /dev/null
     steps:
       - uses: actions/checkout@v4
       - name: Build and start strict-offline router + redis
