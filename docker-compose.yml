@@ -61,8 +61,14 @@ services:
       # configuration, so it does not belong in a committed file. If a consumer is
       # ever added, mount it explicitly and locally, not here:
       #   - ${AUTO_ROUTER_FLEET_RESERVATIONS_FILE:?set this only if something reads it}:/run/assistx/fleet_reservations.json:ro
-      - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_runtime_projection_public_key.pem:ro
-      - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_executor_public_key.pem:ro
+      # Public verification keys. The container-side paths are what the code reads
+      # (AUTO_ROUTER_RUNTIME_PROJECTION_VERIFY_KEY_FILE and
+      # AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE, both defaulting under /run/secrets),
+      # so only the host side is deployment-specific and it is parameterised here.
+      # Both point at the same file on this host, deliberately: one ed25519 public
+      # key authorises both surfaces.
+      - ${AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE:?set the host path to the ed25519 public key}:/run/secrets/assistx_runtime_projection_public_key.pem:ro
+      - ${AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE:?set the host path to the ed25519 public key}:/run/secrets/assistx_executor_public_key.pem:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
