@@ -9,6 +9,8 @@ from pathlib import Path
 from auto_router.config import PolicyRegistry, ProviderRegistry
 from auto_router.settings import get_settings
 
+_RESERVATIONS_PATH = Path("/run/assistx/fleet_reservations.json")
+
 _LATENCY_CACHE = Path(get_settings().latency_cache_path)
 
 # Latency awareness for `auto`: nodes whose measured round-trip latency sits
@@ -142,6 +144,8 @@ class PolicyEngine:
         if not requested_model or requested_model.startswith("auto/"):
             return None
         for provider in self.providers.enabled():
+            if self._provider_reserved(provider):
+                continue
             if not self._provider_is_eligible(provider, request):
                 continue
             for model in provider.models:
@@ -171,6 +175,8 @@ class PolicyEngine:
     def _build_stage(self, policy_stage: PolicyStage, request: RouterRequest) -> ExecutionStage:
         candidates: list[ProviderCandidate] = []
         for provider in self.providers.enabled():
+            if self._provider_reserved(provider):
+                continue
             if not self._provider_is_eligible(provider, request, stage_purpose=policy_stage.purpose):
                 continue
             if policy_stage.provider_classes and str(provider.quota_class) not in policy_stage.provider_classes:
@@ -195,6 +201,26 @@ class PolicyEngine:
             allow_local_fallback=policy_stage.allow_local_fallback,
             optional=policy_stage.optional,
         )
+
+    def _provider_reserved(self, provider: ProviderConfig) -> bool:
+        """Return true when a physical node is under an operator benchmark hold."""
+        try:
+            reservations = json.loads(_RESERVATIONS_PATH.read_text())
+        except Exception:
+            return False
+        now = time.time()
+        identities = {
+            str(getattr(provider, "name", "")).lower(),
+            str(getattr(provider, "node_id", "")).lower(),
+            str(getattr(provider, "base_url", "")).split("//")[-1].split("/")[0].split(":")[0].lower(),
+        }
+        for key, info in reservations.items():
+            if float(info.get("until", 0)) < now:
+                continue
+            reserved_identity = str(key).split(":", 1)[0].lower()
+            if reserved_identity in identities:
+                return True
+        return False
 
     def _owner_str(self, candidate: ProviderCandidate) -> str:
         return f"{candidate.provider.name}/{candidate.model.alias}"
