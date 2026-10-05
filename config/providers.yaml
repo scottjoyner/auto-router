@@ -16,6 +16,35 @@ providers:
         provider_model: ornith-1.5-35b-a3b-apex-mtp
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 32768
+      - alias: local/nomic-embed-text-v1.5
+        provider_model: text-embedding-nomic-embed-text-v1.5
+        # "embeddings" satisfies the /v1/embeddings required_capabilities filter
+        # added by the /v1/embeddings route; "embed"/"embedding" are what
+        # policy._capability_tier buckets on for modality.
+        capabilities: [embeddings, embed, embedding, local_only]
+        context_window: 8192
+
+
+  # Ternary Bonsai 2 27B (PTQ1_0) on xwing, served by the PrismML llama.cpp fork.
+  # Highest-quality admitted local model, but CPU-only at ~2.4 tok/s, so it carries a
+  # deliberately low routing priority and never advertises low_latency.
+  - name: lmstudio-xwing-bonsai2
+    type: lmstudio
+    node_id: xwing
+    enabled: true
+    base_url: ${LMSTUDIO_XWING_BONSAI2_BASE_URL:-http://xwing.tailcb8954.ts.net:18270/v1}
+    api_key_env: TERNARY_BONSAI2_API_KEY
+    priority: 200
+    quota_class: local
+    runtime_instance_id: xwing-ternary-bonsai-2-27b-ptq1_0
+    parallel_slots: 1
+    queue_timeout_seconds: 300
+    models:
+      - alias: local/ternary-bonsai-2-27b
+        provider_model: ternary-bonsai-2-27b
+        quantization: PTQ1_0
+        capabilities: [chat, streaming, code, json, local_only, reasoning, hermes_worker]
+        context_window: 16384
 
   - name: lmstudio-joyner
     type: lmstudio
@@ -103,6 +132,13 @@ providers:
         context_window: 32768
         max_concurrency: 4
         recommended_use: [compression, classification, extraction, quick_iteration]
+      - alias: local/nomic-embed-text-v1.5
+        provider_model: text-embedding-nomic-embed-text-v1.5
+        # "embeddings" satisfies the /v1/embeddings required_capabilities filter
+        # added by the /v1/embeddings route; "embed"/"embedding" are what
+        # policy._capability_tier buckets on for modality.
+        capabilities: [embeddings, embed, embedding, local_only]
+        context_window: 8192
 
   # Live-tuned 2026-08-26: resident LFM2.5-8B-A1B MoE (reasoning, ~1B active)
   # at PP~26/TG~13 tok/s sustained on CPU @13W cap. CONSERVE auto-swaps this
@@ -142,6 +178,13 @@ providers:
         context_window: 32768
         max_concurrency: 1
         recommended_use: [compression, classification, extraction, quick_iteration]
+      - alias: local/nomic-embed-text-v1.5
+        provider_model: text-embedding-nomic-embed-text-v1.5
+        # "embeddings" satisfies the /v1/embeddings required_capabilities filter
+        # added by the /v1/embeddings route; "embed"/"embedding" are what
+        # policy._capability_tier buckets on for modality.
+        capabilities: [embeddings, embed, embedding, local_only]
+        context_window: 8192
 
   - name: lmstudio-scotts-macbook-air
     type: lmstudio
@@ -206,3 +249,32 @@ providers:
         provider_model: k2-horizon-moVA-36B-A4B
         capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker]
         context_window: 57344
+
+  - name: lmstudio-destroyer-k2-1b
+    type: lmstudio
+    node_id: destroyer
+    enabled: false
+    base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
+    priority: 200
+    quota_class: local
+    runtime_instance_id: destroyer-k2-horizon-1b
+    parallel_slots: 1
+    models:
+      - alias: local/k2-1b
+        provider_model: k2-horizon-1b
+        capabilities: [chat, streaming, json, local_only, low_latency]
+        context_window: 32768
+
+  - name: lmstudio-destroyer-ornith
+    type: lmstudio
+    node_id: destroyer
+    enabled: true
+    base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
+    priority: 125
+    quota_class: local
+    runtime_instance_id: destroyer-ornith
+    models:
+      - alias: local/ornith-1.5-35b
+        provider_model: ornith-1.5-35b-a3b
+        capabilities: [chat, reasoning, json, local_only, large_context, hermes_worker]
+        context_window: 131072
