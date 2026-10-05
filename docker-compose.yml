@@ -50,9 +50,17 @@ services:
       - ./config:/app/config:ro
       - ./data:/data
       - ./artifacts:/artifacts
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock:ro
-      - /usr/bin/tailscale:/usr/bin/tailscale:ro
-      - /media/scott/SSD_4TB/hermes-home/home_scott_git_auto-assist/src/assistx/fleet_reservations.json:/run/assistx/fleet_reservations.json:ro
+      # service_scanner.discover_tailnet_lmstudio_services() shells out to
+      # `tailscale status --json`, so the CLI binary must be reachable inside the
+      # container. The daemon socket is deliberately NOT mounted: nothing reads it,
+      # and exposing it grants control of the host's Tailscale daemon.
+      - ${AUTO_ROUTER_TAILSCALE_CLI:-/usr/bin/tailscale}:/usr/bin/tailscale:ro
+      # fleet_reservations.json is deliberately NOT mounted. Nothing reads it from
+      # here: auto-assist's fleet.py reads its own copy relative to __file__, never
+      # /run/assistx. It is also live, time-boxed NAS-recovery state rather than
+      # configuration, so it does not belong in a committed file. If a consumer is
+      # ever added, mount it explicitly and locally, not here:
+      #   - ${AUTO_ROUTER_FLEET_RESERVATIONS_FILE:?set this only if something reads it}:/run/assistx/fleet_reservations.json:ro
       - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_runtime_projection_public_key.pem:ro
       - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_executor_public_key.pem:ro
     extra_hosts:

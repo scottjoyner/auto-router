@@ -1,219 +1,215 @@
-# Benchmark Model Qualification
+# Benchmark Qualification Ladder
 
-_Added: 2026-10-02_
+`src/auto_router/benchmark_qualification.py` records what a (node, model, task-family)
+triple actually did at a rung of a fixed ladder, then proposes **one advisory role**.
+It is a pure vocabulary plus pure functions over plain dicts.
 
-## Why
+## The boundary
 
-The fleet campaign reported:
+This module is benchmark-only and cannot make anything routable.
 
-```text
-OptiPlex   degraded
-Lenovo     degraded
-Destroyer  unavailable
-Xwing      high-load / excluded
-```
+- It imports nothing from `runtime_projection`, `runtime_projection_v2`, `admission`,
+  `policy`, `main`, `main_live`, `claim_fence`, `executor_auth`,
+  `install_benchmark_routing_policy`, or `install_enabled_discovery_policy`.
+  A test walks the module's AST and fails the build if that ever changes.
+- It defines no monkeypatch, no route, and never writes to `ModelConfig`
+  (`task_family_scores`, `routing_roles`, `allow_code_execution`, `worker_mode`).
+- It reads no live node state, endpoints, or provider config.
+- Every output carries the guard keys `advisory_only: True`,
+  `auto_load_allowed: False`, `mode: "simulation"`, `executable: False`,
+  `mutates_model_config: False`, `creates_provider_eligibility: False`,
+  `signed_admission_required: True`.
 
-Several of those endpoints were reachable. Endpoint availability did not
-correlate with useful grounded coding performance, so every node was correctly
-unqualified — but the system could not say *why*, and could not distinguish a
-model that is useless from a model that was never properly measured.
+`build_qualification_report()` also emits a machine-checkable
+`boundary_assertions` block asserting that provider eligibility, routing roles,
+worker mode, and code-execution permission were **not** granted. Provider
+eligibility remains the exclusive province of signed admission.
 
-Those are four different claims, and this pipeline keeps them separate:
+## The qualification ladder
 
-```text
-endpoint reachable
-model visible
-model loaded
-protocol usable
-grounding usable
-coding useful
-review useful
-```
+Levels are a closed vocabulary and are nested: passing rung *N* implies every
+lower rung.
 
-`src/auto_router/benchmark_qualification.py`.
+| Level | What it proves |
+| --- | --- |
+| `L0_PROTOCOL` | deterministic tiny response; the wire protocol works |
+| `L1_EXACT_GROUNDING` | answer one exact fact from the supplied context |
+| `L2_SOURCE_GROUNDING` | name exact symbols and relationships from a bounded source slice |
+| `L3_DIAGNOSIS` | identify root cause and minimal repair for a known bug slice |
+| `L4_PATCH` | propose a patch, evaluated in an isolated temporary worktree |
 
-## Qualification ladder
+Not every model reaches `L4_PATCH`, and reaching it is a description, not a
+permission.
 
-| Level | What it establishes |
-|---|---|
-| `L0_PROTOCOL` | Deterministic tiny response. Transport works. **Earns no lane.** |
-| `L1_EXACT_GROUNDING` | Answers one exact fact from supplied context |
-| `L2_SOURCE_GROUNDING` | Identifies exact symbols/relationships from bounded source |
-| `L3_DIAGNOSIS` | Identifies root cause / minimal repair for a known bug slice |
-| `L4_PATCH` | Proposes a patch, evaluated in an isolated temporary worktree |
+## The capability ladder
 
-Not every model needs to reach L4. Most of this fleet should not. The ladder
-exists to measure honestly, not to sort a leaderboard.
+Seven axes, evaluated independently and **never collapsed**:
 
-`L0` earns no role on purpose: a deterministic tiny response proves the
-endpoint is alive, not that the model is useful. Reporting `L0` as a lane is how
-a broken node looks healthy again.
+`endpoint_reachable`, `model_visible`, `model_loaded`, `protocol_usable`,
+`grounding_usable`, `coding_usable`, `review_usable`.
 
-## Role derivation
-
-The highest level that actually **passed** determines the role:
-
-| Highest passed | Role |
-|---|---|
-| `L4_PATCH` | `CODE_QUALIFIED` |
-| `L3_DIAGNOSIS` | `REVIEW_QUALIFIED` |
-| `L2_SOURCE_GROUNDING` | `SCOUT_QUALIFIED` |
-| `L1_EXACT_GROUNDING` | `SUMMARY_ONLY` |
-| none / L0 only | `UNQUALIFIED` |
-
-Two additional conditions, both fail-closed:
-
-- **Quality floor** (`QUALITY_FLOOR = 0.5`). A level below the floor is failed.
-- **Confidence floor** (`ROLE_CONFIDENCE_FLOOR = 0.5`). Evidence too thin to be
-  confident about yields `UNQUALIFIED` rather than a guess. We would rather
-  report nothing than advise a lane off one sample.
-
-### Throughput never buys quality
-
-`tokens_per_second` is **not an input to role derivation**. It is recorded, and
-it is surfaced in the report so an operator can see it, but a 5000 tok/s model
-that failed grounding stays `UNQUALIFIED`. This is the single most important
-property of this module: the previous failure mode was a fast, confident,
-wrong model looking like a good one.
-
-Throughput may break ties *within* an already-earned role. It cannot create one.
+A model can be listed but not loaded; loaded but protocol-broken;
+protocol-clean but ungrounded; grounded but unable to produce a patch that
+passes tests. `derive_capabilities()` reports each axis with the evidence basis
+that decided it, and returns `collapsible: False`.
 
 ## Evidence schema
 
-`QualificationEvidence` — one ladder attempt, `extra="forbid"`:
+One row per (node, model, task-family) observation. Required fields:
 
-```text
-node_id, runtime_instance_id, runtime_kind
-model_id, quantization, context_tokens
-task_family, test_level
-prompt_sha256, source_sha256            # digests only
-outcome, failure
-quality_score, grounding_correct, patch_sha256, test_result
-ttft_ms, tokens_per_second, finish_reason
-observed_at, confidence
-```
+`node_id`, `task_family`, `runtime_instance_id`, `runtime_kind`,
+`runtime_version`, `model_instance_id`, `provider_model`, `alias`,
+`quantization` (optional), `context_length`, `test_level`, `prompt_hash`,
+`source_hash`, `succeeded`, `failure_mode`, `grounding_correct`, `patch_applied`,
+`patch_valid`, `tests_passed`, `time_to_first_token_ms`, `tokens_per_second`,
+`finish_reason`, `observed_at`, `confidence`.
 
-**No raw prompt persistence.** This is structural, not a convention: prompts and
-sources are recorded only as SHA-256 digests, so there is no field in which
-sensitive prompt text could be stored. `model_dump()` cannot produce one.
+`time_to_first_token_ms` and `tokens_per_second` follow the `route_events.py` /
+`ledger.py` / `model_value.py` conventions. `observed_at` is an ISO-8601 string
+like `quality_evidence.py`'s `last_observed_at`.
 
-`qualification_id` follows the existing colon-joined convention
-(`benchmark_planner.py`): `node:model:family:level`.
+**No raw prompt text is ever stored.** Only `prompt_hash` and `source_hash`.
+Auxiliary fields are counts and flags only (`usable_content_chars`,
+`reasoning_chars`, `endpoint_reached`, `model_visible`, `model_loaded`,
+`error_type`) — enough to classify a failure, never the content itself.
+
+`normalize_evidence()` fills defaults defensively (`row.get("x") or 0`-style,
+isinstance-guarded coercion) and records soft repairs in `rejections`. It raises
+`ValueError` for structurally malformed rows: not a mapping, no `node_id`, no
+model identity, an unknown `test_level`, or an unknown `failure_mode`.
+`build_qualification_report()` counts such rows under `summary.rejected_rows`
+instead of admitting them.
 
 ## Failure taxonomy
 
-Collapsing these into a generic `model_failed` destroys the operator's ability to
-tell a broken endpoint from a broken model from a broken prompt — which need
-completely different responses.
+There is no generic `model_failed` bucket. Every non-passing observation is
+attributed to exactly one named cause so the remediation is decidable:
 
-| Failure | Meaning |
-|---|---|
-| `EMPTY_USABLE_CONTENT` | Nothing usable in the expected field |
-| `REASONING_ONLY_OUTPUT` | Content empty, reasoning field populated |
-| `LENGTH_TRUNCATED` | Generation hit the length cap mid-answer |
-| `TIMEOUT` | Did not complete inside the deadline |
-| `CONTEXT_NOT_GROUNDED` | Answer not derivable from supplied context |
-| `WRONG_RESPONSE_FIELD` | Answered, but not in the protocol's field |
-| `INVALID_PATCH` | Syntactically present, did not apply |
-| `TEST_FAILURE` | Patch applied, tests rejected it |
-| `PROTOCOL_UNUSABLE` | Transport fine, protocol broken |
-| `NOT_ATTEMPTED` | No evidence collected |
+`empty_usable_content`, `reasoning_only_output`, `length_truncated`, `timeout`,
+`context_not_grounded`, `wrong_response_field`, `invalid_patch`, `test_failure`.
 
-`EMPTY_USABLE_CONTENT` and `REASONING_ONLY_OUTPUT` are kept separate
-deliberately. In the second case the endpoint is healthy, the model is loaded,
-and the transport worked — the model reasoned and never emitted an answer.
-Folding it into "empty" would send an operator to the wrong subsystem.
+`classify_failure()` is deterministic: a declared `failure_mode` wins; then a
+timeout-shaped `error_type`; then a length-shaped `finish_reason`; then empty
+usable content split into *reasoning only* vs *genuinely empty*; then
+patch/test/grounding/field checks. An unrecognised shape still resolves to a
+named mode, never to "it failed".
 
-`TRANSPORT_FAILURES` groups the harness-level causes so a flaky node is not
-misfiled as a weak model.
+## Role derivation
 
-## Endpoint status ladder
+Exactly one of `CODE_QUALIFIED`, `REVIEW_QUALIFIED`, `SCOUT_QUALIFIED`,
+`SUMMARY_ONLY`, `UNQUALIFIED`. Floors are checked strictest-first; the first
+satisfied floor wins; `UNQUALIFIED` is the fallback.
 
-`endpoint_status` is separate from `role`, and deliberately so: a node can be
-perfectly reachable and still useless. It is a *progress* ladder — you stop at
-the last rung actually demonstrated.
+| Role | min level | min pass rate | min grounding | min confidence |
+| --- | --- | --- | --- | --- |
+| `CODE_QUALIFIED` | `L4_PATCH` | 0.8 | 0.8 | 0.6 |
+| `REVIEW_QUALIFIED` | `L3_DIAGNOSIS` | 0.7 | 0.6 | 0.5 |
+| `SCOUT_QUALIFIED` | `L1_EXACT_GROUNDING` | 0.5 | 0.5 | 0.4 |
+| `SUMMARY_ONLY` | `L1_EXACT_GROUNDING` | 0.0 | 0.0 | 0.2 |
 
-| Status | Demonstrated |
-|---|---|
-| `unreachable` | Nothing responded |
-| `reachable` | Endpoint answered, model not yet visible |
-| `model_visible` | Model listed, not loaded |
-| `model_loaded` | Loaded, **protocol usability not measured** |
-| `protocol_unusable` | Loaded, protocol measured and broken |
-| `protocol_usable` | Loaded, protocol measured and working |
+Additional rules, all provable in `tests/test_benchmark_qualification.py`:
 
-Two properties this ladder must keep:
+- A global confidence floor (default `0.5`) applies to every role. Evidence below
+  it confers **no** role at all, not even `SUMMARY_ONLY`.
+- Failure modes that invalidate a role's own deliverable block that role and no
+  other: `invalid_patch`/`test_failure`/`timeout` block `CODE_QUALIFIED`;
+  `empty_usable_content`/`timeout` block `REVIEW_QUALIFIED`; nothing blocks
+  `SCOUT_QUALIFIED` or `SUMMARY_ONLY`. This is why L1 pass + L3 fail yields
+  `SCOUT_QUALIFIED` rather than `UNQUALIFIED`.
+- **Fast but wrong is `UNQUALIFIED` for coding.**
+- **Slow but correct may still be `CODE_QUALIFIED`.**
 
-- **Every rung is reachable.** A member that no input can produce is a
-  dimension that cannot be reported, which is worse than not having it. An
-  earlier revision declared `protocol_unusable` while both branches of the final
-  `if` returned `model_loaded`, so a broken protocol was indistinguishable from a
-  healthy one.
-- **An unmeasured rung is not a passed rung.** A loaded model whose
-  `protocol_usable` was never recorded stays at `model_loaded`. Defaulting an
-  absent field to `True` would report a capability nobody verified — the same
-  mistake as reporting an unexercised model as useful.
+## Why tokens/sec can never override a quality floor
 
-Note the `endpoint_status` in `fleet_task_dispatcher.py` is an unrelated,
-pre-existing per-endpoint probe dictionary. They are not connected.
+`QUALITY_FLOORS` contains no throughput key. `evaluate_role_floor()` reads only
+`highest_level_passed`, `pass_rate`, `grounding_accuracy`, `confidence`, and the
+role's blocking failure modes. `tokens_per_second` and `time_to_first_token_ms`
+are aggregated into `stats.advisory_throughput` and returned to the caller as
+suggestions for *ordering* equal-quality candidates — they are never an input to
+qualification. Each floor result also carries `throughput_considered: False`, and
+the derivation carries `throughput_cannot_override_quality_floor: True`.
+
+This is deliberate. A wrong answer delivered in 20ms is still wrong; throughput is
+only meaningful between candidates that already cleared the same quality bar.
+Speed is a tiebreaker, never a substitute.
+
+## What the report gives you
+
+`build_qualification_report(rows)` groups normalized evidence per
+(node, model, task_family) and returns the guard keys, the ladder vocabulary, the
+schema declaration (`stores_raw_prompt_text: False`), the boundary statement and
+assertions, per-entry capability axes and role, and a summary with the role
+histogram and the rejected-row count.
+
+`next_benchmark_targets(report)` suggests the next rung to measure per model. It
+emits `execution_mode: "dry_run"`, `requires_model_load: False`,
+`requires_admission: True`. It suggests; it never schedules, loads, or admits.
 
 ## Integration boundary
 
-`build_qualification_report()` output may feed:
+The ticket allows this evidence to feed the benchmark planner, benchmark routing
+policy, loadout reports, and operator dashboards, while forbidding it from making
+an unadmitted node routable.
 
-```text
-benchmark planner
-benchmark routing policy
-loadout reports
-operator dashboards
-```
+`apply_qualification_to_benchmark_plan(plan, report)` is that boundary in
+practice. It **annotates** an existing plan and is the only sanctioned shape:
 
-Every report carries an explicit authority block:
+* no request is added, removed, reordered, or promoted;
+* the only keys it adds are `benchmark_role` and `benchmark_role_confidence`;
+* every other request field is byte-identical to the input;
+* it never mutates the caller's document - it returns a new one;
+* `advisory_only` and `auto_load_allowed` are forced to the safe values **even if
+  the incoming plan claims otherwise**, so an authoritative-looking plan cannot
+  launder its flags through this function;
+* `creates_provider_eligibility` is pinned false and `signed_admission_required`
+  true.
 
-```json
-{
-  "advisory_only": true,
-  "auto_load_allowed": false,
-  "authority": {
-    "advisory_only": true,
-    "creates_provider_eligibility": false,
-    "changes_production_admission": false,
-    "changes_routing_authority": false,
-    "changes_signed_runtime_projection": false
-  }
-}
-```
+That last point is mutation-tested rather than asserted: deleting the
+`advisory_only` assignment, and reprioritising an annotated request, each fail a
+test.
 
-Benchmark evidence **cannot** make an unadmitted node routable. The production
-admission path (`admission.py`), the signed runtime projection
-(`runtime_projection.py`, `runtime_projection_v2.py`) and provider eligibility
-(`policy.py::PolicyEngine._provider_is_eligible`) are untouched. No production
-routing, admission or projection module was modified.
+The function does not import the planner. It accepts and returns plain dicts, so
+the planner's own module graph is never pulled in and this module cannot become
+a hidden dependency of scheduling.
 
-`apply_qualification_to_benchmark_plan()` annotates an existing plan in place
-without adding, removing, reordering or promoting requests, and preserves the
-plan's own `advisory_only` / `auto_load_allowed` flags. Pairs with no evidence are
-left untouched rather than defaulted into a lane.
+For loadout reports and operator dashboards the report is consumed directly -
+`entries[].role`, `entries[].role_floors`, and `summary.roles` are already
+populated with the advisory guard keys attached.
 
-## Tests
+## Response-derived evidence
 
-`tests/test_benchmark_qualification.py` — 30 deterministic tests covering:
+`classify_failure` reads `failure_mode` off a row when one is declared, so a
+harness that reports a reasoning-only response as a timeout is believed. That is
+the wrong direction of trust for exactly the failures that matter here.
 
-```text
-fast but wrong            -> UNQUALIFIED for coding
-slow but correct          -> may qualify
-L1 pass / L3 fail         -> scout/extraction role only
-L0 only                   -> UNQUALIFIED (transport proven, usefulness not)
-timeout                   -> explicit TIMEOUT, not a generic failure
-empty content + reasoning -> REASONING_ONLY_OUTPUT, distinct from empty
-quality floor failure     -> cannot be won from high TPS
-low-confidence evidence   -> no role
-all-timeouts              -> no qualified level
-benchmark evidence       -> cannot create provider eligibility
-plan annotation           -> preserves advisory flags and structure
-```
+`evidence_from_response(row, content=..., reasoning=..., finish_reason=...,
+timed_out=..., response_field_used=..., expected_field=...)` inverts it. The
+caller supplies what actually came back and the outcome is **derived**, with
+precedence: `timeout` > `length_truncated` > `wrong_response_field` >
+`reasoning_only_output` > `empty_usable_content`. A declared failure cannot
+relabel a content-derived one.
 
-## Scope
+Only the response can disprove a failure, never silently clear one: a patch can
+apply and still fail its tests, so a harness-reported `test_failure` survives a
+clean response. The mislabel hole runs the other way.
 
-Benchmark-only qualification evidence. Not a routing change, not an admission
-change, not a projection change.
+## Endpoint progress ladder
+
+The three transport axes (`endpoint_reachable`, `model_visible`, `model_loaded`)
+are measured **independently** - a harness that only reported `model_visible`
+has still measured it, and folding that into a cumulative ladder would destroy
+the distinction the capability block exists to keep.
+
+Alongside them, `classify_endpoint_observation` reports a cumulative
+`endpoint_status` across `UNREACHABLE -> REACHABLE -> MODEL_VISIBLE ->
+MODEL_LOADED -> PROTOCOL_UNUSABLE -> PROTOCOL_USABLE`. Two properties matter:
+
+* `PROTOCOL_UNUSABLE` is a rung of its own, so a host that answers HTTP but
+  cannot complete a usable exchange is not rounded up to `MODEL_LOADED`. That
+  rounding is how a broken runtime keeps looking available.
+* An unmeasured rung stays unmeasured rather than defaulting to "usable",
+  because defaulting would report a capability nobody verified.
+
+Mutation-tested: trusting a declared failure mode, rounding an unmeasured
+protocol rung up, collapsing `PROTOCOL_UNUSABLE`, and letting the cumulative
+ladder drive the independent axes each fail at least one test.
