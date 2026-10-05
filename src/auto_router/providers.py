@@ -207,6 +207,32 @@ class OpenAICompatibleProvider:
         return headers
 
 
+def _loaded_instances(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return loaded instances for an LM Studio model entry.
+
+    LM Studio has reported residency two ways across versions. Older builds
+    emitted a ``loaded_instances`` list; current builds omit that key entirely
+    and report ``state`` plus ``loaded_context_length`` on the native
+    ``/api/v0/models`` endpoint. Reading only ``loaded_instances`` therefore
+    classified every model on a current build as not loaded, which is how the
+    provider registry came to advertise models no host was serving.
+    """
+    instances = item.get("loaded_instances")
+    if isinstance(instances, list) and instances:
+        return [i for i in instances if isinstance(i, dict)]
+    return []
+
+
+def _is_loaded(item: dict[str, Any], instances: list[dict[str, Any]]) -> bool:
+    """A model is loaded when instances exist or the native state says so."""
+    if instances:
+        return True
+    state = str(item.get("state") or "").strip().lower()
+    if state in {"loaded", "ready", "in_use", "in-use"}:
+        return True
+    return item.get("loaded") is True
+
+
 def normalize_model_record(item: dict[str, Any]) -> dict[str, Any]:
     model_id = item.get("id") or item.get("key") or item.get("name") or item.get("display_name") or item.get("model")
     return {
@@ -286,13 +312,16 @@ class LMStudioProvider(OpenAICompatibleProvider):
         for item in models:
             if not isinstance(item, dict):
                 continue
-            loaded_instances = item.get("loaded_instances") or []
-            loaded = bool(loaded_instances)
+            loaded_instances = _loaded_instances(item)
+            loaded = _is_loaded(item, loaded_instances)
             first_loaded = loaded_instances[0] if loaded_instances else {}
             config = first_loaded.get("config") if isinstance(first_loaded, dict) else {}
             context_length = None
             if isinstance(config, dict):
                 context_length = config.get("context_length")
+            if context_length is None:
+                # Current builds report the resident window at the top level.
+                context_length = item.get("loaded_context_length")
             record = normalize_model_record(item)
             record.update(
                 {
@@ -319,9 +348,13 @@ class LMStudioProvider(OpenAICompatibleProvider):
                 total_loaded_ctx = 0
                 loaded_models: list[dict[str, Any]] = []
                 for model in models:
-                    instances = model.get("loaded_instances") or []
-                    if not instances:
+                    instances = _loaded_instances(model)
+                    if not _is_loaded(model, instances):
                         continue
+                    if not instances:
+                        instances = [
+                            {"config": {"context_length": model.get("loaded_context_length") or 0}}
+                        ]
                     loaded_count += 1
                     model_id = model.get("id") or model.get("key")
                     ctx = instances[0].get("config", {}).get("context_length", 0)
