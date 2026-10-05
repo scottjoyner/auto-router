@@ -151,7 +151,10 @@ class PolicyEngine:
             for model in provider.models:
                 if requested_model not in {model.alias, model.provider_model}:
                     continue
-                if not self._model_matches(model, request.required_capabilities):
+                required = self._required_capabilities_for_request(
+                    request.required_capabilities, request
+                )
+                if not self._model_matches(model, required):
                     continue
                 candidate = ProviderCandidate(
                     provider=provider,
@@ -165,7 +168,7 @@ class PolicyEngine:
                         ExecutionStage(
                             purpose=StagePurpose.final,
                             candidates=[candidate],
-                            required_capabilities=request.required_capabilities,
+                            required_capabilities=required,
                             allow_local_fallback=False,
                         )
                     ],
@@ -181,8 +184,11 @@ class PolicyEngine:
                 continue
             if policy_stage.provider_classes and str(provider.quota_class) not in policy_stage.provider_classes:
                 continue
+            required = self._required_capabilities_for_request(
+                policy_stage.required_capabilities, request
+            )
             for model in provider.models:
-                if not self._model_matches(model, policy_stage.required_capabilities):
+                if not self._model_matches(model, required):
                     continue
                 candidates.append(
                     ProviderCandidate(
@@ -197,7 +203,9 @@ class PolicyEngine:
         return ExecutionStage(
             purpose=policy_stage.purpose,
             candidates=candidates,
-            required_capabilities=policy_stage.required_capabilities,
+            required_capabilities=self._required_capabilities_for_request(
+                policy_stage.required_capabilities, request
+            ),
             allow_local_fallback=policy_stage.allow_local_fallback,
             optional=policy_stage.optional,
         )
@@ -506,6 +514,22 @@ class PolicyEngine:
             if stage_purpose in {StagePurpose.refine, StagePurpose.judge, StagePurpose.final}:
                 return True
         return False
+
+    @staticmethod
+    def _required_capabilities_for_request(
+        base: set[str], request: RouterRequest
+    ) -> set[str]:
+        """Return capabilities that must be explicit for this request.
+
+        Tool-bearing requests fail closed: a model must advertise ``tool_use``.
+        A generic chat/code/hermes-worker label is not evidence that its native
+        tool-call serialization is reliable enough to execute side effects.
+        Plain chat remains unchanged.
+        """
+        required = set(base)
+        if request.tools:
+            required.add("tool_use")
+        return required
 
     def _model_matches(self, model: ModelConfig, required: set[str]) -> bool:
         return not required or required.issubset(model.capabilities)

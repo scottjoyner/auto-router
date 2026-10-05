@@ -5,6 +5,16 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import pytest
+
+# Declared in the `dev` extra, so CI has it. Where it is absent the module used to
+# raise ModuleNotFoundError during collection, which aborts the entire run -- so a
+# missing test-only dependency looked like a broken suite rather than an
+# uninstalled one. importorskip makes it a visible skip instead.
+pytest.importorskip(
+    "pytest_httpx", reason="pytest-httpx is a dev dependency; install with -e '.[dev]'"
+)
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock

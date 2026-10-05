@@ -85,13 +85,14 @@ profiles remain available.
 For a recognized family, the router:
 
 1. starts with candidates from the normal strict-offline policy;
-2. removes candidates whose signed worker roles do not permit the family;
-3. removes exact node/model/family combinations with a measured quality-floor
+2. for any request carrying executable tools, requires the model to explicitly advertise `tool_use`; generic `chat`, `code`, or `hermes_worker` capability is not enough;
+3. removes candidates whose signed worker roles do not permit the family;
+4. removes exact node/model/family combinations with a measured quality-floor
    failure;
-4. ranks measured quality-floor passes first;
-5. orders passed candidates by task-family utility and quality;
-6. keeps unmeasured eligible candidates behind qualified evidence;
-7. preserves the existing admission, load, LRU, latency, health, and private-path
+5. ranks measured quality-floor passes first;
+6. orders passed candidates by task-family utility and quality;
+7. keeps unmeasured eligible candidates behind qualified evidence;
+8. preserves the existing admission, load, LRU, latency, health, and private-path
    state as the final operational ordering signals.
 
 An auxiliary worker may therefore win summarization or compression while being
@@ -151,3 +152,17 @@ match only currently admitted, loaded runtimes.
 - Existing claim status is rechecked after queue wait and before dispatch.
 - Public endpoints remain forbidden in strict-offline mode.
 - The router never loads, unloads, starts, or stops a model or agent runtime.
+
+## Tool-use reliability ceiling
+
+A signed projection may declare `tool_use`, but the router now treats that as a
+maximum capability rather than sufficient evidence by itself. The capability is
+preserved only when the same signed model record carries `task_family_scores.tool_use`
+with `quality_floor_passed: true` and a version-1 `tool_call_probe` proving all five
+canaries: wrong-tool selection, mixed structured/text serialization, duplicate
+semantic calls, malformed arguments, and hidden-information filesystem spelunking.
+
+Missing or failed evidence removes only `tool_use` from the router's effective
+model capabilities. It does not remove chat/reasoning capability, reject the signed
+provider, mutate AssistX admission, or grant any capability that was not already in
+the signed projection. This is deliberately a deny-only local safety ceiling.
