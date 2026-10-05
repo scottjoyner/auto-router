@@ -24,6 +24,7 @@ from auto_router.models import ProviderConfig
 from auto_router.offline_guard import host_is_offline_allowed, strict_offline_enabled
 from auto_router.policy import PolicyEngine
 from auto_router.settings import get_settings
+from auto_router.tool_call_reliability import tool_use_evidence_passed
 
 
 _ALLOWED_PROVIDER_TYPES = {
@@ -121,6 +122,30 @@ def projection_signature(
 
 def _known(value: Any) -> bool:
     return str(value or "").strip().lower() not in _UNKNOWN
+
+
+def _apply_tool_use_capability_ceiling(
+    providers: list[ProviderConfig],
+) -> list[ProviderConfig]:
+    """Apply a deny-only tool-use ceiling to an already verified projection.
+
+    AssistX remains authoritative for admission and the declared capability set.
+    The router may only remove ``tool_use`` when the signed model-specific
+    reliability evidence is missing or failed; this helper can never add a
+    capability, provider, model, route, or execution permission.
+    """
+    bounded: list[ProviderConfig] = []
+    for provider in providers:
+        models = []
+        for model in provider.models:
+            capabilities = set(model.capabilities)
+            if "tool_use" in capabilities:
+                score = model.task_family_scores.get("tool_use")
+                if not tool_use_evidence_passed(score):
+                    capabilities.discard("tool_use")
+            models.append(model.model_copy(update={"capabilities": capabilities}))
+        bounded.append(provider.model_copy(update={"models": models}))
+    return bounded
 
 
 def _validate_private_url(label: str, value: str) -> list[str]:
@@ -340,7 +365,9 @@ class RuntimeProjectionManager:
                         "runtime projection generation must advance exactly by one"
                     )
 
-        registry = ProviderRegistry(providers=document.providers)
+        registry = ProviderRegistry(
+            providers=_apply_tool_use_capability_ceiling(document.providers)
+        )
         admission = RuntimeAdmissionController(registry.enabled())
         access_paths = RuntimeAccessPathSelector(
             registry.enabled(),
