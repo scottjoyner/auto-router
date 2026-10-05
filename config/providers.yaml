@@ -12,10 +12,37 @@ providers:
     priority: 90
     quota_class: local
     models:
-      - alias: local/ornith-1.5-35b
-        provider_model: ornith-1.5-35b-a3b-apex-mtp
+      - alias: local/ornith-1.0-9b
+        provider_model: ornith-1.0-9b
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 32768
+      - alias: local/nomic-embed-text-v1.5
+        provider_model: text-embedding-nomic-embed-text-v1.5
+        # "embeddings" satisfies the /v1/embeddings required_capabilities filter;
+        # "embed"/"embedding" are what policy._capability_tier buckets on.
+        capabilities: [embeddings, embed, embedding, local_only]
+        context_window: 8192
+
+  # Ternary Bonsai 2 27B (PTQ1_0) on xwing, served by the PrismML llama.cpp fork.
+  # Highest-quality admitted local model, but CPU-only at ~2.4 tok/s, so it carries a
+  # deliberately low routing priority and never advertises low_latency.
+  - name: lmstudio-xwing-bonsai2
+    type: lmstudio
+    node_id: xwing
+    enabled: true
+    base_url: ${LMSTUDIO_XWING_BONSAI2_BASE_URL:-http://xwing.tailcb8954.ts.net:18270/v1}
+    api_key_env: TERNARY_BONSAI2_API_KEY
+    priority: 200
+    quota_class: local
+    runtime_instance_id: xwing-ternary-bonsai-2-27b-ptq1_0
+    parallel_slots: 1
+    queue_timeout_seconds: 300
+    models:
+      - alias: local/ternary-bonsai-2-27b
+        provider_model: ternary-bonsai-2-27b
+        quantization: PTQ1_0
+        capabilities: [chat, streaming, code, json, local_only, reasoning, hermes_worker]
+        context_window: 16384
 
   - name: lmstudio-joyner
     type: lmstudio
@@ -29,7 +56,8 @@ providers:
   - name: lmstudio-deathstar
     type: lmstudio
     node_id: deathstar-XPS-8920
-    enabled: true
+    # disabled 2026-10-04: node runs llama-server on :1236, no LM Studio on :1234
+    enabled: false
     base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://100.78.106.121:1234/v1}
     # Deathstar's RX 480 is actively used by auto-ingest diarization.
     # Keep this endpoint available as a constrained fallback.
@@ -49,16 +77,18 @@ providers:
     priority: 100
     quota_class: local
     models:
-      # x1-370's LM Studio currently exposes one model. The three this provider
-      # previously listed were confirmed served at 12:27 and gone by 14:2x with no
-      # operator action, so enumerating them here was a snapshot of a moving
-      # target rather than a durable fact. Model identity for this host comes
-      # from runtime discovery (live_model_routes.refresh_provider_models writes
-      # the sqlite registry), not from this file.
-      - alias: local/quick
-        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
-        capabilities: [chat, streaming, code, json, local_only, hermes_worker]
+      - alias: local/reasoning-large
+        provider_model: ornith-1.0-35b
+        capabilities: [chat, reasoning, json, local_only, large_context, hermes_worker]
         context_window: 131072
+      - alias: local/tool-call-x1
+        provider_model: refinedtoolcallv5-3b
+        capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
+        context_window: 131072
+      - alias: local/moe-fast
+        provider_model: qwen3.5-9b-neo-heretic-i1
+        capabilities: [chat, json, low_latency, local_only]
+        context_window: 32768
 
   # x1 FastFlowLM/Lemonade NPU lane. This is a separate runtime from the
   # LM Studio :1234 provider above. The API does not expose a context limit;
@@ -103,6 +133,12 @@ providers:
         context_window: 32768
         max_concurrency: 4
         recommended_use: [compression, classification, extraction, quick_iteration]
+      - alias: local/nomic-embed-text-v1.5
+        provider_model: text-embedding-nomic-embed-text-v1.5
+        # "embeddings" satisfies the /v1/embeddings required_capabilities filter;
+        # "embed"/"embedding" are what policy._capability_tier buckets on.
+        capabilities: [embeddings, embed, embedding, local_only]
+        context_window: 8192
 
   # Live-tuned 2026-08-26: resident LFM2.5-8B-A1B MoE (reasoning, ~1B active)
   # at PP~26/TG~13 tok/s sustained on CPU @13W cap. CONSERVE auto-swaps this
@@ -117,7 +153,7 @@ providers:
     quota_class: local
     models:
       - alias: local/lenovo-fast
-        provider_model: lenovo-lfm-cpu
+        provider_model: headless
         capabilities: [chat, streaming, json, local_only, quick_iteration, reasoning, moe]
         context_window: 32768
 
@@ -128,7 +164,7 @@ providers:
     type: lmstudio
     node_id: scott-optiplex-9030-aio
     runtime_instance_id: scott-optiplex-9030-aio-qwen035-08b
-    enabled: false
+    enabled: true
     base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
     priority: 155
     quota_class: local
@@ -142,6 +178,12 @@ providers:
         context_window: 32768
         max_concurrency: 1
         recommended_use: [compression, classification, extraction, quick_iteration]
+      - alias: local/nomic-embed-text-v1.5
+        provider_model: text-embedding-nomic-embed-text-v1.5
+        # "embeddings" satisfies the /v1/embeddings required_capabilities filter;
+        # "embed"/"embedding" are what policy._capability_tier buckets on.
+        capabilities: [embeddings, embed, embedding, local_only]
+        context_window: 8192
 
   - name: lmstudio-scotts-macbook-air
     type: lmstudio
@@ -167,14 +209,15 @@ providers:
   - name: lmstudio-destroyer
     type: lmstudio
     node_id: destroyer
-    enabled: true
+    # disabled 2026-10-04: node runs llama-server on :1235/:1236, no LM Studio on :1234
+    enabled: false
     base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
     priority: 130
     quota_class: local
     models:
       - alias: local/destroyer-8b
         provider_model: lfm2.5-8b-a1b
-        capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker]
+        capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker, tool_use]
         context_window: 131072
       - alias: local/destroyer-3b
         provider_model: vibethinker-3b-hermes
@@ -184,7 +227,8 @@ providers:
   - name: lmstudio-r2d2
     node_id: r2d2
     type: lmstudio
-    enabled: true
+    # disabled 2026-10-04: bare hostname 'r2d2' does not resolve from the router container
+    enabled: false
     base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
     priority: 900
     quota_class: local
@@ -194,6 +238,19 @@ providers:
         capabilities: [chat, streaming, code, json, local_only]
         context_window: 32768
 
+  - name: lmstudio-destroyer-ornith
+    type: lmstudio
+    node_id: destroyer
+    enabled: true
+    base_url: ${LMSTUDIO_DESTROYER_ORNITH_URL:-http://destroyer.tailcb8954.ts.net:1236/v1}
+    priority: 125
+    quota_class: local
+    models:
+      - alias: local/destroyer-ornith
+        provider_model: ornith-1.5-35b-a3b
+        capabilities: [chat, streaming, reasoning, json, local_only, hermes_worker, tool_use, large_context]
+        context_window: 65536
+
   - name: lmstudio-destroyer-k2
     type: lmstudio
     node_id: destroyer
@@ -201,8 +258,23 @@ providers:
     base_url: http://destroyer.tailcb8954.ts.net:1235/v1
     priority: 120
     quota_class: local
+    toolsets: [bash, file_read, file_write]
     models:
       - alias: local/destroyer-36b
         provider_model: k2-horizon-moVA-36B-A4B
-        capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker]
+        capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker, tool_use]
         context_window: 57344
+
+  - name: lmstudio-destroyer-k2-1b
+    type: lmstudio
+    node_id: destroyer
+    # disabled 2026-10-04: duplicate of lmstudio-destroyer-k2 (healthy); alias not served
+    enabled: false
+    base_url: ${LMSTUDIO_DESTROYER_K2_1B_URL:-http://destroyer.tailcb8954.ts.net:1238/v1}
+    priority: 200
+    quota_class: local
+    models:
+      - alias: local/destroyer-1b
+        provider_model: k2-horizon-1b
+        capabilities: [chat, streaming, json, local_only, hermes_worker, tool_use, judge, decisionmaker]
+        context_window: 16384
