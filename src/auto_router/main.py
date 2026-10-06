@@ -44,6 +44,7 @@ from auto_router.memory_store import MemoryStore
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
+from auto_router.tracing_utils import trace_id_var
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
@@ -574,8 +575,17 @@ async def admin_agent_workers() -> dict[str, Any]:
 
 
 @app.get("/admin/usage")
-async def admin_usage(limit: int = 50) -> dict[str, Any]:
-    return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
+async def admin_usage(
+    limit: int = 50,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "summary": state.ledger.summary(),
+        "recent": state.ledger.recent_events(
+            limit=limit,
+            correlation_id=(correlation_id or "").strip()[:256] or None,
+        ),
+    }
 
 
 @app.get("/admin/circuits")
@@ -1123,9 +1133,22 @@ def _record_usage(
         started_at_ms=started_at_ms,
         ended_at_ms=ended_at_ms,
     )
+    correlation_id = trace_id_var.get().strip()[:256]
+    if not correlation_id and isinstance(request.metadata, dict):
+        correlation_id = str(request.metadata.get("correlation_id") or "").strip()[:256]
+    context_provider = None
+    try:
+        canonical_provider = state.context.canonical_provider_name(provider)
+        context_provider = state.context.provider_for(canonical_provider)
+    except Exception:
+        context_provider = None
+    node_id = str(getattr(context_provider, "node_id", "") or "").strip() or None
+
     state.ledger.record(
         UsageEvent(
             request_id=request.request_id,
+            correlation_id=correlation_id or None,
+            node_id=node_id,
             provider_id=provider,
             model_id=model,
             route=request.route,
