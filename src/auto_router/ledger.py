@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 @dataclass
 class UsageEvent:
     request_id: str
+    correlation_id: str | None
+    node_id: str | None
     provider_id: str | None
     model_id: str | None
     route: str
@@ -70,13 +72,15 @@ class UsageLedger:
             conn.execute(
                 """
                 INSERT INTO usage_events (
-                    request_id, provider_id, model_id, route, priority, stage,
+                    request_id, correlation_id, node_id, provider_id, model_id, route, priority, stage,
                     input_tokens, output_tokens, total_tokens, quota_units_json,
                     status_code, latency_ms, error_type, error_message, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.request_id,
+                    event.correlation_id,
+                    event.node_id,
                     event.provider_id,
                     event.model_id,
                     event.route,
@@ -225,19 +229,27 @@ class UsageLedger:
             "items": items,
         }
 
-    def recent_events(self, limit: int = 50) -> list[dict]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT request_id, provider_id, model_id, route, priority, stage,
-                       input_tokens, output_tokens, total_tokens, status_code,
-                       latency_ms, error_type, error_message, created_at
+    def recent_events(
+        self,
+        limit: int = 50,
+        *,
+        correlation_id: str | None = None,
+    ) -> list[dict]:
+        query = """
+                SELECT request_id, correlation_id, node_id, provider_id, model_id,
+                       route, priority, stage, input_tokens, output_tokens,
+                       total_tokens, status_code, latency_ms, error_type,
+                       error_message, created_at
                 FROM usage_events
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+        """
+        params: list[Any] = []
+        if correlation_id:
+            query += " WHERE correlation_id = ?"
+            params.append(correlation_id)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(limit, 1000)))
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
     def summary(self) -> dict:
@@ -327,6 +339,8 @@ class UsageLedger:
                 CREATE TABLE IF NOT EXISTS usage_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     request_id TEXT NOT NULL,
+                    correlation_id TEXT,
+                    node_id TEXT,
                     provider_id TEXT,
                     model_id TEXT,
                     route TEXT NOT NULL,
@@ -344,8 +358,16 @@ class UsageLedger:
                 )
                 """
             )
+            usage_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(usage_events)").fetchall()
+            }
+            if "correlation_id" not in usage_columns:
+                conn.execute("ALTER TABLE usage_events ADD COLUMN correlation_id TEXT")
+            if "node_id" not in usage_columns:
+                conn.execute("ALTER TABLE usage_events ADD COLUMN node_id TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_events(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_events(provider_id, model_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_correlation ON usage_events(correlation_id, id)")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS runtime_samples (
