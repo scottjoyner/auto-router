@@ -41,7 +41,7 @@ from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.otel import init_otel
 from auto_router.providers import ProviderStreamResponse, build_provider
 from auto_router.route_event_patch import install_route_event_patch
-from auto_router.runtime_projection import (
+from auto_router.runtime_projection_v2 import (
     RuntimeProjectionManager,
     projection_poll_task,
 )
