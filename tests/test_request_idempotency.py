@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from auto_router.request_idempotency import (
@@ -84,6 +85,39 @@ def test_duplicate_request_is_not_forwarded(tmp_path: Path) -> None:
     assert metadata["request_id"]
     assert len(metadata["idempotency_key"]) == 64
     assert len(metadata["idempotency_fingerprint"]) == 64
+
+
+def test_streaming_response_survives_request_body_rewrite(tmp_path: Path) -> None:
+    ledger = RequestIdempotencyLedger(
+        f"sqlite:///{tmp_path / 'router.sqlite3'}", ttl_seconds=3600
+    )
+    app = FastAPI()
+
+    @app.post("/v1/chat/completions")
+    async def streaming_completion(request: Request):
+        payload = await request.json()
+        assert payload["metadata"]["request_id"]
+
+        async def events():
+            yield b"data: chunk-one\n\n"
+            yield b"data: [DONE]\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    app.add_middleware(RequestIdempotencyMiddleware, ledger=ledger)
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "auto/local",
+            "stream": True,
+            "messages": [{"role": "user", "content": "bounded stream test"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"data: chunk-one" in response.content
+    assert b"data: [DONE]" in response.content
 
 
 def test_same_key_with_different_request_is_rejected(tmp_path: Path) -> None:
