@@ -153,7 +153,7 @@ async def _read_body(receive: Any) -> tuple[bytes, Any]:
     async def replay() -> dict[str, Any]:
         nonlocal sent
         if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await receive()
         sent = True
         return {"type": "http.request", "body": bytes(body), "more_body": False}
 
@@ -181,14 +181,14 @@ def _max_output(payload: Mapping[str, Any]) -> int:
         raise ExecutorAuthError("requested output token limit is invalid") from exc
 
 
-def _encoded_receive(payload: Mapping[str, Any]) -> Any:
+def _encoded_receive(payload: Mapping[str, Any], downstream_receive: Any) -> Any:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     sent = False
 
     async def receive() -> dict[str, Any]:
         nonlocal sent
         if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await downstream_receive()
         sent = True
         return {"type": "http.request", "body": encoded, "more_body": False}
 
@@ -257,7 +257,7 @@ class ExecutorInferenceAuthMiddleware:
                         "authenticated": True,
                     },
                 }
-                await self.app(scope, _encoded_receive(payload), send)
+                await self.app(scope, _encoded_receive(payload, receive), send)
                 return
 
             claims = decode_executor_token(bearer)
@@ -304,7 +304,7 @@ class ExecutorInferenceAuthMiddleware:
                     "projection_generation": token_generation,
                 },
             }
-            await self.app(scope, _encoded_receive(payload), send)
+            await self.app(scope, _encoded_receive(payload, receive), send)
         except (ExecutorAuthError, json.JSONDecodeError) as exc:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(scope, replay, send)
 

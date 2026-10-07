@@ -9,7 +9,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from auto_router.executor_auth import ExecutorInferenceAuthMiddleware
+from auto_router.executor_auth import ExecutorInferenceAuthMiddleware, _encoded_receive
 
 
 def _b64(value: bytes) -> str:
@@ -92,6 +92,26 @@ async def _invoke(app, token: str, payload: dict):
     )
     await middleware(scope, receive, send)
     return sent, captured
+
+
+@pytest.mark.asyncio
+async def test_rewritten_receive_delegates_after_body_for_stream_disconnect() -> None:
+    calls = 0
+
+    async def downstream_receive():
+        nonlocal calls
+        calls += 1
+        return {"type": "http.disconnect"}
+
+    receive = _encoded_receive({"model": "auto/code"}, downstream_receive)
+    first = await receive()
+    second = await receive()
+
+    assert first["type"] == "http.request"
+    assert first["more_body"] is False
+    assert json.loads(first["body"]) == {"model": "auto/code"}
+    assert second == {"type": "http.disconnect"}
+    assert calls == 1
 
 
 @pytest.fixture

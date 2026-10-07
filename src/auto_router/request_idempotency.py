@@ -84,21 +84,25 @@ async def _read_body(receive: Any) -> tuple[bytes, Any]:
     async def replay() -> dict[str, Any]:
         nonlocal sent
         if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            # After replaying the consumed request body, preserve the original
+            # ASGI receive channel. StreamingResponse listens here for a real
+            # client disconnect; synthesizing another http.request violates the
+            # protocol and can cancel an otherwise healthy SSE response.
+            return await receive()
         sent = True
         return {"type": "http.request", "body": bytes(body), "more_body": False}
 
     return bytes(body), replay
 
 
-def _encoded_receive(payload: dict[str, Any]) -> Any:
+def _encoded_receive(payload: dict[str, Any], downstream_receive: Any) -> Any:
     encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     sent = False
 
     async def receive() -> dict[str, Any]:
         nonlocal sent
         if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await downstream_receive()
         sent = True
         return {"type": "http.request", "body": encoded, "more_body": False}
 
@@ -299,7 +303,7 @@ class RequestIdempotencyMiddleware:
         if not key_material:
             metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
             payload["metadata"] = {**metadata, "request_id": str(uuid.uuid4())}
-            await self.app(scope, _encoded_receive(payload), send)
+            await self.app(scope, _encoded_receive(payload, receive), send)
             return
 
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
@@ -360,7 +364,7 @@ class RequestIdempotencyMiddleware:
             await send(message)
 
         try:
-            await self.app(scope, _encoded_receive(payload), tracked_send)
+            await self.app(scope, _encoded_receive(payload, receive), tracked_send)
         except BaseException as exc:
             current = self.ledger.get(key) or {}
             if response_started or str(current.get("state")) == "upstream_started":
