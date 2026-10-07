@@ -37,11 +37,19 @@ pytest -q
 docker compose up -d --build
 ```
 
+Admin examples below use the configured admin token without printing it:
+
+```bash
+admin_curl() {
+  curl -H "X-Admin-Token: ${AUTO_ROUTER_ADMIN_TOKEN:?set AUTO_ROUTER_ADMIN_TOKEN}" "$@"
+}
+```
+
 Health check:
 
 ```bash
 curl http://localhost:8088/health | jq
-curl http://localhost:8088/admin/ops/summary | jq
+admin_curl http://localhost:8088/admin/ops/summary | jq
 curl http://localhost:8088/v1/models | jq
 ```
 
@@ -49,9 +57,9 @@ Post-restart verification:
 
 ```bash
 curl http://localhost:8088/health | jq
-curl http://localhost:8088/admin/ops/summary | jq
-curl http://localhost:8088/admin/services | jq
-curl http://localhost:8088/admin/outbox | jq
+admin_curl http://localhost:8088/admin/ops/summary | jq
+admin_curl http://localhost:8088/admin/services | jq
+admin_curl http://localhost:8088/admin/outbox | jq
 ```
 
 Interpretation:
@@ -80,13 +88,13 @@ Manual API checks:
 
 ```bash
 curl http://localhost:8088/v1/models | jq
-curl http://localhost:8088/admin/context | jq
-curl http://localhost:8088/admin/services | jq
-curl http://localhost:8088/admin/outbox | jq
-curl http://localhost:8088/admin/agent-clis | jq
-curl http://localhost:8088/admin/backlog/assistx/config | jq
-curl http://localhost:8088/admin/ops/summary | jq
-curl http://localhost:8088/admin/ops/preflight | jq
+admin_curl http://localhost:8088/admin/context | jq
+admin_curl http://localhost:8088/admin/services | jq
+admin_curl http://localhost:8088/admin/outbox | jq
+admin_curl http://localhost:8088/admin/agent-clis | jq
+admin_curl http://localhost:8088/admin/backlog/assistx/config | jq
+admin_curl http://localhost:8088/admin/ops/summary | jq
+admin_curl http://localhost:8088/admin/ops/preflight | jq
 curl http://localhost:8088/metrics/ops
 ```
 
@@ -100,7 +108,7 @@ Deployment preflight returns `ready` or `not_ready` and includes pass/warn/fail 
 4. Refresh live models:
 
 ```bash
-curl -X POST 'http://localhost:8088/admin/live-models/refresh?provider=cerebras' | jq
+admin_curl -X POST 'http://localhost:8088/admin/live-models/refresh?provider=cerebras' | jq
 ```
 
 5. Send a flash-start request:
@@ -123,13 +131,13 @@ The dashboard renders service URLs from `config/context.yaml` or the AssistX con
 Scan local/private services only:
 
 ```bash
-curl -X POST http://localhost:8088/admin/services/scan | jq
+admin_curl -X POST http://localhost:8088/admin/services/scan | jq
 ```
 
 External probes are disabled by default. To explicitly scan hosted APIs:
 
 ```bash
-curl -X POST 'http://localhost:8088/admin/services/scan?allow_external=true' | jq
+admin_curl -X POST 'http://localhost:8088/admin/services/scan?allow_external=true' | jq
 ```
 
 Scan results are persisted to SQLite and queued as `router.service_snapshot.recorded` events in the outbox.
@@ -139,7 +147,7 @@ Scan results are persisted to SQLite and queued as `router.service_snapshot.reco
 Discover host-local agent CLIs:
 
 ```bash
-curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
+admin_curl -X POST http://localhost:8088/admin/agent-clis/discover | jq
 ```
 
 The router checks for:
@@ -159,7 +167,7 @@ The backlog selector is selection-only. It does not call providers, spend quota,
 ### 8.1 Manual task candidates
 
 ```bash
-curl -X POST http://localhost:8088/admin/backlog/dry-run \
+admin_curl -X POST http://localhost:8088/admin/backlog/dry-run \
   -H 'Content-Type: application/json' \
   -d '{
     "enqueue_events": true,
@@ -197,13 +205,13 @@ AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS=10
 Check configuration:
 
 ```bash
-curl http://localhost:8088/admin/backlog/assistx/config | jq
+admin_curl http://localhost:8088/admin/backlog/assistx/config | jq
 ```
 
 Run dry-run selection against AssistX candidates:
 
 ```bash
-curl -X POST 'http://localhost:8088/admin/backlog/dry-run?source=assistx&queue=backlog&limit=10' \
+admin_curl -X POST 'http://localhost:8088/admin/backlog/dry-run?source=assistx&queue=backlog&limit=10' \
   -H 'Content-Type: application/json' \
   -d '{"enqueue_events": true}' | jq
 ```
@@ -222,32 +230,32 @@ Expected behavior:
 Inspect pending events:
 
 ```bash
-curl http://localhost:8088/admin/outbox | jq
+admin_curl http://localhost:8088/admin/outbox | jq
 ```
 
 Dry-run dispatch without changing event state:
 
 ```bash
-curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10' | jq
+admin_curl -X POST 'http://localhost:8088/admin/outbox/dispatch?dry_run=true&limit=10' | jq
 ```
 
 Dispatch pending events to AssistX when `AUTO_ROUTER_ASSISTX_EVENT_SINK_URL` is configured:
 
 ```bash
-curl -X POST 'http://localhost:8088/admin/outbox/dispatch?limit=25' | jq
+admin_curl -X POST 'http://localhost:8088/admin/outbox/dispatch?limit=25' | jq
 ```
 
 Mark delivered manually after external processing:
 
 ```bash
-curl -X POST http://localhost:8088/admin/outbox/<event_id>/delivered | jq
+admin_curl -X POST http://localhost:8088/admin/outbox/<event_id>/delivered | jq
 ```
 
 Mark retry/dead-letter manually:
 
 ```bash
-curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=manual-test&retry=true' | jq
-curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=terminal&retry=false' | jq
+admin_curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=manual-test&retry=true' | jq
+admin_curl -X POST 'http://localhost:8088/admin/outbox/<event_id>/failed?error=terminal&retry=false' | jq
 ```
 
 ## 10. AssistX context projection, task intake, and event sink
