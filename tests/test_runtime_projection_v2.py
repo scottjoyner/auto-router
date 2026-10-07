@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import base64
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,13 +10,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from auto_router import runtime_projection as legacy
-from auto_router.models import ModelConfig, ProviderConfig
+from auto_router.models import ModelConfig, ProviderCandidate, ProviderConfig
 from auto_router.runtime_projection_v2 import (
     RuntimeProjectionManager,
     signing_message,
     validate_projection_document,
 )
-
 
 KEY_ID = "projection-key-2026"
 
@@ -177,3 +178,66 @@ async def test_manager_applies_and_refreshes_same_ed25519_generation(monkeypatch
     conflict = sign_document(private_key, item=provider(slots=2))
     with pytest.raises(ValueError, match="checksum conflict"):
         await manager.apply(conflict)
+
+
+def test_reconciled_entrypoint_imports_v2_projection_manager():
+    entrypoint = Path(__file__).parents[1] / "src" / "auto_router" / "main_live.py"
+    tree = ast.parse(entrypoint.read_text(encoding="utf-8"))
+    projection_imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and any(
+            alias.name in {"RuntimeProjectionManager", "projection_poll_task"}
+            for alias in node.names
+        )
+    }
+
+    assert "auto_router.runtime_projection_v2" in projection_imports
+    assert "auto_router.runtime_projection" not in projection_imports
+
+
+@pytest.mark.asyncio
+async def test_ed25519_generation_swap_preserves_active_old_lease(monkeypatch):
+    private_key = Ed25519PrivateKey.generate()
+    configure_key(monkeypatch, private_key)
+    install_manager_fixtures(monkeypatch)
+    monkeypatch.setattr(legacy.time, "time", lambda: 1010.0)
+
+    state = SimpleNamespace(agents=SimpleNamespace(), policies=SimpleNamespace())
+    manager = RuntimeProjectionManager(state)
+
+    first = sign_document(private_key, generation=1)
+    result = await manager.apply(first)
+    assert result["applied"] is True
+
+    first_provider = state.providers.enabled()[0]
+    old_admission = state.admission
+    lease = await old_admission.acquire(
+        ProviderCandidate(
+            provider=first_provider,
+            model=first_provider.models[0],
+        )
+    )
+
+    second = sign_document(
+        private_key,
+        generation=2,
+        item=provider(slots=2),
+        generated_at_ms=1_010_000,
+        expires_at_ms=1_070_000,
+    )
+    result = await manager.apply(second)
+
+    assert result["applied"] is True
+    assert manager.current is not None
+    assert manager.current.generation == 2
+    assert state.admission is not old_admission
+    assert state.admission.snapshot()[0]["parallel_slots"] == 2
+    assert len(manager.retired) == 1
+    assert manager.retired[0].generation == 1
+    assert manager.retired[0].admission is old_admission
+    assert manager.retired[0].admission.snapshot()[0]["active"] == 1
+
+    await lease.release()
+    assert manager.status()["retired_generations"] == []
