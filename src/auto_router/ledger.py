@@ -13,13 +13,13 @@ from urllib.parse import urlparse
 @dataclass
 class UsageEvent:
     request_id: str
-    correlation_id: str | None
-    node_id: str | None
     provider_id: str | None
     model_id: str | None
     route: str
     priority: str
     stage: str | None
+    correlation_id: str | None = None
+    node_id: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
