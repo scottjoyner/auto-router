@@ -155,3 +155,50 @@ def test_aliases_and_metadata_classify_task_family() -> None:
     assert normalize_task_family(_request("auto/compact")) == "compression"
     assert normalize_task_family(_request("auto/parse")) == "extraction"
     assert normalize_task_family(_request("auto/fast", "research")) == "reasoning"
+
+
+def test_signed_observer_only_denies_general_and_specialized_candidates() -> None:
+    """An empty role set must not turn a missing-policy denial into allow-all."""
+    observer = _candidate(
+        "xwing", "untrusted", roles=set(), family="coding",
+        utility=0.99, code=False,
+    )
+    observer.provider.worker_mode = "observer_only"
+    observer.model.worker_mode = "observer_only"
+
+    approved = _candidate(
+        "optiplex", "approved", roles={"full_agent", "code_agent"},
+        family="coding", utility=0.4, code=True,
+    )
+    for model_alias, family in (
+        ("auto/code", "coding"),
+        ("auto/summarize", "summarization"),
+        ("auto/fast", "general"),
+    ):
+        stage = ExecutionStage(
+            purpose=StagePurpose.final, candidates=[observer, approved],
+        )
+        result = benchmark_order(stage, _request(model_alias, family))
+        assert [c.provider.node_id for c in result.candidates] == ["optiplex"]
+
+
+def test_mismatched_provider_model_code_permissions_are_deny_only() -> None:
+    """Neither half of a signed permission pair may authorize code alone."""
+    candidate = _candidate(
+        "xwing", "coding", roles=set(), family="coding",
+        utility=0.9, code=True,
+    )
+    candidate.provider.allow_code_execution = False
+    result = benchmark_order(
+        ExecutionStage(purpose=StagePurpose.final, candidates=[candidate]),
+        _request("auto/code", "coding"),
+    )
+    assert result.candidates == []
+
+    candidate.provider.allow_code_execution = True
+    candidate.model.allow_code_execution = False
+    result = benchmark_order(
+        ExecutionStage(purpose=StagePurpose.final, candidates=[candidate]),
+        _request("auto/code", "coding"),
+    )
+    assert result.candidates == []
