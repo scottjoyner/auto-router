@@ -213,7 +213,7 @@ jobs:
           test "$duplicate_code" = "409"
 
           # Administrative status must require the local admin token.
-          for path in /admin/quota /admin/admission /admin/runtime-projection; do
+          for path in /admin/quota /admin/admission /admin/runtime-projection /admin/providers /admin/providers/effective /admin/providers/health /admin/context; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088$path")
             echo "unauthenticated $path: $code"
             test "$code" = "401"
@@ -232,6 +232,27 @@ jobs:
           curl -sf \
             -H 'X-Admin-Token: smoke-admin-token' \
             http://127.0.0.1:8088/admin/runtime-projection > /tmp/router-projection.json
+          # Read the real ASGI provider table, never raw config, and ensure it
+          # cannot advertise live model, scheduling, or implicit writer proof.
+          curl -sf \
+            -H 'X-Admin-Token: smoke-admin-token' \
+            http://127.0.0.1:8088/admin/providers/effective > /tmp/router-effective-providers.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          snapshot = json.loads(Path("/tmp/router-effective-providers.json").read_text())
+          assert snapshot.get("kind") == "EFFECTIVE_ROUTER_MEMORY_READ_ONLY"
+          assert snapshot.get("no_probes_or_dispatch") is True
+          assert snapshot.get("may_modify_routes") is False
+          assert snapshot.get("may_prove_model_loaded") is False
+          assert snapshot.get("provider_count") == len(snapshot.get("providers") or [])
+          for provider in snapshot["providers"]:
+              assert provider["resident_model_identity_verified"] is False
+              assert provider["admission_granted"] is False
+              assert not {"headers", "api_key_env", "api_key", "access_token"} & set(provider)
+          PY
+
           python - <<'PY'
           import json
           from pathlib import Path
