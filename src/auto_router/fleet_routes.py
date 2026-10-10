@@ -33,6 +33,18 @@ router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 _node_reports: dict[str, dict[str, Any]] = {}
 _sse_subscribers: list[asyncio.Queue] = []
 _STALE_SECONDS = 180
+_PRUNE_SECONDS = 24 * 60 * 60
+
+
+def _now_seconds() -> int:
+    return int(time.time())
+
+
+def _prune_expired_reports(now: int) -> None:
+    """Discard dead in-memory nodes; keep recently stale ones for diagnostics."""
+    for hostname, report in list(_node_reports.items()):
+        if now - int(report.get("received_at", 0)) > _PRUNE_SECONDS:
+            _node_reports.pop(hostname, None)
 
 
 def _publish(report: dict[str, Any]) -> None:
@@ -43,29 +55,54 @@ def _publish(report: dict[str, Any]) -> None:
             pass
 
 
+_NODE_REPORT_DEFAULTS: dict[str, Any] = {
+    "library": [], "loaded": [], "capabilities": [], "specs": {}, "health": {},
+    "disk": {}, "power_profile": "", "power_model_class": "", "os": None,
+}
+
+
+def _merge_node_fields(body: dict[str, Any], hostname: str, src_ip: str | None) -> dict[str, Any]:
+    """Keep independent producer fields without extending stale model residency.
+
+    An explicit empty list means the owner observed no loaded models. Missing
+    fields in sparse agent heartbeats do not erase fresh reporter evidence.
+    All retained fields expire separately after the normal node freshness TTL.
+    """
+    now = _now_seconds()
+    previous = _node_reports.get(hostname) or {}
+    old_times = previous.get("field_received_at") or {}
+    timestamps = dict(old_times) if isinstance(old_times, dict) else {}
+    report: dict[str, Any] = {"hostname": hostname,
+                              "ip": src_ip or body.get("ip") or previous.get("ip"),
+                              "received_at": now}
+    for field, default in _NODE_REPORT_DEFAULTS.items():
+        if field in body:
+            report[field] = default if body[field] is None else body[field]
+            timestamps[field] = now
+        elif field in previous and now - timestamps.get(field, 0) < _STALE_SECONDS:
+            report[field] = previous[field]
+        else:
+            report[field] = default
+            timestamps.pop(field, None)
+    report["field_received_at"] = timestamps
+    return report
+
+
 @router.post("/node-report")
 async def node_report(request: Request) -> dict[str, Any]:
-    body = await request.json()
-    hostname = str(body.get("hostname") or body.get("host_name") or "unknown")
+    raw = await request.json()
+    body = raw if isinstance(raw, dict) else {}
+    hostname = str(body.get("hostname") or body.get("host_name") or body.get("node_id") or "unknown")
     # Prefer the real connection source IP (the node's tailscale IP) so consumers
     # can match reports to fleet nodes by IP, not just by (sometimes mismatched)
     # hostname. Fall back to an explicitly-sent ip for non-socket transports.
     src_ip = None
     if request.client is not None:
         src_ip = request.client.host
-    report = {
-        "hostname": hostname,
-        "ip": src_ip or body.get("ip"),
-        "library": body.get("library") or [],
-        "loaded": body.get("loaded") or [],
-        "capabilities": body.get("capabilities") or [],
-        "specs": body.get("specs") or {},
-        "health": body.get("health") or {},
-        "power_profile": str(body.get("power_profile") or "").lower(),
-        "power_model_class": str(body.get("power_model_class") or "").lower(),
-        "os": body.get("os"),
-        "received_at": int(time.time()),
-    }
+    report = _merge_node_fields(body, hostname, src_ip)
+    report["power_profile"] = str(report["power_profile"] or "").lower()
+    report["power_model_class"] = str(report["power_model_class"] or "").lower()
+    _prune_expired_reports(report["received_at"])
     _node_reports[hostname] = report
     _publish(report)
     # Best-effort redis pubsub fan-out for external consumers. ``app.state.redis``
