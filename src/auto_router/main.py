@@ -45,6 +45,7 @@ from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.security import require_admin
+from auto_router.effective_provider_snapshot import effective_snapshot
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
 from auto_router.ui_pages import get_ui_page_sections
@@ -529,17 +530,17 @@ async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
 
 
 @app.get("/admin/providers/health")
-async def admin_provider_health() -> dict[str, Any]:
+async def admin_provider_health(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": await _provider_health_reports()}
 
 
 @app.get("/admin/context")
-async def admin_context() -> dict[str, Any]:
+async def admin_context(_: None = Depends(require_admin)) -> dict[str, Any]:
     return state.context.model_dump()
 
 
 @app.get("/admin/context/graph")
-async def admin_context_graph() -> dict[str, Any]:
+async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {
         "revision": state.context.revision,
         "source": state.context.source,
@@ -549,19 +550,25 @@ async def admin_context_graph() -> dict[str, Any]:
 
 
 @app.get("/admin/providers")
-async def admin_providers() -> dict[str, Any]:
+async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
+@app.get("/admin/providers/effective")
+async def admin_effective_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
+    """Sanitized in-process provider snapshot, without serving admission evidence."""
+    return effective_snapshot(state)
+
+
 @app.get("/admin/placement")
-async def admin_placement() -> dict[str, Any]:
+async def admin_placement(_: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import compute_plan
 
     return compute_plan(state)
 
 
 @app.post("/admin/load")
-async def admin_load(apply: bool | None = None) -> dict[str, Any]:
+async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
 
     do_apply = apply if apply is not None else AUTOLOAD_ENABLED
@@ -569,36 +576,36 @@ async def admin_load(apply: bool | None = None) -> dict[str, Any]:
 
 
 @app.get("/admin/agent-workers")
-async def admin_agent_workers() -> dict[str, Any]:
+async def admin_agent_workers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
 
 
 @app.get("/admin/usage")
-async def admin_usage(limit: int = 50) -> dict[str, Any]:
+async def admin_usage(limit: int = 50, _: None = Depends(require_admin)) -> dict[str, Any]:
     return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
 
 
 @app.get("/admin/circuits")
-async def admin_circuits() -> dict[str, Any]:
+async def admin_circuits(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
 
 
 @app.post("/admin/circuits/reset")
-async def admin_circuits_reset() -> dict[str, Any]:
+async def admin_circuits_reset(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear all circuit breakers (recover from tripped providers immediately)."""
     cleared = state.circuits.reset()
     return {"cleared": cleared}
 
 
 @app.post("/admin/circuits/reset/{owner:path}")
-async def admin_circuits_reset_owner(owner: str) -> dict[str, Any]:
+async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear a single circuit breaker by owner (provider/model)."""
     cleared = state.circuits.reset(owner)
     return {"owner": owner, "cleared": cleared}
 
 
 @app.get("/admin/agent-jobs")
-async def admin_agent_jobs() -> dict[str, Any]:
+async def admin_agent_jobs(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"jobs": [record_as_dict(record) for record in state.agent_jobs.list_records()]}
 
 
