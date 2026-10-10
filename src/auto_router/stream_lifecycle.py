@@ -175,6 +175,7 @@ def _enqueue_lifecycle_event(
                 # independently verified, server-bound receipt. A caller's
                 # assistx_executor.claim_id does NOT prove authorization.
                 "authenticated_claim_binding": False,
+                "claim_id": None,  # retained schema field, NEVER caller's claim
                 "provider": provider,
                 "model": model,
                 "status": status,

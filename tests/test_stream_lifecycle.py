@@ -414,6 +414,7 @@ async def test_shared_endpoint_trace_cannot_spoof_model_instance_or_claim_from_r
     assert event.payload["instance_identity_source"] == "configured_route_not_runtime_attestation"
     assert event.payload["runtime_projection_generation"] is None
     assert event.payload["authenticated_claim_binding"] is False
+    assert event.payload["claim_id"] is None
     assert "fake-gpu-instance" not in str(event.payload)
     assert "attacker-forged-claim" not in str(event.payload)
 
