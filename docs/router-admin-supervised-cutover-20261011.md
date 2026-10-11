@@ -130,3 +130,24 @@ custody hold remain. Do not deploy, change port publishing, or claim a remote
 status-only `PASS_REMOTE_401` on the actual candidate build after supervised
 cutover. A timestamp and exact candidate SHA must accompany the operator's
 receipts; successful synthetic tests cannot substitute for them.
+
+## Expanded localhost negative gate (draft, October 11)
+
+The independent three-vantage [pre-cutover receipt](https://github.com/scottjoyner/auto-router/blob/security/effective-provider-snapshot-20261010/docs/evidence/router-admin-cutover-three-vantage-20261011T1551Z.json)
+shows anonymous **HTTP 200** on `/admin/providers`, `/admin/circuits`,
+and `/admin/agent-workers` from x1, Destroyer and Lenovo. Because the prior
+localhost cutover script did not include the latter two routes, it could
+have falsely passed while both remained exposed.
+
+The updated `verify_admin_cutover_readonly.py` now requires anonymous
+**HTTP 401** on all six local checks: providers, effective providers,
+provider health, context, circuits and agent-workers. Offline regressions
+individually simulate HTTP 200 on each endpoint and require HOLD without
+sending credentials or reading bodies. The independent remote four-route
+Destroyer/Lenovo check remains mandatory; local success is never a substitute
+for either remote receipt.
+
+**At the time of this note, the expanded test changes still require their
+own completed exact-head CI results.** The known unpatched router remains
+exposed to its Tailnet peers. Do not execute a router cutover from this
+revised acceptance script or waive P0 AssistX credential custody #156.
