@@ -142,5 +142,23 @@ def test_auth_denial_never_falls_back_to_anonymous():
     assert len(transport.calls) == 5
 
 
+def test_operator_transport_disables_proxy_and_redirect_before_any_token(monkeypatch, capsys):
+    from urllib.request import ProxyHandler
+
+    inspected = []
+
+    def fake_build_opener(*handlers):
+        inspected.extend(handlers)
+        return FakeOpener(anonymous_status=200)
+
+    monkeypatch.setattr(gate, "build_opener", fake_build_opener)
+    monkeypatch.setenv("AUTO_ROUTER_ADMIN_TOKEN", TOKEN)
+    monkeypatch.setattr("sys.argv", ["verify_admin_cutover_readonly.py", "--anonymous-only"])
+    assert gate.main() == 1  # Old-router anonymous 200 must remain a HOLD.
+    assert any(isinstance(h, ProxyHandler) and h.proxies == {} for h in inspected)
+    assert any(isinstance(h, gate._DenyRedirect) for h in inspected)
+    assert TOKEN not in capsys.readouterr().out
+
+
 def test_redirect_handler_is_explicitly_disabled():
     assert gate._DenyRedirect().redirect_request(None, None, 301, None, {}, "http://elsewhere") is None
