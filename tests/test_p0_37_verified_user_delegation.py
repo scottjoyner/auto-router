@@ -83,7 +83,10 @@ def _token(
     return f"{encoded_header}.{encoded_claims}.{_b64(signer.sign(message))}"
 
 
-def _app(tmp_path, monkeypatch, signer, *, restart=False, owner_authority=None):
+def _app(
+    tmp_path, monkeypatch, signer, *, restart=False, owner_authority=None,
+    require_body_digest=False,
+):
     monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
     monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", _SERVICE)
     ledger = RequestIdempotencyLedger(
@@ -107,6 +110,7 @@ def _app(tmp_path, monkeypatch, signer, *, restart=False, owner_authority=None):
         UserDelegationShadowMiddleware,
         public_key=signer.public_key(),
         key_id=_KID,
+        require_body_digest=require_body_digest,
         owner_ledger=(
             owner_authority
             if owner_authority is not None
