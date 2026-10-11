@@ -24,6 +24,7 @@ def inspect_release_structure(
     compose: object, *,
     service: str, candidate_image_id: str, rollback_image_id: str,
     reviewed_source_sha: str, observed_running_image_id: str,
+    observed_compose_image_id: str,
     candidate_embedded_revision: str, candidate_present: bool,
     rollback_present: bool,
 ) -> dict[str, object]:
@@ -40,6 +41,10 @@ def inspect_release_structure(
         problems.append("COMPOSE_HAS_BUILD_STEP")
     if not IMAGE_ID.fullmatch(candidate_image_id):
         problems.append("CANDIDATE_IMAGE_ID_INVALID")
+    # A pinned Compose digest and a valid, reviewed candidate image ID are
+    # insufficient separately: the digest must resolve to this exact candidate.
+    if observed_compose_image_id != candidate_image_id or not IMAGE_ID.fullmatch(observed_compose_image_id):
+        problems.append("COMPOSE_DIGEST_DOES_NOT_RESOLVE_TO_CANDIDATE")
     if not IMAGE_ID.fullmatch(rollback_image_id):
         problems.append("ROLLBACK_IMAGE_ID_INVALID")
     if not SOURCE_SHA.fullmatch(reviewed_source_sha):
@@ -99,12 +104,19 @@ def main() -> int:
         rollback_id = docker_field([
             "image", "inspect", "--format", "{{.Id}}", args.rollback_image_id
         ])
+        service_item = manifest.get("services", {}).get(args.service, {}) if isinstance(manifest, dict) else {}
+        compose_ref = service_item.get("image") if isinstance(service_item, dict) else None
+        # Reject malformed/option-looking input before passing a YAML value to Docker.
+        compose_image_id = docker_field([
+            "image", "inspect", "--format", "{{.Id}}", compose_ref
+        ]) if isinstance(compose_ref, str) and DIGEST_REF.fullmatch(compose_ref) else ""
         report = inspect_release_structure(
             manifest, service=args.service,
             candidate_image_id=args.candidate_image_id,
             rollback_image_id=args.rollback_image_id,
             reviewed_source_sha=args.reviewed_source_sha,
             observed_running_image_id=actual,
+            observed_compose_image_id=compose_image_id,
             candidate_embedded_revision=label,
             candidate_present=candidate_id == args.candidate_image_id,
             rollback_present=rollback_id == args.rollback_image_id,
