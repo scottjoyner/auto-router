@@ -359,14 +359,16 @@ output in owner custody. The tool deliberately emits only status codes,
 boolean checks and reason codes. Do **not** attach `docker compose config`
 output to GitHub, Signal or other shared logs.
 
-The exact committed verifier source `02acad843cdacb85d053f25b45e10567af09b568`
+The exact committed verifier source `4465a6935bfc7cea5a7a8d1d846ddb7a0ba222cf`
 was streamed into a one-shot Python process on x1-370 and executed
 **without writing any local file** against the live container's actual
 Compose-file metadata. It returned
-`PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY` with all seven checks true:
+`PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY` with all eight checks true:
 synthetic image selected; automatic pull prohibited; no build; router
 other fields unchanged; other services unchanged; network config
-unchanged; volume config unchanged. This check compared full resolved
+unchanged; volume config unchanged; and the **entire resolved Compose
+document unchanged** apart from the permitted image and pull-policy
+fields (including top-level project, secrets and configs). This check compared full resolved
 objects privately, without printing source values. See
 [`docs/evidence/router-private-compose-synthetic-readonly-20261011.json`](evidence/router-private-compose-synthetic-readonly-20261011.json).
 
