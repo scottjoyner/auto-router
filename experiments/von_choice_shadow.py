@@ -7,14 +7,14 @@ DRY RUN DEFAULT: validates a human-sanitized fixture without any HTTP request.
 from __future__ import annotations
 
 import argparse
-from hashlib import sha256
 import json
 import math
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from hashlib import sha256
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -227,7 +227,8 @@ def output_path(path: Path) -> Path:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("cases", type=Path)
-    p.add_argument("--execute", action="store_true", help="send to an already running local Von server")
+    p.add_argument("--execute", action="store_true",
+                   help="send to an already running local Von server")
     p.add_argument("--ack-sanitized", action="store_true")
     p.add_argument("--ack-preloaded", action="store_true",
                    help="acknowledge possible lazy model/weight loading by the Von server")
