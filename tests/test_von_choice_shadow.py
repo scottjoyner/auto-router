@@ -154,7 +154,8 @@ class TestVonAdapter(unittest.TestCase):
             V.validate_case(sample(gold="node_c"))
 
     def test_incomplete_can_have_null_label(self):
-        V.validate_case(sample(gold=None, evidence_complete=False, variant="missing_evidence"))
+        V.validate_case(sample(gold=None, evidence_complete=False,
+                               variant="missing_evidence", eligible_options=[]))
 
     def test_permutation_must_reorder(self):
         with tempfile.TemporaryDirectory() as d:
