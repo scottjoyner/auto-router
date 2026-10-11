@@ -315,7 +315,13 @@ def install_user_delegation_shadow(app: Any) -> None:
     """Explicit opt-in, fail closed for missing/misconfigured trusted key."""
     if getattr(app.state, "p0_user_delegation_shadow_installed", False):
         return
-    enabled = os.getenv("AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED", "").lower()
+    # This experiment changes admission/idempotency when enabled. Reject the
+    # historic misleading "SHADOW" flag rather than silently treating it as
+    # permission to alter a live router.
+    legacy = os.getenv("AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED", "").lower()
+    if legacy in {"1", "true", "yes", "on"}:
+        raise RuntimeError("P0 legacy shadow flag is unsafe; use explicit admission gate")
+    enabled = os.getenv("AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED", "").lower()
     if enabled not in {"1", "true", "yes", "on"}:
         return
     if os.getenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true").lower() not in {
