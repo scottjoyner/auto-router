@@ -340,16 +340,37 @@ def install_user_delegation_shadow(app: Any) -> None:
         raise RuntimeError("invalid P0 shadow delegation verification key") from exc
     if not isinstance(public_key, Ed25519PublicKey):
         raise RuntimeError("P0 delegation verification key must be Ed25519")
-    ledger_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE", "")
     secret_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_HMAC_KEY_FILE", "")
-    if not ledger_file.startswith("/") or not secret_file.startswith("/"):
-        raise RuntimeError("P0 shadow requires separate pinned durable owner ledger and key")
+    if not secret_file.startswith("/"):
+        raise RuntimeError("P0 admission requires a private root authority HMAC key")
+    mode = os.getenv("AUTO_ROUTER_P0_OWNER_AUTHORITY", "sqlite").lower()
     try:
-        owner_ledger = RootOwnerLedger(
-            Path(ledger_file), read_pinned_root_secret(secret_file)
-        )
+        secret = read_pinned_root_secret(secret_file)
+        if mode == "sqlite":
+            ledger_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE", "")
+            if not ledger_file.startswith("/"):
+                raise RootOwnerStorageError("root owner ledger path missing")
+            owner_ledger = RootOwnerLedger(Path(ledger_file), secret)
+        elif mode == "postgres":
+            # Read env only as paths/authority labels. No DSN, passwords,
+            # or raw signed user token is exposed in logs or error bodies.
+            from auto_router.user_root_postgres import (
+                PostgresRootOwnerAuthority,
+                read_authority_dsn_file,
+            )
+            dsn = read_authority_dsn_file(
+                os.getenv("AUTO_ROUTER_P0_OWNER_PG_DSN_FILE", "")
+            )
+            owner_ledger = PostgresRootOwnerAuthority(
+                dsn,
+                secret,
+                os.getenv("AUTO_ROUTER_P0_OWNER_PG_AUTHORITY_ID", ""),
+                require_tls=True,
+            )
+        else:
+            raise RootOwnerStorageError("unknown p0 owner authority mode")
     except RootOwnerStorageError as exc:
-        raise RuntimeError("P0 durable owner ledger not ready") from exc
+        raise RuntimeError("P0 durable owner authority not ready") from exc
     app.add_middleware(
         UserDelegationShadowMiddleware,
         public_key=public_key, key_id=key_id,
