@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 from hashlib import sha256
-import ipaddress
 import json
 import math
 import os
@@ -73,7 +72,7 @@ def validate_case(row: object) -> dict:
 def fixture(path: Path) -> tuple[list[dict], str]:
     if not path.is_file() or path.stat().st_size > 4_000_000:
         raise ValueError("fixture missing or over 4 MB")
-    rows, keys, identity, originals = [], set(), {}, {}
+    rows, keys, originals = [], set(), {}
     h = sha256()
     with path.open("rb") as file:
         for i, raw in enumerate(file, 1):
