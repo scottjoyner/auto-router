@@ -10,13 +10,13 @@ import sqlite3
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from test_executor_auth import _invoke, _token, signing_key
 
 from auto_router.executor_auth import ExecutorInferenceAuthMiddleware
 from auto_router.request_idempotency import (
     RequestIdempotencyLedger,
     RequestIdempotencyMiddleware,
 )
-from test_executor_auth import _invoke, _token
 
 
 @pytest.mark.asyncio
