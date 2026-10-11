@@ -1,0 +1,64 @@
+"""Dashboard link hygiene: API admin paths are references, not login bypasses."""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from auto_router.ui_pages import get_ui_page_sections
+
+TPL_ROOT = Path(__file__).resolve().parents[1] / "src/auto_router/templates"
+ENV = Environment(loader=FileSystemLoader(str(TPL_ROOT)), autoescape=select_autoescape(["html"]))
+
+
+def _render_section_loop(template: str) -> str:
+    """Exercise only the page-shortcut component, not unrelated live telemetry."""
+    source = (TPL_ROOT / template).read_text()
+    start = source.index("{% for section in page_sections %}")
+    # Exactly two nested section/link loops with an internal auth conditional.
+    first_end = source.index("{% endfor %}", start)
+    second_end = source.index("{% endfor %}", first_end + 12)
+    fragment = source[start : second_end + len("{% endfor %}")]
+    return ENV.from_string(fragment).render(page_sections=get_ui_page_sections())
+
+
+def test_admin_catalog_links_are_identified_and_browser_pages_remain_clickable():
+    sections = get_ui_page_sections()
+    protected = [link for section in sections for link in section["links"] if link["href"].startswith("/admin/")]
+    public = [link for section in sections for link in section["links"] if not link["href"].startswith("/admin/")]
+    assert len(protected) >= 10 and public
+    assert all(link["requires_admin_header"] is True for link in protected)
+    assert all(link["requires_admin_header"] is False for link in public)
+    assert get_ui_page_sections() is not sections
+
+
+def test_no_hardcoded_admin_link_is_clickable_in_any_html_template():
+    for template in TPL_ROOT.rglob("*.html"):
+        source = template.read_text()
+        assert not re.search(r'<a\b[^>]*href="/admin/', source, flags=re.S), template
+        # Jinja templates must compile; browser auth must never be inserted via
+        # query-string token or javascript into an HTML href.
+        ENV.get_template(str(template.relative_to(TPL_ROOT)))
+
+
+def test_main_dashboard_shortcuts_render_privileged_paths_as_text():
+    html = _render_section_loop("fragments/dashboard_summary.html")
+    assert 'href="/dashboard"' in html
+    assert 'data-admin-api-path="/admin/providers"' in html
+    assert "X-Admin-Token required" in html
+    assert not re.search(r'<a\b[^>]*href="/admin/', html, flags=re.S)
+
+
+def test_ops_shortcuts_keep_public_links_only():
+    html = _render_section_loop("fragments/ops_summary.html")
+    assert 'href="/dashboard"' in html
+    assert 'data-admin-api-path="/admin/agent-jobs"' in html
+    assert "API auth required" in html
+    assert not re.search(r'<a\b[^>]*href="/admin/', html, flags=re.S)
+
+
+def test_privileged_path_visibility_grants_no_authority():
+    html = _render_section_loop("fragments/dashboard_summary.html")
+    for forbidden in ("Bearer ", "?token=", "?api_key=", "?admin_token=", 'href="/admin/'):
+        assert forbidden not in html
