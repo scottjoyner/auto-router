@@ -80,7 +80,7 @@ def test_cli_inspects_selected_compose_digest_not_just_candidate_id(
 
     ref = "git-router@sha256:" + "d" * 64
     manifest = tmp_path / "compose.yml"
-    manifest.write_text("services:\\n  llm-router:\\n    image: " + ref + "\\n", encoding="utf-8")
+    manifest.write_text("services:\n  llm-router:\n    image: " + ref + "\n", encoding="utf-8")
     requested = []
 
     def fake_docker_field(args):
