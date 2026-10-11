@@ -150,6 +150,17 @@ jobs:
               "observed_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
           }, sort_keys=True, indent=2) + "\n")
           PY
+          # A minimal override is a REVIEW CANDIDATE only. It changes no live host.
+          # Docker image IDs can be referenced directly without mutable tags.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          candidate = os.environ["CANDIDATE_ID"]
+          assert candidate.startswith("sha256:") and len(candidate) == 71
+          Path(os.environ["RUNNER_TEMP"], "router-candidate.override.yml").write_text(
+              "services:\\n  llm-router:\\n    image: " + candidate + "\\n"
+          )
+          PY
           echo "undelivered_archive_size_bytes=$bytes"
           echo 'No production host, model, credential, router endpoint or NAS was contacted.'
 
@@ -161,5 +172,94 @@ jobs:
             ${{ runner.temp }}/router-candidate-${{ github.event.pull_request.head.sha }}.docker.tar.gz
             ${{ runner.temp }}/router-candidate-archive.sha256
             ${{ runner.temp }}/router-candidate-metadata.json
+            ${{ runner.temp }}/router-candidate.override.yml
           retention-days: 3
           if-no-files-found: error
+
+  restore-archive-and-prove-loadability:
+    needs: [build-and-attest-undeployed-candidate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Download candidate only from this exact workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: pr41-undelivered-image-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/reviewed-candidate
+
+      - name: Verify archive bytes, metadata, and immutable override before loading
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/reviewed-candidate"
+          archive="router-candidate-$REVIEWED_SHA.docker.tar.gz"
+          test -f "$archive"
+          expected="$(cat router-candidate-archive.sha256)"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          actual="$(sha256sum "$archive" | awk '{print $1}')"
+          test "$expected" = "$actual"
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import re
+          root = Path(os.environ["RUNNER_TEMP"]) / "reviewed-candidate"
+          obj = json.loads((root / "router-candidate-metadata.json").read_text())
+          rev = os.environ["REVIEWED_SHA"]
+          assert obj["reviewed_git_sha"] == rev
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}", obj["candidate_image_id"])
+          assert obj["candidate_is_deployed"] is False
+          assert obj["production_admission_authorized"] is False
+          assert obj["credential_custody_verified"] is False
+          override = (root / "router-candidate.override.yml").read_text()
+          assert override == "services:\\n  llm-router:\\n    image: " + obj["candidate_image_id"] + "\\n"
+          print("offline_artifact_bytes_and_release_metadata=PASS")
+          PY
+          docker compose -f router-candidate.override.yml config -q
+
+      - name: Load only into disposable hosted runner and re-verify embedded code
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/reviewed-candidate"
+          docker load --input "router-candidate-$REVIEWED_SHA.docker.tar.gz" >/dev/null
+          tag="auto-router-pr41-undeployed:$REVIEWED_SHA"
+          id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$REVIEWED_SHA"
+          CANDIDATE_ID="$id" python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          root = Path(os.environ["RUNNER_TEMP"]) / "reviewed-candidate"
+          metadata = json.loads((root / "router-candidate-metadata.json").read_text())
+          assert os.environ["CANDIDATE_ID"] == metadata["candidate_image_id"]
+          PY
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-restore-only \
+            --entrypoint python "$id" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app
+          from auto_router.security import require_admin
+          paths = [r for r in app.routes if isinstance(r, APIRoute)
+                   and r.path.startswith("/admin/")]
+          assert len(paths) >= 20
+          assert all(any(d.call is require_admin for d in r.dependant.dependencies)
+                     for r in paths)
+          client = TestClient(app, raise_server_exceptions=False)
+          for path in ("/admin/providers", "/admin/circuits",
+                       "/admin/agent-workers", "/admin/ops/summary"):
+              assert client.get(path).status_code == 401
+          print("reloaded_image_secure_live_route_auth=PASS")
+          print("reloaded_admin_route_count", len(paths))
+          PY
+          echo 'Candidate loadability proved on disposable hosted runner only.'
