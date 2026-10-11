@@ -110,7 +110,7 @@ Tests in `tests/test_p0_37_postgres_authority.py` include:
   actual primary fencing, split-brain failover policy and external epoch
   evidence.
 
-Initial exact-head x1-370 run (commit `281287e4b956b9fa654afe0b9ba310c3ff24e5de`):
+Earlier x1-370 run (commit `281287e4b956b9fa654afe0b9ba310c3ff24e5de`):
 
 - PostgreSQL-specific: **15 passed** on the disposable PostgreSQL instance.
 - Full isolated suite, selecting that ephemeral database and excluding only
@@ -123,6 +123,9 @@ Initial exact-head x1-370 run (commit `281287e4b956b9fa654afe0b9ba310c3ff24e5de`
 ## Remaining truly end-to-end blockers
 
 ### Real two-human auth at the source
+
+**Upstream owner:** [AssistX P0 identity issue #297](https://github.com/scottjoyner/auto-assist/issues/297) defines signed delegated identity from independently authenticated subjects, safe header treatment, and real gateway transport. This implementation is not contained in the present router PR.
+
 
 A direct read of `scottjoyner/auto-assist` **current main**
 `src/assistx/api.py` (2026-10-11) shows a `BASIC_AUTH_USER/PASS`
@@ -163,3 +166,10 @@ than quietly impersonating a user.
 **Release stop:** Keep this pull request, #48 and all ancestors **draft**.
 No production router, gateway, NAS, IdP, signing key, owner DB or physical
 provider was modified. The disposable container is not a production service.
+
+
+Additional default-off installer regression tests in
+`tests/test_p0_37_postgres_installer.py` verify five fail-closed cases:
+feature disabled; missing private DSN file; unsafe file permissions;
+non-verified TLS setting; and unsupported authority backend. Each rejects
+without contacting a production database or promoting a human identity.
