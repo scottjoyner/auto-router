@@ -259,3 +259,32 @@ New negative tests explicitly reject a syntactically valid Compose digest that
 resolves to a different image. Run the exact-head hosted security contract and
 full CI before treating this preflight as tested; do not infer deployment
 approval from its PASS result or alter production to make it pass.
+
+## Real Compose merge versus isolated override (draft acceptance correction)
+
+The repository's checked-in `docker-compose.yml` defines
+`services.llm-router.build: .`. Merely adding `image: sha256:...` in a
+second file **does not remove that inherited build**; a command that supplies
+both files can still build an image instead of consuming the reviewed archive.
+A successful `docker compose -f override.yml config -q` **alone** does not
+validate the production-shaped merge.
+
+The undeployed CI candidate now writes `build: !reset null`, pins the exact
+candidate image ID, and sets `pull_policy: never`. On an **isolated hosted
+runner**, before loading the candidate, the restore job resolves the actual
+checked-in base plus the artifact override with synthetic interpolation values.
+It checks the resulting `llm-router` service has **no `build` field**, that
+`image` equals the exact archive metadata's image ID, and that automatic
+pulls are prohibited. The full merged Compose JSON, including potentially
+sensitive environment fields, is **never printed or uploaded**. A failure is
+a sanitized HOLD. Neither `config` nor this CI check starts a container.
+
+This only validates the checked-in base and generated override from the same
+Git source SHA. The real x1-370 operator may have other Compose overrides,
+container names, environment files, external networks, or volume bindings.
+**Do not reuse a hosted-runner PASS as evidence for that full private deployment
+configuration.** The operator must privately verify the exact file order and
+resolved router service configuration, stage only the approved immutable image,
+retain the actual running rollback image, and independently satisfy the custody,
+network, authenticated caller, and Destroyer/Lenovo remote-401 release gates.
+No Docker build, image pull, or automatic `up` is authorized by this document.
