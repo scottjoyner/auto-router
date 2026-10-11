@@ -12,8 +12,14 @@ import os
 import time
 from pathlib import Path
 
-from von_cpu_pilot import HF_REV, admissible_workspace, check_snapshot, physical_preflight, require_resource_scope
 from von_choice_shadow import decode_response
+from von_cpu_pilot import (
+    HF_REV,
+    admissible_workspace,
+    check_snapshot,
+    physical_preflight,
+    require_resource_scope,
+)
 
 CASES = [
     ("cls_refund", "general", "A customer requests a refund for a duplicate invoice charge.",
@@ -116,8 +122,10 @@ def main() -> int:
     try:
         work = admissible_workspace(a.workspace)
         if not a.execute:
-            print(json.dumps({"planned_cases": len(CASES),
-                              "inference_attempted": False, **physical_preflight(require_capacity=False)}))
+            print(json.dumps({
+                "planned_cases": len(CASES), "inference_attempted": False,
+                **physical_preflight(require_capacity=False),
+            }))
             return 0
         if not a.ack_cpu_impact or a.out is None:
             raise ValueError("execute requires ack and output")
