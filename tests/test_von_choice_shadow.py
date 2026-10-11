@@ -183,6 +183,14 @@ class TestVonAdapter(unittest.TestCase):
         self.assertEqual(V.loopback_endpoint("http://127.0.0.1:8327"),
                          "http://127.0.0.1:8327/v1/systemone")
 
+    def test_question_contract_binds_order_and_instructions(self):
+        original = sample()
+        permuted = sample(criteria={"node_b": "Node B", "node_a": "Node A"})
+        reworded = sample(instructions="Which runtime is eligible today?")
+        self.assertNotEqual(V.question_digest(original), V.question_digest(permuted))
+        self.assertNotEqual(V.question_digest(original), V.question_digest(reworded))
+        self.assertEqual(V.question_digest(original), V.question_digest(sample()))
+
     def test_response_ok(self):
         x = V.decode_response(answer(), {}, sample(), "von-1.3.0")
         self.assertEqual(x, ("node_a", .9))
