@@ -1,0 +1,81 @@
+name: Von multi-eligible research evidence
+
+on:
+  push:
+    branches:
+      - experiment/von-multieligible-objective-20261011
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-source-and-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install source-only lint checker (no Von SDK/weights)
+        run: python -m pip install 'ruff>=0.6,<1'
+      - name: Validate all inherited read-only experiment contracts
+        run: |
+          python -m unittest discover -s tests -p 'test_*shadow.py' -q
+          python -m unittest discover -s tests -p 'test_synthetic_decision_challenge.py' -q
+          python -m unittest discover -s tests -p 'test_von_cpu_pilot.py' -q
+          python -m unittest discover -s tests -p 'test_von_matched_wording.py' -q
+          python -m unittest discover -s tests -p 'test_von_abstention_ablation.py' -q
+          python -m unittest discover -s tests -p 'test_von_policy_value_reconcile.py' -q
+      - name: Validate 48-call two-eligible design and evidence verification
+        run: |
+          python -m unittest discover -s tests -p 'test_von_multi_eligible_cpu.py' -q
+          python -m unittest discover -s tests -p 'test_von_multi_eligible_reconcile.py' -q
+          research_dir=$(mktemp -d /tmp/von-multieligible-ci-XXXXXX)
+          python experiments/von_multi_eligible_cpu.py --workspace "$research_dir"
+      - name: Lint all research-only files
+        run: |
+          ruff check \
+            experiments/typed_decision_shadow.py \
+            experiments/von_choice_shadow.py \
+            experiments/build_synthetic_decision_challenge.py \
+            experiments/von_cpu_pilot.py \
+            experiments/von_cpu_controls.py \
+            experiments/von_matched_wording.py \
+            experiments/von_abstention_ablation.py \
+            experiments/von_policy_value_reconcile.py \
+            experiments/von_multi_eligible_cpu.py \
+            experiments/von_multi_eligible_reconcile.py \
+            tests/test_typed_decision_shadow.py \
+            tests/test_von_choice_shadow.py \
+            tests/test_synthetic_decision_challenge.py \
+            tests/test_von_cpu_pilot.py \
+            tests/test_von_matched_wording.py \
+            tests/test_von_abstention_ablation.py \
+            tests/test_von_policy_value_reconcile.py \
+            tests/test_von_multi_eligible_cpu.py \
+            tests/test_von_multi_eligible_reconcile.py
+      - name: Validate pinned metadata-only aggregate without the original private report
+        run: |
+          python - <<'PY'
+          import json
+          from hashlib import sha256
+          from pathlib import Path
+          p = Path("experiments/evidence/von-multieligible-objective-20261011.json")
+          raw = p.read_bytes()
+          assert len(raw) == 3516
+          assert sha256(raw).hexdigest() == "f22b1a659eaafc5115590e88040e778c0d4d0a38c6548f79e7e383dd7d182285"
+          result = json.loads(raw)
+          assert result["actual_cpu_inference_observations"] == 48
+          assert result["unique_fictional_situations"] == 12
+          assert result["independently_labelled_real_cases"] == 0
+          assert not result["authenticated_real_eligibility_evidence"]
+          assert not result["production_admission_enabled"]
+          assert result["objective_units_are_never_combined"]
+          for style in ("raw", "derived"):
+              assert result["breakdown"][style]["latency_ms"]["objective_unit"] == "milliseconds"
+              assert result["breakdown"][style]["energy_j"]["objective_unit"] == "joules"
+              assert "latency_gain_over_naive_after_model_decision_ms" not in result["breakdown"][style]["energy_j"]
+          print("Pinned aggregate verified; zero inference and zero route changes in CI.")
+          PY

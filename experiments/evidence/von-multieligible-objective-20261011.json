@@ -1,0 +1,92 @@
+{
+  "actual_cpu_inference_observations": 48,
+  "authenticated_real_eligibility_evidence": false,
+  "breakdown": {
+    "derived": {
+      "energy_j": {
+        "exact_objective_oracle_correct": 12,
+        "independent_fictional_profiles": 6,
+        "mean_chosen_probability": 0.5399,
+        "median_inference_latency_ms": 592.727,
+        "model_inference_energy_measured": false,
+        "naive_deterministic_correct": 10,
+        "naive_regret_total_in_objective_units": 33.0,
+        "net_energy_advantage_claimed": false,
+        "objective_unit": "joules",
+        "variant_rows": 12,
+        "von_correct": 6,
+        "von_regret_total_in_objective_units": 300.3385,
+        "von_selection_counts": {
+          "node_a": 4,
+          "node_b": 8
+        }
+      },
+      "latency_ms": {
+        "exact_objective_oracle_correct": 12,
+        "independent_fictional_profiles": 6,
+        "latency_gain_over_naive_after_model_decision_ms": -8826.673,
+        "mean_chosen_probability": 0.5441,
+        "median_inference_latency_ms": 594.414,
+        "naive_deterministic_correct": 12,
+        "naive_regret_total_in_objective_units": 0.0,
+        "objective_unit": "milliseconds",
+        "variant_rows": 12,
+        "von_correct": 8,
+        "von_regret_total_in_objective_units": 1703.1997,
+        "von_selection_counts": {
+          "node_a": 2,
+          "node_b": 10
+        }
+      }
+    },
+    "raw": {
+      "energy_j": {
+        "exact_objective_oracle_correct": 12,
+        "independent_fictional_profiles": 6,
+        "mean_chosen_probability": 0.5129,
+        "median_inference_latency_ms": 714.367,
+        "model_inference_energy_measured": false,
+        "naive_deterministic_correct": 10,
+        "naive_regret_total_in_objective_units": 33.0,
+        "net_energy_advantage_claimed": false,
+        "objective_unit": "joules",
+        "variant_rows": 12,
+        "von_correct": 6,
+        "von_regret_total_in_objective_units": 270.9385,
+        "von_selection_counts": {
+          "node_b": 12
+        }
+      },
+      "latency_ms": {
+        "exact_objective_oracle_correct": 12,
+        "independent_fictional_profiles": 6,
+        "latency_gain_over_naive_after_model_decision_ms": -15485.303,
+        "mean_chosen_probability": 0.5157,
+        "median_inference_latency_ms": 694.547,
+        "naive_deterministic_correct": 12,
+        "naive_regret_total_in_objective_units": 0.0,
+        "objective_unit": "milliseconds",
+        "variant_rows": 12,
+        "von_correct": 6,
+        "von_regret_total_in_objective_units": 6143.1997,
+        "von_selection_counts": {
+          "node_b": 12
+        }
+      }
+    }
+  },
+  "distinct_objectives": [
+    "latency_ms",
+    "energy_j"
+  ],
+  "each_fictional_case_has_two_generator_declared_eligible_nodes": true,
+  "hf_model_revision": "498ceba33390b32cfefaab6422ec380318ba9b99",
+  "independently_labelled_real_cases": 0,
+  "interpretation": "Exact deterministic arithmetic is optimal for these invented fully observed objectives by construction. Von and a simpler heuristic are compared only to that registered numeric oracle. The small synthetic sample cannot prove operational ranking quality or authenticated eligibility.",
+  "objective_units_are_never_combined": true,
+  "production_admission_enabled": false,
+  "report_sha256": "216cdb6753ac87f6d9197435d27db24f2971ca0b390948617197f94234313423",
+  "schema": "fictional_two_eligible_von_cost_audit_v1",
+  "signed_physical_execution_receipts": false,
+  "unique_fictional_situations": 12
+}
