@@ -1,6 +1,7 @@
 """Synthetic, value-free proof for an UNWIRED admin-key migration helper."""
 from __future__ import annotations
 import importlib.util
+import base64
 from pathlib import Path
 
 import pytest
@@ -147,3 +148,111 @@ def test_no_environment_network_or_service_actions():
     content=SOURCE.read_text()
     for forbidden in ("os.environ", "getenv(", "subprocess", "socket", "urllib", "logging.", "print(", "docker ", "httpx"):
         assert forbidden not in content
+
+
+def header_check(headers, **overrides):
+    kwargs = dict(
+        primary_token=PRIMARY,
+        previous_token=PREVIOUS,
+        feature_explicitly_enabled=True,
+        owner_window_approved=True,
+        starts_at_utc=1_800_000_000,
+        expires_at_utc=1_800_000_600,
+        activated_at_utc=1_800_000_100,
+        observed_at_utc=1_800_000_130,
+        activated_monotonic_seconds=1000,
+        observed_monotonic_seconds=1030,
+    )
+    kwargs.update(overrides)
+    return policy.evaluate_experimental_header_set(headers, **kwargs)
+
+
+def test_single_header_channel_primary_and_previous():
+    for key, body in (
+        ("X-Admin-Token", PRIMARY),
+        ("x-admin-token", PRIMARY),
+        ("Authorization", "Bearer " + PRIMARY),
+        ("authorization", "bearer " + PRIMARY),
+        ("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode()),
+    ):
+        assert header_check([(key, body)]) == policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    for key, body in (
+        ("X-Admin-Token", PREVIOUS),
+        ("Authorization", "Bearer " + PREVIOUS),
+        ("Authorization", "Basic " + base64.b64encode(("admin:" + PREVIOUS).encode()).decode()),
+    ):
+        assert header_check([(key, body)]) == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
+
+
+def test_unknown_benign_headers_are_ignored_but_not_authenticators():
+    headers=[("Accept","application/json"),("User-Agent","synthetic-ci"),
+             ("X-Admin-Token",PRIMARY),("Content-Type","text/plain")]
+    assert header_check(headers)==policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    assert header_check(headers[:2])==policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("headers", [
+    [("X-Admin-Token", PRIMARY), ("Authorization", "Bearer " + PREVIOUS)],
+    [("Authorization", "Bearer " + PRIMARY), ("X-Admin-Token", PREVIOUS)],
+    [("X-Admin-Token", PRIMARY), ("x-admin-token", PRIMARY)],
+    [("Authorization", "Bearer " + PRIMARY), ("AUTHORIZATION", "Bearer " + PRIMARY)],
+    [("Authorization", "Basic " + base64.b64encode(("admin:" + PREVIOUS).encode()).decode()),
+     ("X-Admin-Token", PRIMARY)],
+    [("Authorization", "Bearer " + PRIMARY + "," + PREVIOUS)],
+    [("Authorization", "Bearer " + PRIMARY + " " + PREVIOUS)],
+    [("Authorization", "Digest opaque-credential")],
+    [("Authorization", "Basic ")],
+    [("Authorization", "Bearer ")],
+    [("Authorization", "Bearer  " + PRIMARY)],
+    [("Authorization", "Bearer\t" + PRIMARY)],
+    [("X-Admin-Token", PRIMARY + "\n")],
+    [("X-Admin-Token", PRIMARY + "\r")],
+    [("X-Admin-Token", " " + PRIMARY)],
+    [("X-Admin-Token", PRIMARY + " ")],
+    [("X-Admin-Token ", PRIMARY)],
+    [("X-Admin-Token", "synthetic-short")],
+    [("Authorization", "basic " + base64.b64encode(("nonadmin:" + PRIMARY).encode()).decode())],
+    [("Authorization", "Basic not_base64")],
+    [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode() + "=")],
+    [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode().rstrip("="))],
+    [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode().replace("=", " "))],
+    [("Authorization", "Bearer " + PRIMARY), ("Authorization", "Basic " +
+        base64.b64encode(("admin:" + PRIMARY).encode()).decode())],
+    [],
+    None,
+    (),
+    22,
+    "headers-not-pairs",
+    [("x-admin-token",)],
+    [("x-admin-token", PRIMARY, "extra")],
+    [(None, PRIMARY)],
+    [("x-admin-token", None)],
+    [("x-admin-token", "🦊")],
+    [("Unknown", "nonascii-🦊"),("X-Admin-Token", PRIMARY)],
+    [("Unknown", "break\nline"),("X-Admin-Token", PRIMARY)],
+    [("x-admin-token", PRIMARY)]*65,
+])
+def test_ambiguous_header_sets_never_authenticate(headers):
+    assert header_check(headers)==policy.AuthenticationDecision.DENY
+
+
+def test_single_header_wrong_or_expired_remains_denied():
+    assert header_check([("Authorization","Bearer "+WRONG)])==policy.AuthenticationDecision.DENY
+    assert header_check([("X-Admin-Token",PREVIOUS)],observed_at_utc=1_800_000_600)==policy.AuthenticationDecision.DENY
+    assert header_check([("X-Admin-Token",PREVIOUS)],owner_window_approved=False)==policy.AuthenticationDecision.DENY
+
+
+def test_header_parser_does_not_accept_env_cookie_or_other_authority():
+    assert header_check([
+        ("Cookie", "admin=" + PRIMARY),
+        ("X-API-Key", PRIMARY),
+    ])==policy.AuthenticationDecision.DENY
+
+
+def test_header_decision_never_returns_header_or_secret_bytes(capsys):
+    result=header_check([("X-Admin-Token",PRIMARY)])
+    assert result==policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    output=capsys.readouterr()
+    assert PRIMARY not in output.out+output.err
+    assert PREVIOUS not in output.out+output.err
+    assert PRIMARY not in repr(result)
