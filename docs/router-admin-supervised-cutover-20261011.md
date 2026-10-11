@@ -162,3 +162,56 @@ no response-body reads and GET requests only. Independent offline tests reject
 remote receipts are insufficient for this new gate; physical postcutover
 receipts must come separately from both Destroyer and Lenovo on the exact
 reviewed candidate head. No production change is authorized by this update.
+
+
+## Immutable candidate image identity gate (additional HOLD)
+
+The actual x1-370 fleet Compose manifest is
+`/media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/compose.auto-router-fleet.yml`,
+service `llm-router`, container `git-router-1`.
+Its current service image is a **floating `git-router` tag**, not an immutable
+revision or registry digest. Its application code is packaged **inside the
+image**, not bound from the reviewed checkout. Running GitHub CI against
+source therefore **does not** establish that the fleet Compose command
+will deploy the reviewed code.
+
+The read-only `scripts/verify_release_image_identity_readonly.py` checks
+the Compose service *structure*, candidate image ID, **OCI
+`org.opencontainers.image.revision` label**, current running image ID and
+an owner-approved locally available rollback image ID. It inspects only
+narrow Docker metadata fields; it never builds, pulls, restarts, exposes
+environment values, or executes route changes.
+
+Before approving a supervised cutover:
+
+1. Build a **distinct** candidate image from the exact reviewed PR #41 source
+   (in a controlled build, outside the production router). Add a build
+   provenance label matching the exact reviewed 40-character Git commit,
+   preserve a signed or otherwise independently reviewed build receipt, and
+   verify the image ID. A label by itself is metadata and is not proof of
+   supply-chain integrity.
+2. Create a **reviewed Compose override/release manifest** that refers to the
+   intended candidate through an immutable digest or full image ID. Never
+   rely on a floating `git-router:latest`/equivalent tag at the cutover.
+3. Confirm the currently running router's image ID matches the owner-private,
+   recorded **rollback** identity and that both images remain locally
+   available. Keep network ports/mounts unchanged unless separately approved.
+4. Run the read-only preflight using the operator-controlled manifest,
+   candidate image ID, rollback image ID and exact reviewed source SHA:
+   `python3 scripts/verify_release_image_identity_readonly.py --compose PATH --service llm-router --container git-router-1 --candidate-image-id sha256:... --rollback-image-id sha256:... --reviewed-source-sha FULL_40_HEX`.
+   These IDs are image identities, **not credentials**. Do not paste any
+   environment contents into arguments or CI comments.
+5. Require `PASS_IDENTITY_PREFLIGHT_ONLY` and an independent operator's
+   confirmation of the immutable build provenance and rollback procedure.
+   That result **never** authorizes production release by itself; the
+   previously described admin authentication, remote Destroyer/Lenovo,
+   health, caller and credential-custody gates still apply.
+
+**Observed pre-cutover state:** The actual current fleet manifest returned
+`HOLD_IMAGE_IDENTITY` because it uses the floating tag. The script was
+intentionally given the running image as both candidate and rollback, so it
+also correctly flagged `CANDIDATE_EQUALS_ROLLBACK` and the absence of a
+matching candidate revision label. No image was rebuilt or deployed.
+
+This section remains an *operator-controlled release procedure*; it is not
+a request to mutate container tags, images, networks or active services.
