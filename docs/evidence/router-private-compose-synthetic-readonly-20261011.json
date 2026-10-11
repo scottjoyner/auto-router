@@ -2,7 +2,7 @@
   "schema": "auto-router.private-compose-synthetic-readonly.v1",
   "observed_date_utc": "2026-10-11",
   "observer": "Fleet Commander authorized x1-370 read-only Python",
-  "verified_script_source_sha": "02acad843cdacb85d053f25b45e10567af09b568",
+  "verified_script_source_sha": "4465a6935bfc7cea5a7a8d1d846ddb7a0ba222cf",
   "service": "llm-router",
   "actual_operator_compose_basename": "compose.auto-router-fleet.yml",
   "candidate_type": "SYNTHETIC_SHA256_IMAGE_ID_NOT_BUILT_OR_LOADED",
@@ -14,7 +14,8 @@
     "router_other_fields_unchanged": true,
     "other_services_unchanged": true,
     "network_config_unchanged": true,
-    "volume_config_unchanged": true
+    "volume_config_unchanged": true,
+    "all_other_compose_fields_unchanged": true
   },
   "baseline_without_overlay": "HOLD_COMPOSE_STRUCTURE",
   "baseline_reasons": [
@@ -30,5 +31,6 @@
   "credential_custody_verified": false,
   "post_cutover_401_verified": false,
   "production_release_authorized": false,
-  "conclusion": "The actual operator Compose structure can accept a synthetic immutable image/pull_policy override without altering other resolved config. This does not certify real reviewed image staging, the private release candidate, credential custody, device acceptance or safe production rollback."
+  "conclusion": "The exact committed operator verifier source was run in memory on x1-370 and passed eight structure checks, including full-document equality except the expected image and pull-policy fields. This is only synthetic configuration compatibility: the current private Compose file remains mutable, and no actual candidate was loaded or deployed.",
+  "observation_repeated_after_hardening": true
 }
