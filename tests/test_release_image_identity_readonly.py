@@ -115,6 +115,26 @@ def test_cli_inspects_selected_compose_digest_not_just_candidate_id(
     assert ref not in json.dumps(report)
 
 
+def test_malformed_compose_services_fail_closed_with_structured_report(monkeypatch, tmp_path, capsys):
+    import json
+    import sys
+
+    manifest = tmp_path / "compose.yml"
+    manifest.write_text("services: []\n", encoding="utf-8")
+    monkeypatch.setattr(app, "docker_field", lambda args: "")
+    monkeypatch.setattr(sys, "argv", [
+        "verify_release_image_identity_readonly.py",
+        "--compose", str(manifest), "--candidate-image-id", C,
+        "--rollback-image-id", R, "--reviewed-source-sha", S,
+    ])
+    assert app.main() == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["decision"] == "HOLD_IMAGE_IDENTITY"
+    assert "SERVICE_NOT_PRESENT" in report["reason_codes"]
+    assert report["deployment_authorized"] is False
+    assert str(manifest) not in json.dumps(report)
+
+
 def test_missing_or_buildable_service_never_certifies_image():
     assert "SERVICE_NOT_PRESENT" in inspect({"services": {}})["reason_codes"]
     assert "COMPOSE_HAS_BUILD_STEP" in inspect(
