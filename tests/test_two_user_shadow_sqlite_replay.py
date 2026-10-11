@@ -11,7 +11,6 @@ import sqlite3
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 from test_two_user_shadow_receipts import _FixtureGateway, _Principal, _ShadowReceipts
 
 
