@@ -167,14 +167,17 @@ credential custody. Production cutover remains under owner control.
   safe probe; do not infer that the corresponding unmerged `main` scripts
   are migrated. This client-side PR remains separate and must be deployed
   **before** a router-side auth requirement reaches those callers.
-- `src/auto_router/ui_pages.py` still contains direct browser links to
-  legacy JSON admin routes (providers, context, circuits, agent workers).
-  These links correctly return HTTP **401** once the hotfix is active unless
-  the operator has a trusted server-side authenticated path. **Do not**
-  insert the four-service shared admin token into browser JavaScript,
-  query strings, URLs or public logs to preserve this legacy navigation.
-  A security owner must explicitly accept the temporary 401 UX or
-  approve a separately reviewed safe UI workflow.
+- The emergency branch now includes the independently review-tested
+  browser shortcut hygiene from PR #41. `src/auto_router/ui_pages.py` and
+  the four operator HTML templates render protected `/admin/` endpoints
+  as **labeled non-clickable references**, rather than ordinary anchors
+  misleadingly offering access without the `X-Admin-Token` header. Public
+  pages remain clickable. `tests/test_admin_ui_link_safety.py` forbids
+  hardcoded admin anchors, validates template rendering, and prohibits
+  embedding admin tokens into links, JavaScript or query strings. This
+  change grants **no** new authentication authority or browser access:
+  intentional 401 responses still apply to direct uncredentialed admin GETs.
+  A separately reviewed server-side operator-auth UI remains future work.
 - Authenticated legacy `GET /admin/providers` retains the original full
   provider serialization, potentially including configuration-sensitive
   fields. **Only trusted authenticated callers** should receive it.
