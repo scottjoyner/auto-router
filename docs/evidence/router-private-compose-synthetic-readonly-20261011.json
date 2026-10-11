@@ -1,0 +1,34 @@
+{
+  "schema": "auto-router.private-compose-synthetic-readonly.v1",
+  "observed_date_utc": "2026-10-11",
+  "observer": "Fleet Commander authorized x1-370 read-only Python",
+  "verified_script_source_sha": "02acad843cdacb85d053f25b45e10567af09b568",
+  "service": "llm-router",
+  "actual_operator_compose_basename": "compose.auto-router-fleet.yml",
+  "candidate_type": "SYNTHETIC_SHA256_IMAGE_ID_NOT_BUILT_OR_LOADED",
+  "decision": "PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY",
+  "checks": {
+    "synthetic_image_selected": true,
+    "no_pull_requested": true,
+    "no_build_in_resolved_service": true,
+    "router_other_fields_unchanged": true,
+    "other_services_unchanged": true,
+    "network_config_unchanged": true,
+    "volume_config_unchanged": true
+  },
+  "baseline_without_overlay": "HOLD_COMPOSE_STRUCTURE",
+  "baseline_reasons": [
+    "IMAGE_NOT_PINNED_TO_RUNNING_IMMUTABLE_ID",
+    "PULL_POLICY_NOT_NEVER"
+  ],
+  "operations": "docker inspect and docker compose config only",
+  "compose_values_printed": false,
+  "private_paths_printed": false,
+  "persisted_private_config": false,
+  "image_built_loaded_or_staged": false,
+  "production_service_modified": false,
+  "credential_custody_verified": false,
+  "post_cutover_401_verified": false,
+  "production_release_authorized": false,
+  "conclusion": "The actual operator Compose structure can accept a synthetic immutable image/pull_policy override without altering other resolved config. This does not certify real reviewed image staging, the private release candidate, credential custody, device acceptance or safe production rollback."
+}
