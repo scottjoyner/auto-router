@@ -17,7 +17,10 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY config ./config
 
-RUN pip install --upgrade pip && pip install .
+# Runtime imports mount these static directories. Pre-create them at build time
+# so startup works even when the root filesystem is read-only.
+RUN pip install --upgrade pip && pip install . && \
+    python -c "from pathlib import Path; import sysconfig; (Path(sysconfig.get_path('purelib')) / 'auto_router' / 'static' / 'vendor').mkdir(parents=True, exist_ok=True)"
 
 EXPOSE 8088
 
