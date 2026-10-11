@@ -286,6 +286,50 @@ class TestCostShadowAuthority(unittest.TestCase):
         result = scored(doc)
         self.assertEqual(result["ranked_synthetic_ids"], ["runtime_b"])
 
+    def test_stale_loaded_process_telemetry_is_not_reused(self):
+        doc = sample()
+        doc["runtimes"][0]["process_id"] = "new_process"
+        result = scored(doc)
+        self.assertEqual(result["status"], "EVIDENCE_INCOMPLETE")
+        self.assertIn(
+            ["runtime_a", "telemetry_model_process_mismatch"],
+            result["evidence_blockers"],
+        )
+        self.assertEqual(result["ranked_synthetic_ids"], [])
+
+    def test_model_swap_telemetry_is_not_reused(self):
+        doc = sample()
+        doc["telemetry"][1]["model_id"] = "old_model"
+        result = scored(doc)
+        self.assertIn(
+            ["runtime_b", "telemetry_model_process_mismatch"],
+            result["evidence_blockers"],
+        )
+
+    def test_task_type_change_telemetry_is_not_reused(self):
+        doc = sample()
+        doc["telemetry"][0]["task_class"] = "embedding"
+        result = scored(doc)
+        self.assertEqual(result["status"], "EVIDENCE_INCOMPLETE")
+
+    def test_missing_process_provenance_field_fails_whole_bundle(self):
+        doc = sample()
+        del doc["telemetry"][0]["process_id"]
+        with self.assertRaisesRegex(ValueError, "telemetry evidence"):
+            scored(doc)
+
+    def test_physical_process_alias_is_not_double_counted(self):
+        doc = sample()
+        doc["runtimes"][1]["process_id"] = doc["runtimes"][0]["process_id"]
+        with self.assertRaisesRegex(ValueError, "duplicated physical process"):
+            scored(doc)
+
+    def test_duplicate_reservation_identity_is_not_double_counted(self):
+        doc = sample()
+        doc["runtimes"][1]["reservation_id"] = doc["runtimes"][0]["reservation_id"]
+        with self.assertRaisesRegex(ValueError, "duplicated physical process"):
+            scored(doc)
+
     def test_client_route_claim_cannot_be_proven_by_own_hash(self):
         doc = sample()
         result = scored(doc)
