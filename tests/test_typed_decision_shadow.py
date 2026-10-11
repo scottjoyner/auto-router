@@ -1,9 +1,9 @@
 """No model loads, routing calls, network access, or production writes."""
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[1] / "experiments" / "typed_decision_shadow.py"
 SPEC = importlib.util.spec_from_file_location("decision_shadow", SOURCE)
