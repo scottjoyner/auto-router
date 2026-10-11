@@ -14,7 +14,7 @@ import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-ROUTES = ("/admin/providers", "/admin/context", "/admin/circuits", "/admin/agent-workers")
+ROUTES = ("/admin/providers", "/admin/providers/effective", "/admin/providers/health", "/admin/context", "/admin/circuits", "/admin/agent-workers")
 TAILNET = ipaddress.ip_network("100.64.0.0/10")
 PRIVATE = tuple(ipaddress.ip_network(x) for x in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
