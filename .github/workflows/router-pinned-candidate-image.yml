@@ -158,7 +158,7 @@ jobs:
           candidate = os.environ["CANDIDATE_ID"]
           assert candidate.startswith("sha256:") and len(candidate) == 71
           Path(os.environ["RUNNER_TEMP"], "router-candidate.override.yml").write_text(
-              "services:\\n  llm-router:\\n    image: " + candidate + "\\n"
+              "services:\n  llm-router:\n    image: " + candidate + "\n"
           )
           PY
           echo "undelivered_archive_size_bytes=$bytes"
@@ -214,7 +214,7 @@ jobs:
           assert obj["production_admission_authorized"] is False
           assert obj["credential_custody_verified"] is False
           override = (root / "router-candidate.override.yml").read_text()
-          assert override == "services:\\n  llm-router:\\n    image: " + obj["candidate_image_id"] + "\\n"
+          assert override == "services:\n  llm-router:\n    image: " + obj["candidate_image_id"] + "\n"
           print("offline_artifact_bytes_and_release_metadata=PASS")
           PY
           docker compose -f router-candidate.override.yml config -q
