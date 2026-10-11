@@ -1,0 +1,56 @@
+name: Von CPU research source-only tests
+
+on:
+  push:
+    branches:
+      - experiment/von-cpu-isolated-pilot-20261011
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-only-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install lint checker only (no Von SDK or model weights)
+        run: python -m pip install 'ruff>=0.6,<1'
+      - name: Validate offline shadow scorer and synthetic policy fixtures
+        run: |
+          python -m unittest discover -s tests -p 'test_*shadow.py' -q
+          python -m unittest discover -s tests -p 'test_synthetic_decision_challenge.py' -q
+      - name: Validate pinned CPU pilot, matched prompts and defer-option ablation
+        run: |
+          python -m unittest discover -s tests -p 'test_von_cpu_pilot.py' -q
+          python -m unittest discover -s tests -p 'test_von_matched_wording.py' -q
+          python -m unittest discover -s tests -p 'test_von_abstention_ablation.py' -q
+      - name: Strict source-only lint
+        run: |
+          ruff check \
+            experiments/typed_decision_shadow.py \
+            experiments/von_choice_shadow.py \
+            experiments/build_synthetic_decision_challenge.py \
+            experiments/von_cpu_pilot.py \
+            experiments/von_cpu_controls.py \
+            experiments/von_matched_wording.py \
+            experiments/von_abstention_ablation.py \
+            tests/test_typed_decision_shadow.py \
+            tests/test_von_choice_shadow.py \
+            tests/test_synthetic_decision_challenge.py \
+            tests/test_von_cpu_pilot.py \
+            tests/test_von_matched_wording.py \
+            tests/test_von_abstention_ablation.py
+      - name: Verify no inference and no writes beyond isolated temporary fixtures
+        run: |
+          scratch=$(mktemp -d /tmp/von-research-ci-XXXXXX)
+          python experiments/von_cpu_pilot.py --workspace "$scratch"
+          python experiments/von_cpu_controls.py --workspace "$scratch"
+          python experiments/von_matched_wording.py --workspace "$scratch"
+          python experiments/von_abstention_ablation.py --workspace "$scratch"
+          test ! -e "$scratch/hf-cache"
+          test ! -e "$scratch/packages"
