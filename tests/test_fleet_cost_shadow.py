@@ -32,14 +32,14 @@ class TestCostShadowAuthority(unittest.TestCase):
         self.assertEqual(value["status"], "RANKED_SYNTHETIC_ONLY")
         self.assertEqual(value["ranked_synthetic_ids"], ["runtime_a", "runtime_b"])
         self.assertEqual(value["eligible_count"], 2)
-        self.assertEqual(value["rank_costs"][0]["latency_upper_ms"], 10100)
+        self.assertEqual(value["rank_costs"][0]["latency_conservative_proxy_ms"], 10100)
 
     def test_energy_prefers_lower_total_joules(self):
         doc = sample()
         doc["request"]["objective"] = "energy_j"
         result = scored(doc)
         self.assertEqual(result["ranked_synthetic_ids"], ["runtime_b", "runtime_a"])
-        self.assertEqual(result["rank_costs"][0]["energy_upper_j"], 765.0)
+        self.assertEqual(result["rank_costs"][0]["energy_conservative_proxy_j"], 765.0)
 
     def test_source_never_claims_real_authority(self):
         value = scored(sample())
