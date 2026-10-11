@@ -272,3 +272,19 @@ def test_basic64_padding_rejects_altered_canonical_encoding():
         [("Authorization", "Basic " + encoded.replace("=", " "))],
         primary_token=padded_primary,
     ) == policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("lookalike", [
+    "X_Admin_Token",
+    "x_admin_token",
+    "X-Admin-Token ",
+    " X-Admin-Token",
+    "X-Admin-Token:",
+    "X-Admin-Token\\r",
+    "X-Admin-Token\\n",
+])
+def test_shadow_header_names_are_denied(lookalike):
+    assert header_check([(lookalike, PRIMARY)]) == policy.AuthenticationDecision.DENY
+    assert header_check(
+        [(lookalike, PREVIOUS), ("X-Admin-Token", PRIMARY)]
+    ) == policy.AuthenticationDecision.DENY
