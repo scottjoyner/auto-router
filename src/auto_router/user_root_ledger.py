@@ -122,7 +122,7 @@ class RootOwnerLedger:
                         """CREATE TABLE IF NOT EXISTS p0_attempt_owner (
                                attempt_hash TEXT PRIMARY KEY,
                                root_hash TEXT NOT NULL,
-                               signer_jti_hash TEXT NOT NULL,
+                               signer_jti_hash TEXT NOT NULL UNIQUE,
                                token_hash TEXT NOT NULL,
                                FOREIGN KEY (root_hash) REFERENCES p0_root_owner(root_hash)
                            )"""
@@ -192,6 +192,14 @@ class RootOwnerLedger:
             elif root != (owner_hash, model_hash):
                 raise RootOwnerConflict("delegated root owner or model conflict")
 
+            # A signed gateway JTI is one-time across the entire ledger,
+            # never just within an owner or root namespace.
+            jti_owner = connection.execute(
+                "SELECT attempt_hash FROM p0_attempt_owner WHERE signer_jti_hash=?",
+                (signer_jti_hash,),
+            ).fetchone()
+            if jti_owner is not None and jti_owner[0] != attempt_hash:
+                raise RootOwnerConflict("delegated signing jti was already reserved")
             attempt = connection.execute(
                 "SELECT root_hash, signer_jti_hash, token_hash "
                 "FROM p0_attempt_owner WHERE attempt_hash=?",
