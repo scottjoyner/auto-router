@@ -71,14 +71,14 @@ def test_no_browser_htmx_actions_target_any_admin_route():
     Keep operator HTTP actions in a separately authenticated service/client,
     not in HTMX, inline JavaScript, query parameters or unreviewed browser JS.
     """
-    # Assert the negative test recognizes the dangerous syntax before scanning.
-    assert re.search(r"hx-post\\s*=\\s*['\\\"]/admin/", 'hx-post="/admin/circuits/reset"')
+    admin_htmx = re.compile(
+        r'\bhx-(?:get|post|put|patch|delete|trigger)\s*=\s*["\']\s*/admin/',
+        flags=re.I,
+    )
+    assert admin_htmx.search('hx-post="/admin/circuits/reset"')
     for template in TPL_ROOT.rglob("*.html"):
         source = template.read_text(encoding="utf-8")
-        assert not re.search(
-            r'\bhx-(?:get|post|put|patch|delete|trigger)\s*=\s*["\']\s*/admin/',
-            source, flags=re.I,
-        ), template
+        assert not admin_htmx.search(source), template
 
 
 def test_previously_live_admin_actions_remain_visible_as_nonclickable_references():
@@ -135,10 +135,12 @@ def test_public_dashboard_templates_redact_raw_runtime_service_destinations():
 
 
 def test_no_direct_jinja_output_of_sensitive_runtime_origin_values():
-    assert re.search(r"\\{\\{\\s*assistx_tasks_url\\b", "{{ assistx_tasks_url }}")
+    sensitive_output = re.compile(
+        r"\{\{\s*(?:assistx_tasks_url|assistx_event_sink_url"
+        r"|gateway\.(?:base_url|openai_base_url))\b",
+    )
+    assert sensitive_output.search("{{ assistx_tasks_url }}")
     for template in TPL_ROOT.rglob("*.html"):
         source = template.read_text(encoding="utf-8")
-        assert not re.search(
-            r"\{\{\s*(?:assistx_tasks_url|assistx_event_sink_url"
-            r"|gateway\.(?:base_url|openai_base_url))\b", source,
-        ), template
+        assert not sensitive_output.search(source), template
+
