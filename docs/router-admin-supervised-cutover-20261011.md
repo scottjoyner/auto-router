@@ -143,7 +143,7 @@ The updated `verify_admin_cutover_readonly.py` now requires anonymous
 **HTTP 401** on all six local checks: providers, effective providers,
 provider health, context, circuits and agent-workers. Offline regressions
 individually simulate HTTP 200 on each endpoint and require HOLD without
-sending credentials or reading bodies. The independent remote four-route
+sending credentials or reading bodies. The independent remote six-route
 Destroyer/Lenovo check remains mandatory; local success is never a substitute
 for either remote receipt.
 
@@ -151,3 +151,14 @@ for either remote receipt.
 own completed exact-head CI results.** The known unpatched router remains
 exposed to its Tailnet peers. Do not execute a router cutover from this
 revised acceptance script or waive P0 AssistX credential custody #156.
+
+## Six-route remote denial parity
+
+Draft remote verification now requires anonymous HTTP 401 on the **same six
+admin endpoints** as the localhost gate. The updated remote checker still
+uses a literal private/Tailnet IPv4, no proxy, no redirects, no credentials,
+no response-body reads and GET requests only. Independent offline tests reject
+200, 302, 403, 404 and 503 on every individual route. Earlier four-route
+remote receipts are insufficient for this new gate; physical postcutover
+receipts must come separately from both Destroyer and Lenovo on the exact
+reviewed candidate head. No production change is authorized by this update.
