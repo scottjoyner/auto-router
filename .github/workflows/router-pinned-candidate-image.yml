@@ -101,11 +101,24 @@ jobs:
           assert len(paths) >= 20, "Unexpected mounted admin route count"
           assert all(any(dep.call is require_admin for dep in r.dependant.dependencies)
                      for r in paths), "Mounted admin route is not guarded"
-          names = sorted({r.path for r in paths if "GET" in r.methods and "{" not in r.path})
-          client = TestClient(app, raise_server_exceptions=False)
-          for path in names:
-              assert client.get(path).status_code == 401
-              assert client.get(path, headers={"X-Admin-Token": "bad-synthetic"}).status_code == 401
+          import re
+          all_methods = sorted({(method, route.path) for route in paths
+                                for method in (route.methods or ())
+                                if method not in ("HEAD", "OPTIONS")})
+          assert any(method == "POST" for method, _ in all_methods), "Missing admin mutation coverage"
+          assert any("{" in path for _, path in all_methods), "Missing dynamic admin coverage"
+          client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
+          for method, route_template in all_methods:
+              # Generate only a disposable synthetic path; never supply a real
+              # circuit owner, provider name, model or workload identifier.
+              route_path = re.sub(r"\\{[^{}]+\\}", "synthetic-denied", route_template)
+              kwargs = {"json": {}} if method in ("POST", "PATCH", "PUT") else {}
+              for headers in ({}, {"X-Admin-Token": "wrong-synthetic"}):
+                  response = client.request(method, route_path, headers=headers, **kwargs)
+                  assert response.status_code == 401, (
+                      f"admin method not denied: {method} {route_template} "
+                      f"status={response.status_code}"
+                  )
           # Strictly synthetic registry, no lifespan, models or network contact.
           state.providers = SimpleNamespace(providers=[])
           response = client.get("/admin/providers/effective",
@@ -117,7 +130,8 @@ jobs:
           assert witness["may_prove_model_loaded"] is False
           assert witness["may_modify_routes"] is False
           print(f"packaged_strict_live_admin_routes={len(paths)}")
-          print(f"anonymous_and_wrong_token_get_paths={len(names)}")
+          print(f"anonymous_and_wrong_token_admin_methods={len(all_methods)}")
+          print("admin_unsafe_methods_and_dynamic_paths_denied=PASS")
           print("synthetic_authorized_sanitized_snapshot=PASS")
           PY
 
@@ -303,11 +317,24 @@ jobs:
           assert len(paths) >= 20
           assert all(any(d.call is require_admin for d in r.dependant.dependencies)
                      for r in paths)
-          client = TestClient(app, raise_server_exceptions=False)
-          for path in ("/admin/providers", "/admin/circuits",
-                       "/admin/agent-workers", "/admin/ops/summary"):
-              assert client.get(path).status_code == 401
+          import re
+          client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
+          all_methods = sorted({(method, route.path) for route in paths
+                                for method in (route.methods or ())
+                                if method not in ("HEAD", "OPTIONS")})
+          assert any(method == "POST" for method, _ in all_methods)
+          assert any("{" in path for _, path in all_methods)
+          for method, template in all_methods:
+              route_path = re.sub(r"\\{[^{}]+\\}", "synthetic-denied", template)
+              kwargs = {"json": {}} if method in ("POST", "PATCH", "PUT") else {}
+              for headers in ({}, {"X-Admin-Token": "wrong-synthetic"}):
+                  response = client.request(method, route_path, headers=headers, **kwargs)
+                  assert response.status_code == 401, (
+                      f"restored image admin method not denied: {method} {template} "
+                      f"status={response.status_code}"
+                  )
           print("reloaded_image_secure_live_route_auth=PASS")
+          print(f"reloaded_admin_http_methods_denied={len(all_methods)}")
           print("reloaded_admin_route_count", len(paths))
           PY
           echo 'Candidate loadability proved on disposable hosted runner only.'
