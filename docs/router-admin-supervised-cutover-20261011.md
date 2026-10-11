@@ -235,3 +235,27 @@ source provenance, Compose digest pinning and the remote admin-401 gates.
 
 This section remains an *operator-controlled release procedure*; it is not
 a request to mutate container tags, images, networks or active services.
+
+## Compose-to-candidate digest resolution (draft preflight hardening)
+
+A digest-pinned Compose service and a separately inspected reviewed candidate
+image are **not enough** to establish the image that would actually be
+selected at cutover. The read-only image-identity preflight must also resolve
+that exact Compose `services.llm-router.image` digest reference against the
+local Docker image store and require its resulting immutable Docker image ID
+to equal the operator-specified candidate image ID. Unavailable references,
+wrong images, floating tags, source-label mismatches and a missing rollback
+image all mean HOLD; the checker does **not** pull, build, deploy or restart.
+
+This is a *local image selection* consistency check, **not** a signature,
+reproducible-build or provenance attestation. An `org.opencontainers.image.revision`
+label can be authored by a builder, and a correct image ID says nothing about
+credential custody, whether the running router has been patched, or whether
+the selected Compose configuration will be used by an authorized deployer.
+The resulting record deliberately reports only reason codes, not image IDs,
+repository digests, credentials, or unreviewed environment values.
+
+New negative tests explicitly reject a syntactically valid Compose digest that
+resolves to a different image. Run the exact-head hosted security contract and
+full CI before treating this preflight as tested; do not infer deployment
+approval from its PASS result or alter production to make it pass.
