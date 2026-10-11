@@ -12,7 +12,7 @@ import os
 import time
 from pathlib import Path
 
-from von_cpu_pilot import HF_REV, admissible_workspace, check_snapshot, physical_preflight
+from von_cpu_pilot import HF_REV, admissible_workspace, check_snapshot, physical_preflight, require_resource_scope
 from von_choice_shadow import decode_response
 
 CASES = [
@@ -55,6 +55,7 @@ CASES = [
 
 def run(work: Path, out: Path) -> dict:
     physical_preflight()
+    require_resource_scope()
     if out.exists() or not out.resolve(strict=False).is_relative_to(work):
         raise ValueError("output must be a new file inside the private /tmp workspace")
     snapshot = work / "hf-cache" / "models--wfzyx--von" / "snapshots" / HF_REV
