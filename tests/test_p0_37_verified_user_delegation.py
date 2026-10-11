@@ -24,7 +24,6 @@ from auto_router.request_idempotency import (
     RequestIdempotencyMiddleware,
 )
 from auto_router.user_delegation import (
-    DelegationError,
     UserDelegationShadowMiddleware,
     install_user_delegation_shadow,
     verify_user_delegation,
