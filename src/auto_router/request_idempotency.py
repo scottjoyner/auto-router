@@ -286,7 +286,10 @@ class RequestIdempotencyMiddleware:
         authorization = _header(scope, b"authorization")
         bearer = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
         jti = _token_jti(bearer)
-        principal = hashlib.sha256(bearer.encode("utf-8")).hexdigest()[:16] if bearer else "anonymous"
+        principal = (
+            hashlib.sha256(bearer.encode("utf-8")).hexdigest()[:16]
+            if bearer else "anonymous"
+        )
         if explicit and len(explicit) > 200:
             await JSONResponse(
                 status_code=400,
