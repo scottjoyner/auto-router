@@ -20,6 +20,7 @@ def inspect(manifest=None, **changes):
         compose=manifest or {"services": {"llm-router": {"image": "git-router@sha256:" + "d"*64}}},
         service="llm-router", candidate_image_id=C, rollback_image_id=R,
         reviewed_source_sha=S, observed_running_image_id=R,
+        observed_container_service="llm-router", observed_container_running=True,
         observed_compose_image_id=C,
         candidate_embedded_revision=S, candidate_present=True, rollback_present=True,
     )
@@ -48,6 +49,8 @@ def test_floating_compose_tag_always_blocks(tag):
     ({"candidate_embedded_revision": "other"}, "IMAGE_REVISION_LABEL_DOES_NOT_MATCH_REVIEWED_SOURCE"),
     ({"candidate_image_id": R}, "CANDIDATE_EQUALS_ROLLBACK"),
     ({"observed_running_image_id": C}, "RUNNING_IMAGE_DIFFERS_FROM_ROLLBACK_REFERENCE"),
+    ({"observed_container_service": "unrelated"}, "RUNNING_CONTAINER_SERVICE_IDENTITY_MISMATCH"),
+    ({"observed_container_running": False}, "ROUTER_CONTAINER_NOT_RUNNING"),
     ({"reviewed_source_sha": "main"}, "REVIEWED_SOURCE_SHA_INVALID"),
     ({"candidate_image_id": "git-router:latest"}, "CANDIDATE_IMAGE_ID_INVALID"),
     ({"rollback_image_id": "sha256:abc"}, "ROLLBACK_IMAGE_ID_INVALID"),
@@ -86,6 +89,10 @@ def test_cli_inspects_selected_compose_digest_not_just_candidate_id(
     def fake_docker_field(args):
         requested.append(tuple(args))
         if args[:2] == ["inspect", "--type"]:
+            if "com.docker.compose.service" in args[4]:
+                return "llm-router"
+            if ".State.Running" in args[4]:
+                return "true"
             return R
         if args[-1] == ref:
             return resolved_compose_id
