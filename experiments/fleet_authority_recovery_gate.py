@@ -11,7 +11,7 @@ import argparse
 import json
 import math
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA = "fleet-authority-recovery-observation-v1"
@@ -59,7 +59,7 @@ def validate(doc: object) -> dict:
         parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("bad UTC timestamp") from exc
-    if parsed.tzinfo != timezone.utc:
+    if parsed.tzinfo != UTC:
         raise ValueError("wrong timezone")
     router = exact(d["router"], ROUTER, "router")
     assistx = exact(d["assistx"], ASSISTX, "assistx")
