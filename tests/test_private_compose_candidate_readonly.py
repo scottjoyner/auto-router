@@ -90,3 +90,72 @@ def test_missing_file_and_invalid_candidate_hold_before_compose_call(monkeypatch
     assert report["decision"] == "HOLD_PRIVATE_COMPOSE"
     report = gate.run_private_preflight([], service="llm-router", expected_image_id="tag:latest")
     assert report["decision"] == "HOLD_PRIVATE_COMPOSE"
+
+
+def test_synthetic_overlay_preserves_entire_non_image_service_shape(monkeypatch, tmp_path):
+    filename = tmp_path / "private.yml"
+    filename.write_text("services: {}\n")
+    original = {
+        "services": {
+            "llm-router": {"image": "mutable-old", "ports": ["0.0.0.0:8088:8088"],
+                           "environment": {"TOKEN": "SYNTHETIC_PRIVATE_VALUE"},
+                           "volumes": ["/private/secret-mount:/run/secrets:ro"]},
+            "redis": {"image": "redis:7-alpine"},
+        },
+        "networks": {"mesh": {"external": True}}, "volumes": {"storage": None},
+    }
+    modified = json.loads(json.dumps(original))
+    modified["services"]["llm-router"].update(image="sha256:" + "c" * 64, pull_policy="never")
+    called = []
+
+    def fake_run(args, **kw):
+        called.append((args, kw))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(original if len(called) == 1 else modified).encode(),
+            stderr=b"PRIVATE",
+        )
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    report = gate.run_synthetic_overlay_check([str(filename)], service="llm-router")
+    assert report["decision"] == "PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY"
+    assert all(report["checks"].values())
+    assert "SYNTHETIC_PRIVATE_VALUE" not in json.dumps(report)
+    assert called[1][0][-6:] == ["-f", "-", "config", "--no-env-resolution", "--format", "json"]
+    assert b"pull_policy: never" in called[1][1]["input"]
+    assert all(word not in called[1][0] for word in ("up", "pull", "down", "build", "restart"))
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ({"ports": ["127.0.0.1:8088:8088"]}, "ROUTER_OTHER_FIELDS_UNCHANGED"),
+    ({"build": "."}, "NO_BUILD_IN_RESOLVED_SERVICE"),
+    ({"image": "wrong:tag"}, "SYNTHETIC_IMAGE_SELECTED"),
+])
+def test_synthetic_override_rejects_unrelated_service_mutation(monkeypatch, tmp_path, mutation, reason):
+    filename = tmp_path / "config.yml"
+    filename.write_text("services: {}\n")
+    before = {"services": {"llm-router": {
+        "image": "old", "pull_policy": "missing", "ports": ["0.0.0.0:8088:8088"],
+    }}}
+    after = json.loads(json.dumps(before))
+    after["services"]["llm-router"].update({"image": "sha256:" + "c" * 64, "pull_policy": "never"})
+    after["services"]["llm-router"].update(mutation)
+    reads = iter((before, after))
+    monkeypatch.setattr(gate.subprocess, "run", lambda *_a, **_kw: SimpleNamespace(
+        returncode=0, stdout=json.dumps(next(reads)).encode(),
+    ))
+    result = gate.run_synthetic_overlay_check([str(filename)], service="llm-router")
+    assert result["decision"] == "HOLD_PRIVATE_COMPOSE"
+    assert reason in result["reason_codes"]
+
+
+def test_synthetic_overlay_rejects_unsafe_service_name_before_running(monkeypatch, tmp_path):
+    filename = tmp_path / "private.yml"
+    filename.write_text("services: {}\n")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("NO COMMAND")
+
+    monkeypatch.setattr(gate.subprocess, "run", forbidden)
+    result = gate.run_synthetic_overlay_check([str(filename)], service="foo:\n  privileged: true")
+    assert result["decision"] == "HOLD_PRIVATE_COMPOSE"
