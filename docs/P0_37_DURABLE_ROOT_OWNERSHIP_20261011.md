@@ -10,7 +10,7 @@ independent provider attestation.
 
 ## Actual code boundary
 
-When `AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED` is **explicitly
+When `AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED` is **explicitly
 enabled** (default is off), strict-live middleware ordering remains:
 
 1. Existing service/executor authentication.
@@ -149,3 +149,11 @@ The default-disabled gate changes routing eligibility and idempotency
 when enabled; despite the `SHADOW` name it is **NOT read-only**.
 The branch is for review only. Do not merge, deploy, or report physical
 two-user receipts until all independent gates are crossed.
+
+
+**Feature-flag safety correction:** only
+`AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED` can activate this
+admission-changing experiment. Setting the historical
+`AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED=true` now fails startup
+rather than implying an observational, safe-to-deploy shadow. Neither flag
+was changed on any live node.
