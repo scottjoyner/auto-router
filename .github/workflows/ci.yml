@@ -213,7 +213,7 @@ jobs:
           test "$duplicate_code" = "409"
 
           # Administrative status must require the local admin token.
-          for path in /admin/quota /admin/admission /admin/runtime-projection /admin/providers /admin/providers/effective /admin/providers/health /admin/context; do
+          for path in /admin/quota /admin/admission /admin/runtime-projection /admin/providers /admin/providers/effective /admin/providers/health /admin/context /admin/ops/summary /admin/ops/preflight; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088$path")
             echo "unauthenticated $path: $code"
             test "$code" = "401"
