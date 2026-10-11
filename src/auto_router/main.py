@@ -692,7 +692,7 @@ async def create_agent_job(request: Request, _: None = Depends(require_admin)) -
 
 
 @app.get("/jobs/agent/{job_id}")
-async def get_agent_job(job_id: str) -> dict[str, Any]:
+async def get_agent_job(job_id: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     record = state.agent_jobs.get(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail={"error": "job not found"})
@@ -700,7 +700,7 @@ async def get_agent_job(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/jobs/agent/{job_id}/artifacts")
-async def get_agent_job_artifacts(job_id: str) -> dict[str, Any]:
+async def get_agent_job_artifacts(job_id: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     record = state.agent_jobs.get(job_id)
     if record is None:
         raise HTTPException(status_code=404, detail={"error": "job not found"})
