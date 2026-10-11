@@ -112,6 +112,7 @@ def verify_user_delegation(
     request_path: str | None = None,
     request_body: dict[str, Any] | None = None,
     require_body_digest: bool = False,
+    original_request_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Validate gateway signature AND exact model scope, no client metadata.
 
@@ -155,11 +156,29 @@ def verify_user_delegation(
             or not re.fullmatch(r"[0-9a-f]{64}", digest)
         ):
             raise DelegationError("invalid signed request scope")
-        if request_path is not None or request_body is not None or require_body_digest:
-            if not isinstance(request_path, str) or not isinstance(request_body, dict):
+        if (
+            request_path is not None or request_body is not None
+            or require_body_digest or original_request_sha256 is not None
+        ):
+            if not isinstance(request_path, str) or request_path != path:
+                raise DelegationError("signed delegated route mismatch")
+            # The real outer executor-auth layer enriches metadata before
+            # this verifier sees the body. It must supply a trusted digest
+            # of ORIGINAL JSON from the authenticated service path. Never
+            # strip "assistx_service" from an altered body to reconstruct
+            # a purported original prompt.
+            if require_body_digest and original_request_sha256 is None:
+                raise DelegationError("original signed request digest unavailable")
+            if original_request_sha256 is not None:
+                observed = original_request_sha256
+            elif isinstance(request_body, dict):
+                observed = delegated_body_digest(request_path, request_body)
+            else:
                 raise DelegationError("delegated request body required")
-            if request_path != path or not hmac.compare_digest(
-                digest, delegated_body_digest(request_path, request_body)
+            if (
+                not isinstance(observed, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", observed)
+                or not hmac.compare_digest(digest, observed)
             ):
                 raise DelegationError("signed delegated request digest mismatch")
     elif schema == "p0-user-shadow-v1" and not require_body_digest:
@@ -208,6 +227,13 @@ def verify_user_delegation(
         "attempt_id": claims["attempt_id"],
         "model_handle": bound_model,
         "jti": claims["jti"],
+        **(
+            {
+                "request_path": claims["request_path"],
+                "request_sha256": claims["request_sha256"],
+            }
+            if schema == "p0-user-shadow-v2" else {}
+        ),
     }
 
 
@@ -321,6 +347,9 @@ class UserDelegationShadowMiddleware:
                 request_path=str(scope.get("path", "")),
                 request_body=body,
                 require_body_digest=self.require_body_digest,
+                original_request_sha256=scope.get(
+                    "auto_router.p0_original_request_sha256"
+                ),
             )
             # Persist the unique owner/model/root/attempt binding BEFORE any
             # downstream idempotency reservation or routing. A repeated
