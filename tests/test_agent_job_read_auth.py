@@ -11,7 +11,7 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from auto_router.secure_live import app, state
+from auto_router.main import app, state
 from auto_router import security
 from auto_router.security import require_admin
 
