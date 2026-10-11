@@ -214,8 +214,6 @@ def test_unknown_benign_headers_are_ignored_but_not_authenticators():
     [("Authorization", "basic " + base64.b64encode(("nonadmin:" + PRIMARY).encode()).decode())],
     [("Authorization", "Basic not_base64")],
     [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode() + "=")],
-    [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode().rstrip("="))],
-    [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode().replace("=", " "))],
     [("Authorization", "Bearer " + PRIMARY), ("Authorization", "Basic " +
         base64.b64encode(("admin:" + PRIMARY).encode()).decode())],
     [],
@@ -256,3 +254,21 @@ def test_header_decision_never_returns_header_or_secret_bytes(capsys):
     assert PRIMARY not in output.out+output.err
     assert PREVIOUS not in output.out+output.err
     assert PRIMARY not in repr(result)
+
+
+def test_basic64_padding_rejects_altered_canonical_encoding():
+    padded_primary = "P" * 49
+    encoded = base64.b64encode(("admin:" + padded_primary).encode("ascii")).decode()
+    assert encoded.endswith("==")
+    assert header_check(
+        [("Authorization", "Basic " + encoded)],
+        primary_token=padded_primary,
+    ) == policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    assert header_check(
+        [("Authorization", "Basic " + encoded.rstrip("="))],
+        primary_token=padded_primary,
+    ) == policy.AuthenticationDecision.DENY
+    assert header_check(
+        [("Authorization", "Basic " + encoded.replace("=", " "))],
+        primary_token=padded_primary,
+    ) == policy.AuthenticationDecision.DENY
