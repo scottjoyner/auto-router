@@ -143,7 +143,7 @@ class TestVonAdapter(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "cases.jsonl"
             write_case(p, sample(), sample(
-                variant="permuted", eligible_options=["node_b"],
+                variant="permuted", eligible_options=["node_a", "node_b"],
                 criteria={"node_b": "Node B", "node_a": "Node A"},
             ))
             with self.assertRaisesRegex(ValueError, "permutation"):
