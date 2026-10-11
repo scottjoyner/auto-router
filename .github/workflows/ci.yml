@@ -213,10 +213,36 @@ jobs:
           test "$duplicate_code" = "409"
 
           # Administrative status must require the local admin token.
-          for path in /admin/quota /admin/admission /admin/runtime-projection; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088$path")
-            echo "unauthenticated $path: $code"
+          # Cover the previously unguarded inherited legacy GET surface,
+          # not only quota and signed-admission routes.
+          for path in /admin/quota /admin/admission /admin/runtime-projection \
+              /admin/providers /admin/providers/health /admin/context \
+              /admin/context/graph /admin/placement /admin/agent-workers \
+              /admin/usage /admin/circuits /admin/agent-jobs; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+              "http://127.0.0.1:8088$path")
+            echo "anonymous admin GET $path: $code"
             test "$code" = "401"
+          done
+
+          # Exercise actual POST handlers only inside this disposable CI router.
+          # Never send admin mutation probes to physical production routers.
+          for path in /admin/load?apply=true /admin/circuits/reset \
+              /admin/circuits/reset/synthetic-denied; do
+            for auth in anonymous wrong-token; do
+              if test "$auth" = wrong-token; then
+                code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                  -X POST -H 'Content-Type: application/json' \
+                  -H 'X-Admin-Token: wrong-synthetic' -d '{}' \
+                  "http://127.0.0.1:8088$path")
+              else
+                code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                  -X POST -H 'Content-Type: application/json' -d '{}' \
+                  "http://127.0.0.1:8088$path")
+              fi
+              echo "$auth admin POST: $code"
+              test "$code" = "401"
+            done
           done
 
           # The same endpoints succeed with the local admin token.
