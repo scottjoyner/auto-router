@@ -49,3 +49,32 @@ Report: answered coverage; accuracy-on-answered; unavailable/error cases; output
 No new inference processes, live routing policy, agent dispatch, permissions, admission/claims, database schema, background scanner, NAS writes, or hosted providers are introduced.
 
 Keep [PR #35](https://github.com/scottjoyner/auto-router/pull/35), [PR #36](https://github.com/scottjoyner/auto-router/pull/36), [PR #42](https://github.com/scottjoyner/auto-router/pull/42), and [issue #37](https://github.com/scottjoyner/auto-router/issues/37) independently gated. A configured route, model prediction and physical model execution are distinct facts.
+
+
+## Explicitly gated Von Choice local-wire adapter (draft experiment)
+
+This repository also contains:
+- experiments/von_choice_shadow.py: stdlib-only adapter for an **already-running, operator-controlled** Von server bound to 127.0.0.1.
+- tests/test_von_choice_shadow.py: simulated HTTP server plus strict validation tests; simulated responses are **not actual inference**.
+- experiments/fixtures/von_choice_curated_synthetic.jsonl: entirely fictional four-row case fixture, option permutation and missing-evidence case.
+
+Run non-network validation FIRST:
+
+    python3 experiments/von_choice_shadow.py experiments/fixtures/von_choice_curated_synthetic.jsonl
+
+Do NOT execute against a live Von server until an operator separately pins weights/calibration, ensures loopback-only service binding, disables silent truncation with VON_ON_OVERFLOW=refuse, and approves CPU/RAM/disk budgets. The command below is illustrative; CI does not run it:
+
+    python3 experiments/von_choice_shadow.py experiments/fixtures/von_choice_curated_synthetic.jsonl \
+      --execute --ack-sanitized --ack-preloaded \
+      --model-revision von-1.3.0 --url http://127.0.0.1:8000 \
+      --out /tmp/von-choice-observations-unique.jsonl
+
+**Calling a preexisting Von server may trigger its lazy multi-GB weight download/load.** The adapter never starts a server or installs packages/weights itself. Acknowledgment flags do NOT attest that the model was already loaded; they require the operator to accept this risk. This experiment sends only operator-curated fictional cases, no real fleet secrets or user data.
+
+The HTTP contract derives from official upstream wfzyx/von files src/von/server.py, src/von/engine.py, and src/von/types.py reviewed 2026-10-11. The adapter checks version von-1.3.0, a single Choice answer and a complete finite probability distribution. It rejects both body-level and header-level truncation. Its stored confidence is the probability of the chosen option, not necessarily the response's separately named confidence metric.
+
+Only Choice is in scope. Noul/Score need separate semantics and calibration review. Pattern filtering cannot guarantee text is sanitized: inputs require independent manual review. The adapter outputs allowlisted records to a **new /tmp file** (mode 0600), never appends or overwrites, and cannot route workloads.
+
+The comparison scorer can consume these new observations when joined to separately generated observations from matching, independently labeled cases. A local HTTP response is not physical model execution attestation, and source_kind/model_revision fields remain declared assertions.
+
+**As of this checkpoint, no actual Von model inference was performed on x1-370**; all protocol tests use an intentionally fake HTTP server.
