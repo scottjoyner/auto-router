@@ -392,7 +392,7 @@ def test_large_delegated_request_is_rejected_before_downstream_execution(
                 "max_tokens": 8,
             },
         )
-    assert response.status_code == 401
+    assert response.status_code == 413
     assert observed == []
     with sqlite3.connect(ledger.path) as db:
         assert db.execute(
