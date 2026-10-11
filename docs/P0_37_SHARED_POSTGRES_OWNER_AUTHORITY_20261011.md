@@ -199,3 +199,40 @@ independently authenticated human ingress, safe trusted-header treatment,
 and gateway-signed per-user delegation. Until that real trusted boundary
 is proven, even a consistent PostgreSQL reservation is only a signed
 gateway assertion, not verified attribution to a human.
+
+## Cross-repository signed-IdP-to-shared-Postgres experiment
+
+The optional `tests/test_p0_37_cross_repo_oidc_pg.py` runs **only** with
+explicit `P0_37_TEST_EPHEMERAL=1`, a disposable loopback PostgreSQL DSN,
+and `P0_37_TEST_ASSISTX_OIDC_MODULE` pointing to the checked-out
+[AssistX draft #298](https://github.com/scottjoyner/auto-assist/pull/298)
+module. Without those gates it skips.
+
+A real `cryptography` RS256 test IdP signs two distinct, fictional A/B
+subjects. The AssistX gateway module verifies both identities through a
+pinned test JWKS and static roster, creates exact Ed25519 router
+delegations, and forwards **only generated** request headers and bounded
+model JSON through HTTPX ASGITransport to two independent FastAPI router
+instances. Those instances use actual executor authentication, the PR #48
+verified-delegation middleware, the same disposable PostgreSQL primary
+and existing idempotency middleware. The model endpoint is a **stub**
+with no actual inference.
+
+**x1-370 observed:** cross-repository test **1 PASS** at router code SHA
+`c5f5f77ad5adbfdaeb01fc033d36d661e7fde873`, before the
+subsequent AssistX HTTPX `trust_env=False` hardening. The test proves:
+
+- Both distinct *test* IdP subjects are forwarded as different validated
+  actor scopes; both requests are accepted through one shared authority.
+- No caller-supplied `user`, `metadata`, or an unknown IdP subject is
+  promoted to verified identity or forwarded.
+- Missing shared authority returns **503 before routing**; no local
+  SQLite fallback or unverified provider retry occurs.
+- `provider_execution_attested` and `response_delivered` do not appear
+  in verified actor scope, and stub success is **not** physical inference
+  evidence.
+
+This is an inter-repository software boundary experiment, **not** a
+live multi-host deployment, real human authentication, physical-device test,
+or encrypted trace-custody acceptance. The user-facing gateway route and
+any production model provider have not been exercised end-to-end.
