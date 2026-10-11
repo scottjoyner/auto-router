@@ -135,14 +135,17 @@ class _FixtureGateway:
             "attempt_id", "model_handle", "iat", "exp",
         }:
             raise PermissionError("invalid delegation schema")
-        if payload["iss"] != "disposable-shadow-gateway" or payload["aud"] != "auto-router-shadow-only":
+        if (payload["iss"] != "disposable-shadow-gateway"
+                or payload["aud"] != "auto-router-shadow-only"):
             raise PermissionError("invalid delegation audience")
         if type(payload["iat"]) is not int or type(payload["exp"]) is not int:
             raise PermissionError("invalid delegation times")
         if payload["iat"] > self.clock() + 1 or payload["exp"] <= self.clock():
             raise PermissionError("expired or premature delegation")
-        if not all(isinstance(payload[field], str) and 0 < len(payload[field]) <= 128
-                   for field in ("tenant", "subject", "root_request_id", "attempt_id", "model_handle")):
+        if not all(
+            isinstance(payload[field], str) and 0 < len(payload[field]) <= 128
+            for field in ("tenant", "subject", "root_request_id", "attempt_id", "model_handle")
+        ):
             raise PermissionError("invalid delegation identifiers")
         return payload
 
@@ -239,7 +242,9 @@ def users():
 
 
 @pytest.mark.asyncio
-async def test_two_authenticated_users_overlap_on_same_configured_model_and_cannot_cross_read(users):
+async def test_two_authenticated_users_overlap_on_same_configured_model_and_cannot_cross_read(
+    users,
+):
     gateway, ledger, _keys, sessions, alice, bob = users
     ready = asyncio.Event()
     arrived = []
