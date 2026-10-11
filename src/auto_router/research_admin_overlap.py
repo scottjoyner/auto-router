@@ -9,6 +9,7 @@ from __future__ import annotations
 from enum import Enum
 import base64
 import binascii
+import re
 import secrets
 
 MAX_OVERLAP_SECONDS = 900
@@ -144,11 +145,15 @@ def evaluate_experimental_header_set(
             not isinstance(name, str) or not name.isascii()
             or not isinstance(value, str) or not value.isascii()
             or not 1 <= len(name) <= 128 or len(value) > 2048
-            or not all(33 <= ord(x) <= 126 for x in name)
+            or re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) is None
             or not all(32 <= ord(x) <= 126 for x in value)
         ):
             return AuthenticationDecision.DENY
         normalized = name.lower()
+        # Some proxies/frameworks map underscores to hyphens. Refuse an
+        # auth-header lookalike rather than risk an inconsistent interpretation.
+        if normalized != "x-admin-token" and normalized.replace("_", "-") == "x-admin-token":
+            return AuthenticationDecision.DENY
         if normalized == "x-admin-token":
             found.append(value)
         elif normalized == "authorization":
