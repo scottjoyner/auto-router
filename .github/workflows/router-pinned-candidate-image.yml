@@ -1,0 +1,165 @@
+name: Router Pinned Candidate Image (Undeployed)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "Dockerfile"
+      - "src/**"
+      - "config/**"
+      - "pyproject.toml"
+      - ".github/workflows/router-pinned-candidate-image.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-attest-undeployed-candidate:
+    if: github.head_ref == 'security/effective-provider-snapshot-20261010'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact PR source with no persisted Git credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse source drift or environment-variant build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+          git diff --quiet
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          copied = [
+              pathlib.PurePosixPath(s.decode("utf-8", "surrogateescape"))
+              for s in tracked if s.startswith((b"src/", b"config/"))
+          ]
+          forbidden = [p for p in copied if p.name.lower() == ".env"
+                       or p.name.lower().startswith((".env.", ".env-", ".env_"))]
+          if forbidden:
+              raise SystemExit("Environment-variant path found in image build inputs")
+          print("tracked_copied_environment_variant_paths=0")
+          PY
+
+      - name: Resolve precise upstream Python image digest in runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull python:3.12-slim >/dev/null
+          base_ref="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          case "$base_ref" in
+            *@sha256:*) ;;
+            *) echo '::error::Python image is not resolved to a registry digest'; exit 1 ;;
+          esac
+          echo "BASE_REF=$base_ref" >> "$GITHUB_ENV"
+
+      - name: Build candidate with exact source label on disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="auto-router-pr41-undeployed:$REVIEWED_SHA"
+          docker build --pull=false --progress=plain \
+            --build-arg "PYTHON_BASE=$BASE_REF" \
+            --build-arg "SOURCE_REVISION=$REVIEWED_SHA" \
+            -t "$tag" .
+          id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$REVIEWED_SHA"
+          case "$id" in sha256:*) ;; *) exit 1 ;; esac
+          echo "CANDIDATE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "CANDIDATE_ID=$id" >> "$GITHUB_ENV"
+
+      - name: Verify actual packaged strict-live ASGI app without network
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-build-canary-only \
+            --entrypoint python "$CANDIDATE_TAG" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app, state
+          from auto_router.security import require_admin
+          from types import SimpleNamespace
+
+          paths = [r for r in app.router.routes if isinstance(r, APIRoute)
+                   and r.path.startswith("/admin/")]
+          assert len(paths) >= 20, "Unexpected mounted admin route count"
+          assert all(any(dep.call is require_admin for dep in r.dependant.dependencies)
+                     for r in paths), "Mounted admin route is not guarded"
+          names = sorted({r.path for r in paths if "GET" in r.methods and "{" not in r.path})
+          client = TestClient(app, raise_server_exceptions=False)
+          for path in names:
+              assert client.get(path).status_code == 401
+              assert client.get(path, headers={"X-Admin-Token": "bad-synthetic"}).status_code == 401
+          # Strictly synthetic registry, no lifespan, models or network contact.
+          state.providers = SimpleNamespace(providers=[])
+          response = client.get("/admin/providers/effective",
+                                headers={"X-Admin-Token": "synthetic-build-canary-only"})
+          assert response.status_code == 200
+          witness = response.json()
+          assert witness["schema_version"] == 1
+          assert witness["provider_count"] == 0
+          assert witness["may_prove_model_loaded"] is False
+          assert witness["may_modify_routes"] is False
+          print(f"packaged_strict_live_admin_routes={len(paths)}")
+          print(f"anonymous_and_wrong_token_get_paths={len(names)}")
+          print("synthetic_authorized_sanitized_snapshot=PASS")
+          PY
+
+      - name: Export reviewed-image archive and metadata (never a deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/router-candidate-$REVIEWED_SHA.docker.tar.gz"
+          docker save "$CANDIDATE_TAG" | gzip -1 > "$archive"
+          bytes="$(stat -c %s "$archive")"
+          test "$bytes" -gt 1000000
+          test "$bytes" -lt 1073741824 || { echo '::error::Archive exceeds 1 GiB'; exit 1; }
+          sha256sum "$archive" | awk '{print $1}' > "$RUNNER_TEMP/router-candidate-archive.sha256"
+          REVIEWED_SHA="$REVIEWED_SHA" BASE_REF="$BASE_REF" CANDIDATE_ID="$CANDIDATE_ID" \
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import datetime
+          p = Path(os.environ["RUNNER_TEMP"]) / "router-candidate-metadata.json"
+          p.write_text(json.dumps({
+              "schema": "auto-router-pr41-undeployed-candidate-v1",
+              "reviewed_git_sha": os.environ["REVIEWED_SHA"],
+              "python_base_digest_ref": os.environ["BASE_REF"],
+              "candidate_image_id": os.environ["CANDIDATE_ID"],
+              "candidate_is_deployed": False,
+              "production_admission_authorized": False,
+              "credential_custody_verified": False,
+              "build_source": "exact_public_pr_checkout_no_runtime_secrets",
+              "observed_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          }, sort_keys=True, indent=2) + "\n")
+          PY
+          echo "undelivered_archive_size_bytes=$bytes"
+          echo 'No production host, model, credential, router endpoint or NAS was contacted.'
+
+      - name: Retain test candidate as short-lived workflow artifact, not release
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr41-undelivered-image-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/router-candidate-${{ github.event.pull_request.head.sha }}.docker.tar.gz
+            ${{ runner.temp }}/router-candidate-archive.sha256
+            ${{ runner.temp }}/router-candidate-metadata.json
+          retention-days: 3
+          if-no-files-found: error
