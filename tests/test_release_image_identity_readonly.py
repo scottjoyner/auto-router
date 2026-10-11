@@ -20,6 +20,7 @@ def inspect(manifest=None, **changes):
         compose=manifest or {"services": {"llm-router": {"image": "git-router@sha256:" + "d"*64}}},
         service="llm-router", candidate_image_id=C, rollback_image_id=R,
         reviewed_source_sha=S, observed_running_image_id=R,
+        observed_compose_image_id=C,
         candidate_embedded_revision=S, candidate_present=True, rollback_present=True,
     )
     args.update(changes)
@@ -53,6 +54,21 @@ def test_floating_compose_tag_always_blocks(tag):
 ])
 def test_missing_identity_metadata_is_hold(changes, reason):
     assert reason in inspect(**changes)["reason_codes"]
+
+
+@pytest.mark.parametrize("resolved_id", ["", R, "sha256:" + "e" * 64, "garbage"])
+def test_compose_digest_must_resolve_to_reviewed_candidate_id(resolved_id):
+    report = inspect(observed_compose_image_id=resolved_id)
+    assert report["decision"] == "HOLD_IMAGE_IDENTITY"
+    assert "COMPOSE_DIGEST_DOES_NOT_RESOLVE_TO_CANDIDATE" in report["reason_codes"]
+    assert report["deployment_authorized"] is False
+
+
+def test_immutable_digest_syntax_does_not_establish_candidate_mapping():
+    # A valid pin naming a different local image must never qualify the chosen candidate.
+    manifest = {"services": {"llm-router": {"image": "git-router@sha256:" + "e" * 64}}}
+    report = inspect(manifest, observed_compose_image_id=R)
+    assert "COMPOSE_DIGEST_DOES_NOT_RESOLVE_TO_CANDIDATE" in report["reason_codes"]
 
 
 def test_missing_or_buildable_service_never_certifies_image():
