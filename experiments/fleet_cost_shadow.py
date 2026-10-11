@@ -32,7 +32,8 @@ RUNTIME_FIELDS = {
     "process_id", "reservation_id",
 }
 TELEMETRY_FIELDS = {
-    "runtime_id", "sampled_at_ms", "sample_count", "ttft_p95_ms",
+    "runtime_id", "model_id", "task_class", "process_id",
+    "sampled_at_ms", "sample_count", "ttft_p95_ms",
     "token_rate_p10", "watts_p95", "quality_lower_bound",
     "battery_remaining_wh", "dependency_watts", "battery_sampled_at_ms",
 }
@@ -79,7 +80,6 @@ def validate(bundle: object) -> dict:
     _id(b["snapshot_id"], "snapshot id")
     now = _int(b["as_of_ms"], "as_of_ms", minimum=1)
     _time(b["authority_observed_ms"], now, MAX_ELIGIBILITY_AGE_MS, "authority timestamp")
-    _time(b["authority_expires_ms"], now, 2**63 - 1, "authority expires") if False else None
     expiration = _int(b["authority_expires_ms"], "authority_expires_ms")
     if not now < expiration <= now + MAX_ELIGIBILITY_AGE_MS:
         raise ValueError("authority snapshot expired or excessively future-valid")
@@ -98,7 +98,7 @@ def validate(bundle: object) -> dict:
         raise ValueError("runtimes/telemetry must be lists")
     if len(b["runtimes"]) > 64 or len(b["telemetry"]) > 64:
         raise ValueError("bounded fleet-size budget exceeded")
-    runtime_ids, telemetry_ids = set(), set()
+    runtime_ids, process_ids, reservation_ids, telemetry_ids = set(), set(), set(), set()
     for entry in b["runtimes"]:
         a = _keys(entry, RUNTIME_FIELDS, "runtime evidence")
         for field in ("runtime_id", "node_id", "owner_id", "request_id",
@@ -107,6 +107,10 @@ def validate(bundle: object) -> dict:
         if a["runtime_id"] in runtime_ids:
             raise ValueError("duplicated or contradictory runtime authority")
         runtime_ids.add(a["runtime_id"])
+        if a["process_id"] in process_ids or a["reservation_id"] in reservation_ids:
+            raise ValueError("duplicated physical process or reservation identity")
+        process_ids.add(a["process_id"])
+        reservation_ids.add(a["reservation_id"])
         if not isinstance(a["capabilities"], list) or not a["capabilities"] or (
                 len(a["capabilities"]) != len(set(a["capabilities"]))):
             raise ValueError("invalid capability set")
@@ -124,7 +128,8 @@ def validate(bundle: object) -> dict:
             raise ValueError("invalid lease interval")
     for entry in b["telemetry"]:
         t = _keys(entry, TELEMETRY_FIELDS, "telemetry evidence")
-        _id(t["runtime_id"], "telemetry runtime")
+        for field in ("runtime_id", "model_id", "task_class", "process_id"):
+            _id(t[field], "telemetry " + field)
         if t["runtime_id"] in telemetry_ids:
             raise ValueError("duplicated or contradictory telemetry")
         telemetry_ids.add(t["runtime_id"])
@@ -193,6 +198,11 @@ def rank(bundle: object) -> dict:
         t = telemetry.get(runtime_id)
         if t is None:
             blockers.append([runtime_id, "telemetry_missing"])
+            continue
+        if (t["model_id"] != a["model_id"] or
+                t["task_class"] != r["task_class"] or
+                t["process_id"] != a["process_id"]):
+            blockers.append([runtime_id, "telemetry_model_process_mismatch"])
             continue
         if t["sample_count"] < MIN_SAMPLES:
             blockers.append([runtime_id, "insufficient_samples"])
