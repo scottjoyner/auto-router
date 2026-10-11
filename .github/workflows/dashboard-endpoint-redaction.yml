@@ -1,0 +1,52 @@
+name: Public Dashboard Endpoint URL Redaction (Draft)
+
+on:
+  pull_request:
+    paths:
+      - "src/auto_router/main.py"
+      - "src/auto_router/ops_dashboard_routes.py"
+      - "src/auto_router/templates/fragments/dashboard_summary.html"
+      - "src/auto_router/templates/fragments/ops_summary.html"
+      - "tests/test_public_dashboard_endpoint_redaction.py"
+      - ".github/workflows/dashboard-endpoint-redaction.yml"
+  push:
+    paths:
+      - "src/auto_router/main.py"
+      - "src/auto_router/ops_dashboard_routes.py"
+      - "src/auto_router/templates/fragments/dashboard_summary.html"
+      - "src/auto_router/templates/fragments/ops_summary.html"
+      - "tests/test_public_dashboard_endpoint_redaction.py"
+      - ".github/workflows/dashboard-endpoint-redaction.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  public-html-url-redaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated no-service test dependencies
+        run: python -m pip install "pytest>=8,<10" "jinja2>=3,<4"
+      - name: Compile public template handlers and parse Jinja fragments
+        run: |
+          python -m py_compile src/auto_router/main.py src/auto_router/ops_dashboard_routes.py
+          python - <<'PY'
+          from pathlib import Path
+          import jinja2
+          env = jinja2.Environment(autoescape=True)
+          for name in ("dashboard_summary", "ops_summary"):
+              path = Path("src/auto_router/templates/fragments") / (name + ".html")
+              env.parse(path.read_text())
+          print("both_jinja_fragments_syntax_valid=True")
+          PY
+      - name: Test synthetic userinfo/query secret redaction and public context
+        run: python -m pytest -q --noconftest tests/test_public_dashboard_endpoint_redaction.py
+      - name: Confirm no live production access
+        run: echo 'metadata_and_synthetic_templates_only=true'
