@@ -1,0 +1,64 @@
+{
+  "schema": "auto-router.ingress-containment-readonly-evidence.v1",
+  "observed_date_utc": "2026-10-11",
+  "node": "x1-370",
+  "script_source_commit": "52b9ebb66008613d61cc25ae6c863e9d211e8ffb",
+  "method": "reviewed exact-source read-only Docker metadata and nonprivileged firewall visibility checks, via Fleet Commander",
+  "decision": "HOLD_OWNER_CONTROLS_REQUIRED",
+  "router_running": true,
+  "router_published_wildcard_ipv4": true,
+  "router_published_wildcard_ipv6": true,
+  "observed_consumers": {
+    "assistx-api": {
+      "running": true,
+      "shared_docker_network_with_router": true,
+      "configured_admin_origin_scheme": "HTTP",
+      "configured_origin_port": 8088,
+      "admin_token_configured": true
+    },
+    "assistx-worker": {
+      "running": true,
+      "shared_docker_network_with_router": false,
+      "configured_admin_origin_scheme": "HTTP",
+      "configured_origin_port": 8088,
+      "admin_token_configured": true
+    },
+    "assistx-hermes-adapter": {
+      "running": true,
+      "shared_docker_network_with_router": false,
+      "configured_admin_origin_scheme": "HTTP",
+      "configured_origin_port": 8088,
+      "admin_token_configured": true
+    }
+  },
+  "separate_configured_origin_status_receipt": {
+    "all_three_privileged_consumers_resolve_to_rfc1918": true,
+    "all_three_return_unauthorized_401_without_admin_token": true
+  },
+  "reason_codes": [
+    "ADMIN_TOKEN_CONFIGURED_OVER_PLAINTEXT_HTTP",
+    "CLIENT_ACCESSES_ROUTER_ACROSS_DOCKER_NETWORK_BOUNDARY",
+    "FORWARDED_AND_HAIRPIN_SOURCE_IDENTITY_UNVERIFIED",
+    "OWNER_CONTAINMENT_AND_ROLLBACK_APPROVAL_REQUIRED",
+    "PRIVILEGED_NETFILTER_PATH_UNVERIFIED",
+    "ROUTER_PUBLISHED_ON_WILDCARD_HOST_ADDRESS"
+  ],
+  "read_only_sudo_available": false,
+  "actual_firewall_rule_path_inspected": false,
+  "container_post_nat_source_address_identity_verified": false,
+  "operator_containment_or_rollback_approved": false,
+  "credential_history_custody_issue": "https://github.com/scottjoyner/auto-assist/issues/156",
+  "four_service_transport_rotation_issue": "https://github.com/scottjoyner/auto-assist/issues/299",
+  "live_anonymous_admin_exposure_issue": "https://github.com/scottjoyner/auto-router/issues/40",
+  "live_router_patched": false,
+  "pre_cutover_remote_evidence": "docs/evidence/router-admin-two-remote-six-route-precutover-20261011.json",
+  "security_interpretation": "Network membership is not equivalent to actual firewall-observed packet source after Docker forwarding/hairpin NAT. Do not draft source-IP allow rules or bind-only localhost as a shortcut. Owner must privately verify effective dual-stack netfilter interception and per-consumer continuity before any reversible containment.",
+  "response_bodies_read": false,
+  "credential_values_hashes_or_origin_addresses_reported": false,
+  "firewall_rules_printed": false,
+  "routes_changed": false,
+  "firewall_changes": false,
+  "service_restarted": false,
+  "candidate_staged": false,
+  "production_release_authorized": false
+}
