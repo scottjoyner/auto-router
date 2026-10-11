@@ -116,7 +116,7 @@ def main() -> int:
         work = admissible_workspace(a.workspace)
         if not a.execute:
             print(json.dumps({"planned_cases": len(CASES),
-                              "inference_attempted": False, **physical_preflight(False)}))
+                              "inference_attempted": False, **physical_preflight(require_capacity=False)}))
             return 0
         if not a.ack_cpu_impact or a.out is None:
             raise ValueError("execute requires ack and output")
