@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import sys
 import tempfile
 import unittest
@@ -11,9 +12,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "experiments"))
 
-import build_synthetic_decision_challenge as B
-import typed_decision_shadow as E
-import von_choice_shadow as V
+B = importlib.import_module("build_synthetic_decision_challenge")
+E = importlib.import_module("typed_decision_shadow")
+V = importlib.import_module("von_choice_shadow")
 
 
 class TestMechanicalChallenge(unittest.TestCase):
