@@ -1,8 +1,8 @@
 """Mechanical, fictional policy-oracle corpus validation; never calls a model."""
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import sys
 import tempfile
 import unittest
