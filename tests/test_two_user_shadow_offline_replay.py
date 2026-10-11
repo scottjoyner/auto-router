@@ -8,7 +8,6 @@ gateway, production spool, encrypted store or provider execution attestation.
 """
 from __future__ import annotations
 
-import base64
 import json
 import sqlite3
 
