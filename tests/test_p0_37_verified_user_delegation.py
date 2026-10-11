@@ -24,12 +24,12 @@ from auto_router.request_idempotency import (
     RequestIdempotencyLedger,
     RequestIdempotencyMiddleware,
 )
-from auto_router.user_root_ledger import RootOwnerLedger
 from auto_router.user_delegation import (
     UserDelegationShadowMiddleware,
     install_user_delegation_shadow,
     verify_user_delegation,
 )
+from auto_router.user_root_ledger import RootOwnerLedger
 
 _SERVICE = "fixture-shared-service-token"
 _KID = "fixture-human-key-1"
