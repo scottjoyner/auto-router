@@ -24,6 +24,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
 
 from auto_router.request_idempotency import _PROTECTED_PATHS
+from auto_router.user_root_ledger import (
+    RootOwnerConflict,
+    RootOwnerLedger,
+    RootOwnerStorageError,
+    read_pinned_root_secret,
+)
 
 _HEADER = b"x-auto-router-user-delegation"
 _SCOPE_KEY = "auto_router.p0_verified_user_delegation"
@@ -234,11 +240,13 @@ class UserDelegationShadowMiddleware:
     """
 
     def __init__(
-        self, app: Any, *, public_key: Ed25519PublicKey, key_id: str
+        self, app: Any, *, public_key: Ed25519PublicKey, key_id: str,
+        owner_ledger: RootOwnerLedger,
     ) -> None:
         self.app = app
         self.public_key = public_key
         self.key_id = key_id
+        self.owner_ledger = owner_ledger
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if (
@@ -274,10 +282,24 @@ class UserDelegationShadowMiddleware:
                 key_id=self.key_id,
                 model=model,
             )
-            # This value is controlled by the verifier, NOT from JSON metadata
-            # or a client-supplied "user" field. No shared trace is written.
+            # Persist the unique owner/model/root/attempt binding BEFORE any
+            # downstream idempotency reservation or routing. A repeated
+            # signed attempt never forwards again, even after a restart/TTL.
+            created = self.owner_ledger.reserve(bound, delegation)
+            if not created:
+                raise RootOwnerConflict("duplicate delegated attempt")
+            # This is trusted in-process verifier scope, not caller metadata.
+            # It is NOT provider-execution or response-delivery evidence.
             scope[_SCOPE_KEY] = bound
             await self.app(scope, replay, send)
+        except RootOwnerConflict:
+            await JSONResponse(
+                status_code=409, content={"detail": "delegated root/attempt conflict"}
+            )(scope, receive, send)
+        except RootOwnerStorageError:
+            await JSONResponse(
+                status_code=503, content={"detail": "durable owner ledger unavailable"}
+            )(scope, receive, send)
         except DelegationError as exc:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(
                 scope, receive, send
@@ -307,8 +329,20 @@ def install_user_delegation_shadow(app: Any) -> None:
         raise RuntimeError("invalid P0 shadow delegation verification key") from exc
     if not isinstance(public_key, Ed25519PublicKey):
         raise RuntimeError("P0 delegation verification key must be Ed25519")
+    ledger_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE", "")
+    secret_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_HMAC_KEY_FILE", "")
+    if not ledger_file.startswith("/") or not secret_file.startswith("/"):
+        raise RuntimeError("P0 shadow requires separate pinned durable owner ledger and key")
+    try:
+        owner_ledger = RootOwnerLedger(
+            Path(ledger_file), read_pinned_root_secret(secret_file)
+        )
+    except RootOwnerStorageError as exc:
+        raise RuntimeError("P0 durable owner ledger not ready") from exc
     app.add_middleware(
-        UserDelegationShadowMiddleware, public_key=public_key, key_id=key_id
+        UserDelegationShadowMiddleware,
+        public_key=public_key, key_id=key_id,
+        owner_ledger=owner_ledger,
     )
     app.state.p0_user_delegation_shadow_installed = True
 
