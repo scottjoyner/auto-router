@@ -84,6 +84,10 @@ class RootOwnerLedger:
         if self.path.is_symlink():
             raise RootOwnerStorageError("root ledger symlink is forbidden")
         try:
+            if not self.path.parent.exists():
+                raise RootOwnerStorageError("root ledger parent directory is missing")
+            if self.path.parent.is_symlink():
+                raise RootOwnerStorageError("root ledger parent directory symlink forbidden")
             directory = self.path.parent.stat()
             if not stat.S_ISDIR(directory.st_mode):
                 raise RootOwnerStorageError("root ledger parent directory invalid")
