@@ -1,14 +1,10 @@
 name: Emergency Admin Hotfix Pinned Image (Undeployed)
 
 on:
+  # No path filter: require a complete new *exact-head* archived-image
+  # witness even if the runbook/test scope changes on this draft branch.
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "Dockerfile"
-      - "src/**"
-      - "config/**"
-      - "pyproject.toml"
-      - ".github/workflows/emergency-hotfix-pinned-image.yml"
 
 permissions:
   contents: read
