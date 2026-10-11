@@ -74,7 +74,7 @@ def test_no_browser_htmx_actions_target_any_admin_route():
     for template in TPL_ROOT.rglob("*.html"):
         source = template.read_text(encoding="utf-8")
         assert not re.search(
-            r'\\bhx-(?:get|post|put|patch|delete|trigger)\\s*=\\s*["\\\']\\s*/admin/',
+            r'\bhx-(?:get|post|put|patch|delete|trigger)\s*=\s*["\']\s*/admin/',
             source, flags=re.I,
         ), template
 
@@ -99,7 +99,7 @@ def test_previously_live_admin_actions_remain_visible_as_nonclickable_references
             assert f'data-admin-api-path="{path}"' in source
         assert "API auth required" in source
         assert 'X-Admin-Token' in source
-        assert not re.search(r'<button\\b[^>]*hx-(?:post|get)="/admin/', source, flags=re.I | re.S)
+        assert not re.search(r'<button\b[^>]*hx-(?:post|get)="/admin/', source, flags=re.I | re.S)
 
 
 def test_public_dashboard_templates_redact_raw_runtime_service_destinations():
@@ -121,7 +121,7 @@ def test_public_dashboard_templates_redact_raw_runtime_service_destinations():
     counts = 0
     for template in target_files:
         source = (TPL_ROOT / template).read_text(encoding="utf-8")
-        for expression in re.findall(r"\\{\\{([\\s\\S]*?)\\}\\}", source):
+        for expression in re.findall(r"\{\{([\s\S]*?)\}\}", source):
             if "destination hidden" not in expression and "address hidden" not in expression:
                 continue
             counts += 1
@@ -136,6 +136,6 @@ def test_no_direct_jinja_output_of_sensitive_runtime_origin_values():
     for template in TPL_ROOT.rglob("*.html"):
         source = template.read_text(encoding="utf-8")
         assert not re.search(
-            r"\\{\\{\\s*(?:assistx_tasks_url|assistx_event_sink_url"
-            r"|gateway\\.(?:base_url|openai_base_url))\\b", source,
+            r"\{\{\s*(?:assistx_tasks_url|assistx_event_sink_url"
+            r"|gateway\.(?:base_url|openai_base_url))\b", source,
         ), template
