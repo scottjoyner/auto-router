@@ -62,9 +62,9 @@ def test_owner_approval_requires_boolean_true(bad):
     assert check(owner_window_approved=bad) == policy.AuthenticationDecision.DENY
 
 
-@pytest.mark.parametrize("request", [WRONG, "", None, 123, object(), " Q"*25])
-def test_wrong_or_nonstring_credential_denied(request):
-    assert check(request) == policy.AuthenticationDecision.DENY
+@pytest.mark.parametrize("presented", [WRONG, "", None, 123, object(), " Q"*25])
+def test_wrong_or_nonstring_credential_denied(presented):
+    assert check(presented) == policy.AuthenticationDecision.DENY
 
 
 @pytest.mark.parametrize("candidate", ["short", "", None, " Z"*28, "X"*48+" ", "🦊"*48, "X\n"*24])
