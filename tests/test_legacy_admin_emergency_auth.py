@@ -64,11 +64,13 @@ def test_every_legacy_admin_method_denies_before_handler(client, credential):
 
 def test_missing_token_configuration_also_fails_closed(monkeypatch):
     monkeypatch.setattr(security, "get_settings", lambda: SimpleNamespace(admin_token=""))
-    with TestClient(legacy.app, raise_server_exceptions=False, follow_redirects=False) as client:
-        for method, template in _methods()[1]:
-            args = {"json": {}} if method in ("POST", "PUT", "PATCH") else {}
-            result = client.request(method, _synthetic_path(template), **args)
-            assert result.status_code == 401, (method, template, result.status_code)
+    # Do not enter the TestClient context: that would start app lifespan and
+    # background provider work on a developer's real local configuration.
+    client = TestClient(legacy.app, raise_server_exceptions=False, follow_redirects=False)
+    for method, template in _methods()[1]:
+        args = {"json": {}} if method in ("POST", "PUT", "PATCH") else {}
+        result = client.request(method, _synthetic_path(template), **args)
+        assert result.status_code == 401, (method, template, result.status_code)
 
 
 def test_unauthorized_post_never_resets_circuits_or_reconciles_models(monkeypatch, client):
