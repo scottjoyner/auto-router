@@ -39,8 +39,11 @@ def restricted(monkeypatch):
     monkeypatch.setattr(state, "agent_jobs", fake, raising=False)
     monkeypatch.setattr(security, "get_settings", lambda: SimpleNamespace(admin_token=TOKEN))
     # No lifespan: synthetic handler/router check only.
-    with TestClient(app, raise_server_exceptions=False) as client:
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
         yield client, fake
+    finally:
+        client.close()
 
 
 READS = (
