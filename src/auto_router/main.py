@@ -5,6 +5,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -50,7 +51,8 @@ from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
 from auto_router.ui_pages import get_ui_page_sections
 
-templates = Jinja2Templates(directory="src/auto_router/templates")
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(_PACKAGE_ROOT / "templates"))
 
 _start_time = time.time()
 
@@ -371,10 +373,10 @@ setup_logging()
 install_logging_middleware(app)
 
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-static_dir = Path(__file__).resolve().parent / "static"
-static_dir.mkdir(exist_ok=True)
-(static_dir / "vendor").mkdir(exist_ok=True)
+
+# Static files are package assets, never directories created at import time.
+# Installed wheels must import on read-only filesystems.
+static_dir = _PACKAGE_ROOT / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
