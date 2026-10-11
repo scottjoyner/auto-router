@@ -15,6 +15,7 @@ def row(**update):
     data = {
         "case_id": "case1", "model_id": "baseline", "model_revision": "fixed1",
         "task_type": "choice", "variant": "original", "state_sha256": "0" * 64,
+        "question_sha256": "b" * 64,
         "gold": "node_a", "prediction": "node_a", "confidence": .9,
         "eligible_options": ["node_a", "node_b"], "evidence_complete": True,
         "latency_ms": 2.0, "status": "ok", "source_kind": "synthetic",
@@ -91,6 +92,14 @@ class TestDecisionShadow(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "case contract"):
             load_data([row(), row(model_id="qsiv", gold="node_b")])
 
+    def test_cross_model_question_wording_drift_rejected(self):
+        with self.assertRaisesRegex(ValueError, "question contract"):
+            load_data([row(), row(model_id="qsiv", question_sha256="f" * 64)])
+
+    def test_permutation_must_have_different_question_hash(self):
+        with self.assertRaisesRegex(ValueError, "must change the question"):
+            load_data([row(), row(variant="permuted", prediction="node_b")])
+
     def test_revision_mixing_rejected(self):
         with self.assertRaisesRegex(ValueError, "revisions mixed"):
             load_data([row(), row(case_id="case2", model_revision="different")])
@@ -108,7 +117,7 @@ class TestDecisionShadow(unittest.TestCase):
             load_data([row(), row(variant="permuted", state_sha256="f" * 64)])
 
     def test_permutation_stability_count(self):
-        rows, _ = load_data([row(), row(variant="permuted", prediction="node_b")])
+        rows, _ = load_data([row(), row(variant="permuted", prediction="node_b", question_sha256="c" * 64)])
         outcome = E.score(rows, "baseline")
         self.assertEqual(outcome["models"]["baseline"]["permutation_changed"], 1)
         self.assertEqual(outcome["models"]["baseline"]["answered"], 1)
