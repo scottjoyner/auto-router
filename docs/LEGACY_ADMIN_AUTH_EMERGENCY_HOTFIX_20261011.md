@@ -126,37 +126,56 @@ mounts. Preserve the existing image and container until the owner
 independently proves rollback; do not `docker prune`, rebuild the old
 image from a mutable tag, or change storage policy to clear this gate.
 
-## Safer off-host disposable canary opportunity (not staged)
+## Off-host xwing disposable packaged-image canary — PASSED, cleaned
 
-Before any local image action, I inspected read-only Docker availability and
-storage capacity through strict-host-key SSH from x1-370:
+Initial read-only capacity discovery established xwing was safer for a
+nonproduction image test than the 97%-utilized x1 Docker root:
 
-| Fleet node | Docker daemon | Docker root used | Free |
+| Node | Docker daemon | Root storage used | Root storage free |
 |---|---|---:|---:|
-| **xwing** | Reachable | **58.7%** | **655.2 GiB** |
+| **xwing** | Reachable | 58.7% | **655.2 GiB** |
 | Destroyer | Reachable | 84.2% | 74.0 GiB |
-| Lenovo | Docker unavailable | — | — |
-| x1-370 (current router) | Reachable | **97.08%** | **107.04 GiB** |
+| Lenovo | Unavailable | — | — |
+| Production x1-370 | Reachable | **97.08%** | **107.04 GiB** |
 
-[Sanitized per-node capacity witness](evidence/pr55-offhost-disposable-canary-capacity-20261011.json).
+[Initial capacity witness](evidence/pr55-offhost-disposable-canary-capacity-20261011.json).
 
-**Recommendation:** If the owner explicitly approves a *nonproduction*
-physical canary, prefer **xwing** over writing additional Docker layers
-to x1's pressured root. Use only the independently verified reviewed
-immutable image and an isolated, short-lived container: no network,
-no published ports, read-only root, no new privileges, dropped Linux
-capabilities, bounded CPU/memory/PIDs, synthetic authentication values,
-no mounted production paths and automatic cleanup. Verify the restored
-image's revision/digest and all admin-denial routes independently.
-This is a **candidate** selection from storage metadata only; xwing's
-current inference load, reservations, available RAM and safety of
-starting even an isolated test are **not yet approved or verified**.
+**Actual controlled test on October 11:** Using strict-host-key SSH from
+x1-370, xwing downloaded the **exact GitHub Actions artifact from run
+38168673987**, corresponding to reviewed PR #55 source
+`1a8354fbc7e36d98311db8b2b4d18645e17514be`. The test verified the
+archive SHA-256, immutable Docker image ID and embedded source revision
+**before** running a container. Only synthetic `AUTO_ROUTER_ADMIN_TOKEN`
+was supplied. No production settings, mounts, peer URLs or credentials
+were passed.
 
-No image was copied, staged, loaded or removed on xwing, Destroyer,
-Lenovo or x1 as part of this examination. A PASS from xwing would
-validate *off-host packaged runtime behavior*, not production x1
-Compose continuity, firewall security, physical deployment or
-credential custody. Production cutover remains under owner control.
+The temporary test container used `--network none`, read-only root,
+all capabilities dropped, no-new-privileges, no published ports or GPU
+devices, one CPU, 512 MiB RAM, 128 PIDs, bounded temporary filesystems
+and automatic removal. Inside the actual restored packaged application,
+**all 19** registered admin HTTP method/route combinations returned
+HTTP 401 for anonymous and incorrect synthetic tokens, including unsafe
+POSTs and dynamic paths. A synthetic authorized read of the legacy
+providers endpoint succeeded, and **seven packaged HTML templates**
+were checked for privileged browser links/HTMX actions. The candidate
+did **not** load models or contact any production host.
+
+**Independent cleanup recheck:** the exact candidate image tag was
+absent from xwing after the run, no test containers or downloaded
+artifact directories remained, and free Docker storage was still
+about **655.2 GiB**. This is a **real off-host packaged-image canary
+PASS**, not a production deployment or permanent local image staging.
+
+[Sanitized physical canary and cleanup receipt](evidence/pr55-xwing-isolated-image-canary-20261011.json).
+
+**Remaining physical proof:** This did *not* use x1's private production
+Compose values, validate the real authorized worker/Hermes/API traffic
+against an active patched router, prove original-image rollback execution,
+or close historical credential custody, plaintext token transport,
+security-owner approval, and dual-stack remote HTTP-401 acceptance.
+x1 remains unpatched with its original image intact. The temporary
+image used the source SHA above; later documentation-only commits must
+not be represented as the binary that was physically executed.
 
 ## Known legacy client compatibility gaps
 
