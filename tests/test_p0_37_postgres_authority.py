@@ -263,7 +263,6 @@ def test_shared_authority_works_with_insert_select_only_role(authority):
 
     Only a disposable loopback PostgreSQL container is touched.
     """
-    database = psycopg.conninfo.conninfo_to_dict(authority._dsn)["dbname"]
     role = "p0_writer_" + uuid.uuid4().hex[:16]
     password = uuid.uuid4().hex
     admin_dsn = os.environ["P0_37_TEST_PG_DSN"]
