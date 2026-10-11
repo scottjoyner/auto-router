@@ -200,3 +200,87 @@ jobs:
             ${{ runner.temp }}/composed-metadata.json
           retention-days: 3
           if-no-files-found: error
+
+  independent-archive-restore:
+    needs: composed-authorization-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Retrieve archive only from the current successful workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: undeployed-security-composition-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/composed-review
+
+      - name: Verify archived bytes and explicit nonrelease metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/composed-review"
+          archive="router-security-composed-$SOURCE_SHA.docker.tar.gz"
+          test -f "$archive"
+          expected="$(cat composed-archive.sha256)"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          test "$expected" = "$(sha256sum "$archive" | awk '{print $1}')"
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])/"composed-review"
+          data=json.loads((root/"composed-metadata.json").read_text())
+          assert data["schema"]=="draft-threeway-security-composition-v1"
+          assert data["source_sha"]==os.environ["SOURCE_SHA"]
+          assert re.fullmatch("sha256:[0-9a-f]{64}",data["image_id"])
+          assert "@sha256:" in data["base_digest_ref"]
+          for key in ("security_owner_signed_off","credential_custody_closed",
+                      "client_first_deployed","production_authorized"):
+              assert data[key] is False,key
+          print("archive_checksum_and_unreleased_metadata=PASS")
+          PY
+
+      - name: Reload image in independent disposable runner, inspect and probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/composed-review"
+          docker load --input "router-security-composed-$SOURCE_SHA.docker.tar.gz" >/dev/null
+          tag="auto-router-composed-undeployed:$SOURCE_SHA"
+          image_id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$SOURCE_SHA"
+          IMAGE_ID="$image_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])/"composed-review"
+          metadata=json.loads((root/"composed-metadata.json").read_text())
+          assert metadata["image_id"]==os.environ["IMAGE_ID"]
+          PY
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-restore-canary-only \
+            --entrypoint python "$image_id" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app
+          from auto_router.security import require_admin
+          routes=[r for r in app.routes if isinstance(r,APIRoute)]
+          paths={"/jobs/agent/{job_id}","/jobs/agent/{job_id}/artifacts"}
+          protected=[r for r in routes if "GET" in r.methods and r.path in paths]
+          assert len(protected)==2
+          assert all(any(d.call is require_admin for d in r.dependant.dependencies)
+                     for r in protected)
+          client=TestClient(app,raise_server_exceptions=False,follow_redirects=False)
+          for p in ("/admin/providers","/admin/context","/admin/circuits",
+                    "/jobs/agent/synthetic-nonexistent",
+                    "/jobs/agent/synthetic-nonexistent/artifacts"):
+              assert client.get(p).status_code==401,p
+          print("independently_restored_strict_live_auth=PASS")
+          print("independently_restored_sensitive_job_reads=2/2")
+          PY
+          echo 'No production container/image, router listener or credentials touched.'
