@@ -118,22 +118,18 @@ def test_public_dashboard_templates_redact_raw_runtime_service_destinations():
         "fragments/dashboard_summary.html",
         "fragments/ops_summary.html",
     )
-    watched_names = (
-        "assistx_tasks_url", "assistx_event_sink_url",
-        "gateway.base_url", "gateway.openai_base_url",
-    )
     counts = 0
     for template in target_files:
         source = (TPL_ROOT / template).read_text(encoding="utf-8")
         for expression in re.findall(r"\\{\\{([\\s\\S]*?)\\}\\}", source):
-            if not any(name in expression for name in watched_names):
+            if "destination hidden" not in expression and "address hidden" not in expression:
                 continue
             counts += 1
             output = ENV.from_string("{{" + expression + "}}").render(**context)
             assert "SYNTHETIC_BROWSER_SECRET" not in output, template
             assert "private-host.example" not in output, template
             assert "configured" in output, (template, output)
-    assert counts >= 6, "Expected all current public runtime destination displays"
+    assert counts == 6, "Expected exactly six redacted public runtime destination displays"
 
 
 def test_no_direct_jinja_output_of_sensitive_runtime_origin_values():
