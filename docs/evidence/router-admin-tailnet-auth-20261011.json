@@ -105,5 +105,53 @@
       "/admin/circuits",
       "/admin/agent-workers"
     ]
+  },
+  "canonical_verifier_receipt": {
+    "captured_at_utc": "2026-10-11T15:54:19Z",
+    "reviewed_draft_sha": "0e2f7a9588f3fb60a6876788b27b6190d0a12ad3",
+    "local_script": "scripts/verify_admin_cutover_readonly.py",
+    "local_script_sha256": "da590f6ebfd0a45f663dcadcac4028c1e317ef6d1aa571a669e0ef04e3103553",
+    "remote_script": "scripts/verify_remote_admin_auth_readonly.py",
+    "remote_script_sha256": "f15dff85c31dc682b0007f7006a859c0c2e8779b6274b1b33bc13d80a6320f68",
+    "local_anonymous_only": {
+      "decision": "ANONYMOUS_ADMIN_NOT_DENIED",
+      "exit_code": 1,
+      "admin_token_provided": false
+    },
+    "physical_remote_checks": [
+      {
+        "source_node": "destroyer",
+        "decision": "HOLD_REMOTE_ADMIN_AUTH",
+        "exit_code": 1,
+        "status_codes": {
+          "/admin/providers": 200,
+          "/admin/context": 200,
+          "/admin/circuits": 200,
+          "/admin/agent-workers": 200
+        }
+      },
+      {
+        "source_node": "lenovo",
+        "decision": "HOLD_REMOTE_ADMIN_AUTH",
+        "exit_code": 1,
+        "status_codes": {
+          "/admin/providers": 200,
+          "/admin/context": 200,
+          "/admin/circuits": 200,
+          "/admin/agent-workers": 200
+        }
+      }
+    ],
+    "exact_head_portable_tests": 43,
+    "http_methods": [
+      "GET"
+    ],
+    "response_bodies_read": false,
+    "credentials_sent_to_remote_nodes": false,
+    "admin_token_logged": false,
+    "script_writes_to_nodes": false,
+    "production_service_mutated": false,
+    "admission_proven": false,
+    "deployment_authorized": false
   }
 }
