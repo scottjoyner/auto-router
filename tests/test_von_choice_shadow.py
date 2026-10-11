@@ -195,6 +195,14 @@ class TestVonAdapter(unittest.TestCase):
         x = V.decode_response(answer(), {}, sample(), "von-1.3.0")
         self.assertEqual(x, ("node_a", .9))
 
+    def test_choice_must_agree_with_reported_probabilities(self):
+        inconsistent = json.loads(answer())
+        inconsistent["answers"]["shadow_0"]["choice"] = "node_b"
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            V.decode_response(
+                json.dumps(inconsistent).encode(), {}, sample(), "von-1.3.0"
+            )
+
     def test_wrong_model_refused(self):
         with self.assertRaisesRegex(ValueError, "model mismatch"):
             V.decode_response(answer(model="von-other"), {}, sample(), "von-1.3.0")
