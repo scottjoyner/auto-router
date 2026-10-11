@@ -66,7 +66,7 @@ Do NOT execute against a live Von server until an operator separately pins weigh
 
     python3 experiments/von_choice_shadow.py experiments/fixtures/von_choice_curated_synthetic.jsonl \
       --execute --ack-sanitized --ack-preloaded \
-      --model-revision von-1.3.0 --url http://127.0.0.1:8000 \
+      --model-revision von-1.3.0 --url http://127.0.0.1:18051 \
       --out /tmp/von-choice-observations-unique.jsonl
 
 **Calling a preexisting Von server may trigger its lazy multi-GB weight download/load.** The adapter never starts a server or installs packages/weights itself. Acknowledgment flags do NOT attest that the model was already loaded; they require the operator to accept this risk. This experiment sends only operator-curated fictional cases, no real fleet secrets or user data.
@@ -78,3 +78,5 @@ Only Choice is in scope. Noul/Score need separate semantics and calibration revi
 The comparison scorer can consume these new observations when joined to separately generated observations from matching, independently labeled cases. A local HTTP response is not physical model execution attestation, and source_kind/model_revision fields remain declared assertions.
 
 **As of this checkpoint, no actual Von model inference was performed on x1-370**; all protocol tests use an intentionally fake HTTP server.
+
+**Port collision verified on x1-370 (2026-10-11):** 127.0.0.1:8000 is an AssistX API listener, NOT Von. The adapter therefore has no default --url and requires an operator-selected port (example 18051 is illustrative, NOT a confirmed available or serving port). Before any POST, it performs a GET /health and requires service=von-decision-server and engine=von-1.3; mismatches produce no model request and no output evidence file. This is *process-type identity only*, not hash-pinned weight attestation or proof that the server was preloaded. Never bind Von to an occupied production port.
