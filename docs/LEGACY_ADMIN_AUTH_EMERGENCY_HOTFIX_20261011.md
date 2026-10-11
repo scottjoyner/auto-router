@@ -83,6 +83,81 @@ in a browser, untrusted trace, or publicly logged request. The sanitized
 **Do not infer release readiness until all exact-head workflows finish
 successfully; CI jobs on earlier commits are not evidence for later heads.**
 
+## Actual x1-370 private Compose and rollback preflight
+
+The exact reviewed emergency-handoff verifier in
+[`scripts/verify_private_compose_candidate_readonly.py`](../scripts/verify_private_compose_candidate_readonly.py)
+was reused from full PR #41 and executed from **PR #55 head
+`c9a20cf6a545d5de70fcb5c4c505e5bad9c61408`** in a read-only one-shot
+Fleet Commander process. It inspected the real operator
+`compose.auto-router-fleet.yml` stack (one file), not the repository's
+public Compose base. `--synthetic-overlay` passed **eight checks**, including
+entire resolved Compose document parity apart from the synthetic image
+reference and never-pull policy. It did not write an override file, load an
+image, open a router HTTP connection, or print private Compose values.
+
+The unchanged **live** Compose stack correctly returns
+`HOLD_PRIVATE_COMPOSE`, with
+`COMPOSE_IMAGE_NOT_EXACT_CANDIDATE_ID` and
+`COMPOSE_PULL_POLICY_NOT_NEVER`. A synthetic match establishes only that
+a valid *image selection* override is structurally possible. It does not
+validate a particular production image, signatures, runtime peers, or
+postcutover stability.
+
+An independent physical read-only rollback/capacity checkpoint observed:
+
+| Custody / storage property | Result |
+|---|---|
+| Existing `git-router-1` container | Running |
+| Original running image retrievable by immutable ID | **Yes** |
+| Original image virtual size | **~278.8 MiB** |
+| Existing container restart policy | Present |
+| PR #55 GitHub candidate compressed archive | **76,416,730 bytes** |
+| x1 Docker root used / free | **~97.08% / 107.04 GiB** |
+| Reviewed candidate staged on x1 | **No** |
+| Owner-approved rollback execution or storage cleanup | **No** |
+
+[Value-free x1 preflight and archive evidence](evidence/pr55-private-x1-release-preflight-20261011.json).
+
+**Important:** the archive's compressed size is not the same as Docker's
+unpacked layer requirements, nor is `docker image inspect` proof the
+rollback container can restart with its current secrets, networks and
+mounts. Preserve the existing image and container until the owner
+independently proves rollback; do not `docker prune`, rebuild the old
+image from a mutable tag, or change storage policy to clear this gate.
+
+## Known legacy client compatibility gaps
+
+- **AssistX coordination status** already uses an authenticated,
+  no-redirect context probe in
+  [admin script PR #290](https://github.com/scottjoyner/auto-assist/pull/290).
+  The existing docs-sync verifier in that **same branch** also calls the
+  safe probe; do not infer that the corresponding unmerged `main` scripts
+  are migrated. This client-side PR remains separate and must be deployed
+  **before** a router-side auth requirement reaches those callers.
+- `src/auto_router/ui_pages.py` still contains direct browser links to
+  legacy JSON admin routes (providers, context, circuits, agent workers).
+  These links correctly return HTTP **401** once the hotfix is active unless
+  the operator has a trusted server-side authenticated path. **Do not**
+  insert the four-service shared admin token into browser JavaScript,
+  query strings, URLs or public logs to preserve this legacy navigation.
+  A security owner must explicitly accept the temporary 401 UX or
+  approve a separately reviewed safe UI workflow.
+- Authenticated legacy `GET /admin/providers` retains the original full
+  provider serialization, potentially including configuration-sensitive
+  fields. **Only trusted authenticated callers** should receive it.
+  This hotfix does not provide PR #41's sanitized effective-catalog route.
+- Known server-side scripts and browser anchors are **not an exhaustive
+  caller inventory**. Authenticate each actual API, worker and Hermes
+  configured-origin path in owner custody and verify any operational
+  automation before approving the source-only change.
+
+The actual emergency hotfix candidate now has the *source, synthetic
+tests, hosted image and private Compose transformation* evidence. It
+**does not** have signed owner release approval, staged physical candidate,
+privileged Docker network/firewall access review, complete caller
+acceptance, or successful postcutover physical authentication.
+
 ## Security-owner release choices
 
 **Option A — urgent reversible interim ingress containment** may precede
