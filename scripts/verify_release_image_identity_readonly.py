@@ -104,7 +104,8 @@ def main() -> int:
         rollback_id = docker_field([
             "image", "inspect", "--format", "{{.Id}}", args.rollback_image_id
         ])
-        service_item = manifest.get("services", {}).get(args.service, {}) if isinstance(manifest, dict) else {}
+        services = manifest.get("services") if isinstance(manifest, dict) else None
+        service_item = services.get(args.service) if isinstance(services, dict) else None
         compose_ref = service_item.get("image") if isinstance(service_item, dict) else None
         # Reject malformed/option-looking input before passing a YAML value to Docker.
         compose_image_id = docker_field([
