@@ -299,3 +299,29 @@ def test_missing_identity_metadata_denies_new_reservations(tmp_path):
     new_row, new_token = _claim(signer, "bob", _uuid(), _uuid())
     with pytest.raises(RootOwnerStorageError, match="key mismatch"):
         ledger.reserve(new_row, new_token)
+
+
+def test_gateway_jti_cannot_be_reused_for_another_signed_attempt(tmp_path):
+    signer = Ed25519PrivateKey.generate()
+    shared_jti = "same-jti-deliberately-reused"
+    first_token = _token(
+        signer, "alice", claims_changes={"jti": shared_jti}
+    )
+    second_token = _token(
+        signer, "bob", claims_changes={"jti": shared_jti}
+    )
+    first = verify_user_delegation(
+        first_token, public_key=signer.public_key(),
+        key_id="fixture-human-key-1", model="auto/code",
+    )
+    second = verify_user_delegation(
+        second_token, public_key=signer.public_key(),
+        key_id="fixture-human-key-1", model="auto/code",
+    )
+    ledger = _ledger(tmp_path / "jti-global.sqlite")
+    assert ledger.reserve(first, first_token) is True
+    with pytest.raises(RootOwnerConflict, match="signing jti"):
+        ledger.reserve(second, second_token)
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute("SELECT COUNT(*) FROM p0_root_owner").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM p0_attempt_owner").fetchone()[0] == 1
