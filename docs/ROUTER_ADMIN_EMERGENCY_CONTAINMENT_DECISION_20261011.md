@@ -46,6 +46,26 @@ The code-backed containment classifier returned
 
 [Full value-free physical receipt](evidence/router-four-service-containment-hold-20261011.json).
 
+
+### Additional independently verified IPv6 path
+
+After the initial IPv4 checks, x1-370 used the private Tailnet IPv6
+address and authenticated SSH to execute the same six **no-token, no-body**
+GETs from Destroyer and Lenovo. Both returned the *identical* five
+anonymous **200** codes and one effective-route **404** over IPv6.
+[Sanitized IPv6 receipt](evidence/router-admin-tailnet-ipv6-two-remote-precutover-20261011.json).
+This is direct evidence that a **v4-only** ingress restriction cannot
+contain this exposure. It remains private Tailnet scope, **not** a WAN
+reachability claim. An owner must review both families and any split
+DNS/routing paths before a containment rule; simply blocking IPv4 will
+leave the measured IPv6 access path open.
+
+For postcutover authentication acceptance, collect explicit six-route
+anonymous HTTP **401** results from x1-370 and both peers on every
+address family intended to remain reachable. If a family is intentionally
+network-blocked, record its deny result under a separate *network
+containment* gate, never mislabel a timeout/reset as a router 401.
+
 ## The next minimum owner-controlled verification
 
 1. **Privately inspect actual ingress interception.** Authorized host/network
