@@ -100,40 +100,38 @@ class RootOwnerLedger:
             attributes = self._secure_db_stat()
             with closing(self._connect()) as connection, connection:
                 connection.execute("PRAGMA journal_mode=WAL")
-                connection.execute(
-                    """CREATE TABLE IF NOT EXISTS p0_owner_key_check (
-                           singleton INTEGER PRIMARY KEY CHECK (singleton=1),
-                           key_check TEXT NOT NULL
-                       )"""
-                )
-                connection.execute(
-                    """CREATE TABLE IF NOT EXISTS p0_root_owner (
-                           root_hash TEXT PRIMARY KEY,
-                           owner_hash TEXT NOT NULL,
-                           model_hash TEXT NOT NULL
-                       )"""
-                )
-                connection.execute(
-                    """CREATE TABLE IF NOT EXISTS p0_attempt_owner (
-                           attempt_hash TEXT PRIMARY KEY,
-                           root_hash TEXT NOT NULL,
-                           signer_jti_hash TEXT NOT NULL,
-                           token_hash TEXT NOT NULL,
-                           FOREIGN KEY (root_hash) REFERENCES p0_root_owner(root_hash)
-                       )"""
-                )
+                if bootstrap:
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS p0_owner_key_check (
+                               singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+                               key_check TEXT NOT NULL
+                           )"""
+                    )
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS p0_root_owner (
+                               root_hash TEXT PRIMARY KEY,
+                               owner_hash TEXT NOT NULL,
+                               model_hash TEXT NOT NULL
+                           )"""
+                    )
+                    connection.execute(
+                        """CREATE TABLE IF NOT EXISTS p0_attempt_owner (
+                               attempt_hash TEXT PRIMARY KEY,
+                               root_hash TEXT NOT NULL,
+                               signer_jti_hash TEXT NOT NULL,
+                               token_hash TEXT NOT NULL,
+                               FOREIGN KEY (root_hash) REFERENCES p0_root_owner(root_hash)
+                           )"""
+                    )
                 connection.execute("PRAGMA foreign_keys=ON")
                 expected = self._digest("ledger-key-check", "version-1")
                 row = connection.execute(
                     "SELECT key_check FROM p0_owner_key_check WHERE singleton=1"
                 ).fetchone()
                 if row is None:
-                    # A database with populated tables but missing a key check
-                    # must never silently reinitialize with a different key.
-                    previous = connection.execute(
-                        "SELECT 1 FROM p0_root_owner LIMIT 1"
-                    ).fetchone()
-                    if previous:
+                    # Normal runtime never initializes missing identity state,
+                    # even if someone presents an empty replacement SQLite DB.
+                    if not bootstrap:
                         raise RootOwnerStorageError("root ledger key metadata absent")
                     connection.execute(
                         "INSERT INTO p0_owner_key_check (singleton, key_check) VALUES (1, ?)",
