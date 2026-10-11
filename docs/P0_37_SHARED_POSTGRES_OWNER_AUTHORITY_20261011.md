@@ -173,3 +173,29 @@ Additional default-off installer regression tests in
 feature disabled; missing private DSN file; unsafe file permissions;
 non-verified TLS setting; and unsupported authority backend. Each rejects
 without contacting a production database or promoting a human identity.
+
+## Latest exact-head fleet verification (2026-10-11)
+
+Verified on x1-370 at commit `a24f0b56626807b0580e980fc3963218cf210e16`,
+before this documentation-only evidence update:
+
+- Ruff on the shared PostgreSQL authority, middleware integration and
+  PostgreSQL test modules: **PASS**.
+- Disposable PostgreSQL-specific tests: **15 passed**.
+- Disabled-by-default PostgreSQL installer safety tests: **5 passed**.
+- Broad isolated suite with disposable PostgreSQL explicitly enabled:
+  **538 passed, 11 skipped, 1 deselected**, 11.51 seconds.
+- The one deselection remains the independently failing
+  `test_registry_matches_live_hosts` inventory-drift check. **The
+  unfiltered full suite is NOT green**.
+- CI at GitHub has not independently established the exact-head hosted run.
+- Neither AssistX production authentication nor a physical LM Studio
+  inference request was exercised. No production database was queried or
+  mutated. This result does not authorize a two-real-human release.
+
+**Upstream identity dependency:** AssistX
+[issue #297](https://github.com/scottjoyner/auto-assist/issues/297) tracks
+independently authenticated human ingress, safe trusted-header treatment,
+and gateway-signed per-user delegation. Until that real trusted boundary
+is proven, even a consistent PostgreSQL reservation is only a signed
+gateway assertion, not verified attribution to a human.
