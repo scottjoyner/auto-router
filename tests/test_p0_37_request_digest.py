@@ -138,3 +138,16 @@ def test_v1_signature_not_accepted_by_actual_strict_deployment_boundary(
         assert db.execute(
             "SELECT COUNT(*) FROM inference_request_idempotency"
         ).fetchone()[0] == 0
+
+
+def test_router_v2_digest_matches_independent_assistx_golden_vector():
+    # Asserted independently in AssistX's hosted identity workflow.
+    # No shared import makes an accidental change visible in either repo.
+    payload = {
+        "model": "auto/code",
+        "messages": [{"role": "user", "content": "synthetic-only canary"}],
+        "max_tokens": 8,
+    }
+    assert delegated_body_digest(_PATH, payload) == (
+        "6efd8e288e4698a4515ea0f1a882d0a6572831061eb09048dde70fd8f8c9c141"
+    )
