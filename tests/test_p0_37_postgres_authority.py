@@ -339,3 +339,70 @@ def test_disposable_authority_cannot_prove_execution_or_delivery(authority):
     assert "response_delivered" not in claims
     assert "provider_process" not in claims
     assert "provider_execution_attested" not in vars(authority)
+
+
+
+def test_tls_required_mode_denies_loopback_cleartext_even_with_valid_owner(authority):
+    """The disposable port intentionally has no TLS: prod constructor fails."""
+    with pytest.raises(RootOwnerStorageError, match="verified TLS"):
+        PostgresRootOwnerAuthority(
+            authority._dsn,
+            authority._secret,
+            authority.authority_id,
+            require_tls=True,
+        )
+
+
+def test_two_distinct_postgres_primaries_with_same_label_split_brain(authority):
+    """NEGATIVE CONTROL: authority ID and secret do NOT form consensus.
+
+    Deliberately proves two independent databases can separately admit one
+    conflicting root. Operators must provide single-primary fencing, not DNS
+    round-robin, dual-write, or offline-local PostgreSQL forks.
+    """
+    raw = os.environ["P0_37_TEST_PG_DSN"]
+    second_db = "p0_37_fork_" + uuid.uuid4().hex[:20]
+    with psycopg.connect(raw, autocommit=True) as admin:
+        admin.execute("CREATE DATABASE " + second_db)
+        try:
+            fork_dsn = psycopg.conninfo.make_conninfo(raw, dbname=second_db)
+            fork = PostgresRootOwnerAuthority(
+                fork_dsn,
+                authority._secret,
+                authority.authority_id,
+                bootstrap=True,
+                require_tls=False,
+            )
+            signer = Ed25519PrivateKey.generate()
+            root = str(uuid.uuid4())
+            alice, a_token = _claims(signer, "alice", root=root)
+            bob, b_token = _claims(signer, "bob", root=root)
+            assert authority.reserve(alice, a_token)
+            assert fork.reserve(bob, b_token)
+        finally:
+            admin.execute("DROP DATABASE IF EXISTS " + second_db + " WITH (FORCE)")
+
+
+def test_private_dsn_file_requires_verify_full_and_cert_reference(
+    tmp_path,
+):
+    from auto_router.user_root_postgres import read_authority_dsn_file
+
+    path = tmp_path / "p0-owner-dsn"
+    path.write_text(
+        "host=owner.internal port=5432 dbname=p0_owner "
+        "user=p0_writer sslmode=verify-full sslrootcert=/etc/ssl/owner-ca.pem"
+    )
+    path.chmod(0o600)
+    assert "verify-full" in read_authority_dsn_file(str(path))
+    path.chmod(0o644)
+    with pytest.raises(RootOwnerStorageError, match="not private"):
+        read_authority_dsn_file(str(path))
+    path.chmod(0o600)
+    path.write_text(
+        "host=owner.internal dbname=p0_owner user=p0_writer sslmode=require"
+    )
+    with pytest.raises(RootOwnerStorageError, match="verified TLS"):
+        read_authority_dsn_file(str(path))
+    with pytest.raises(RootOwnerStorageError):
+        read_authority_dsn_file("relative/dsn")
