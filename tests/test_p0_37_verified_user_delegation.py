@@ -310,10 +310,9 @@ def test_installer_disabled_unless_opted_in_and_fails_missing_key(
     secret_path.write_bytes(os.urandom(32))
     secret_path.chmod(0o600)
     monkeypatch.setenv("AUTO_ROUTER_P0_ROOT_OWNER_HMAC_KEY_FILE", str(secret_path))
-    monkeypatch.setenv(
-        "AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE",
-        str(tmp_path / "owner-ledger.sqlite"),
-    )
+    ledger_file = tmp_path / "owner-ledger.sqlite"
+    monkeypatch.setenv("AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE", str(ledger_file))
+    RootOwnerLedger(ledger_file, secret_path.read_bytes(), bootstrap=True)
     install_user_delegation_shadow(app)
     assert app.state.p0_user_delegation_shadow_installed is True
 
