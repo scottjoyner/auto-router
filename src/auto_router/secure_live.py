@@ -13,6 +13,7 @@ from auto_router.executor_auth import install_executor_inference_auth
 from auto_router.request_idempotency import install_request_idempotency
 from auto_router.runtime_projection_v2 import RuntimeProjectionManager
 from auto_router.stream_lifecycle import install_stream_lifecycle
+from auto_router.user_delegation import install_user_delegation_shadow
 
 # Replace the compatibility HMAC manager before the ASGI lifespan constructs any
 # runtime state. The mounted production entrypoint therefore accepts only schema-v2
@@ -30,6 +31,9 @@ router_module = main_live_module.main_module
 # being re-exported by the wrapper module.
 install_request_idempotency(app, state, router_module)
 install_stream_lifecycle(router_module)
+# Optional per-human scope is verified only *after* executor service admission
+# and *before* idempotency. Disabled by default; no runtime trace promotion.
+install_user_delegation_shadow(app)
 install_executor_inference_auth(app, state)
 
 __all__ = ["app"]
