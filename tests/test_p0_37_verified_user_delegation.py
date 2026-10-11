@@ -330,3 +330,50 @@ def test_verified_scope_is_explicitly_not_physical_attestation():
     assert "provider_execution_attested" not in claims
     assert "response_delivered" not in claims
     assert "provider_process" not in claims
+
+
+@pytest.mark.parametrize("invalid_token", [
+    "a.b.c",
+    "!!.b.c",
+    "a.b",
+    "A" * 3100,
+])
+def test_malformed_delegation_is_rejected_without_server_error(
+    tmp_path, monkeypatch, invalid_token,
+):
+    signer = Ed25519PrivateKey.generate()
+    app, observed, ledger = _app(tmp_path, monkeypatch, signer)
+    with TestClient(app) as client:
+        response = _request(client, invalid_token)
+    assert response.status_code == 401
+    assert observed == []
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 0
+
+
+def test_large_delegated_request_is_rejected_before_downstream_execution(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    app, observed, ledger = _app(tmp_path, monkeypatch, signer)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {_SERVICE}",
+                "X-Auto-Router-User-Delegation": _token(signer),
+            },
+            json={
+                "model": "auto/code",
+                "messages": [{"role": "user", "content": "a" * 263000}],
+                "max_tokens": 8,
+            },
+        )
+    assert response.status_code == 401
+    assert observed == []
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 0
