@@ -111,3 +111,72 @@ or iPhone release gate. No merge/deploy or public assertion of unified per-user
 execution history based on this simulation. A loaded model alone is
 insufficient: require independently correlated provider attempt evidence,
 real two-user authentication, and production custody before reconsidering.
+
+## Further evidence: independent synthetic observer and residency preflight
+
+A new isolated synthetic provider-observer test module uses a separate
+disposable Ed25519 signing authority from the gateway. It correlates
+three signed fixture events (resident, attempt_started, attempt_terminal)
+by server-minted root/attempt IDs, model, configured node and fixture
+runtime instance. Ten tests cover wrong signer, tampering, owner/attempt
+collision, model/node mismatch, missing and duplicated events, inconsistent
+instance identities, stale timestamps and incomplete stream outcomes.
+Even a complete signed fixture sequence reports synthetic correlation ONLY;
+provider_execution_attested and physical_provider_proof remain false and
+response_delivered stays unknown. No real provider attempt was observed.
+
+A standalone, opt-in read-only diagnostic was also added:
+scripts/p0_37_provider_residency_preflight.py. Its default config-only
+mode performs zero network requests; explicit --probe performs only bounded
+GET inventory probes against validated private provider URLs.
+The standalone diagnostic groups by provider service AND physical node.
+It does not modify the stricter production discovery validator, whose
+current duplicate-node-id check aborts on xwing because the registry
+defines multiple listeners on the same hardware. Independent offline
+preflight tests: 10 passed.
+
+Actual bounded inventory observations on x1-370 on 2026-10-11:
+* 14 LM Studio services, 10 physical nodes; 2 authoritative services,
+  3 non-authoritative, 9 unreachable in the bounded scan.
+* Beelink LM Studio: 11 observed catalog entries, one native resident model,
+  liquid/lfm2.5-1.2b. The loaded instance has config and id fields.
+  Two separate GETs returned the same instance identity, which is NOT an
+  attested provider request, execution event or stable-persistence guarantee.
+* Optiplex LM Studio: authoritative native inventory, 25 catalog entries,
+  zero resident models.
+* Destroyer K2, Joyner, and Lenovo LM Studio: non-authoritative inventory,
+  residency UNKNOWN, not zero.
+* x1-370 local LM Studio loopback endpoint: HTTP 200 and 26 catalog entries
+  with zero loaded instances; its configured fleet endpoint was unreachable
+  in the separate bounded probe. These are different endpoints and do not
+  imply the physical host is offline.
+
+No inference request was sent. No model autoload, route mutation, producer
+storage, real user login, or change to production authentication occurred.
+Beelink is an INVENTORY candidate only, not an approved inference canary.
+Any physical model test requires operator approval, capacity assessment,
+real separately authenticated humans, independently witnessed request-level
+provider execution, and custody-approved tenant+subject+producer+node reads.
+
+### Reproducible new evidence
+
+Exact tested SHA: c10d0b8a482f976b233644657343d09537871838
+Ruff on all relevant new modules/scripts: PASS.
+Isolated synthetic provider-observer tests: 10 passed.
+Isolated static/fake-probe tests: 10 passed.
+Broader suite with the known live registry drift check deselected:
+451 passed, 11 skipped, 1 deselected, 4.49 seconds.
+The unfiltered full suite remains NOT GREEN due to the separate x1-370
+configured alias drift. Do not interpret deselection as resolving that failure.
+
+### Smallest remaining evidence-backed physical gate
+
+Verify Beelink's existing resident instance and NAS capacity in a fresh read.
+Prove two real separately authenticated principals and signed gateway delegation
+to the router. Add real provider-process event correlation for each minted
+attempt, independent of SSE completion, configured provider ID, and client
+metadata. Approve encrypted trace custody and actor+producer+node readback.
+Only after those gates permit a bounded two-user overlapping request canary
+on the same instance, with colliding client trace IDs, incomplete stream,
+retry and reconnect. Perform a second-node llama.cpp and physical-device
+acceptance separately. Until then keep the entire PR chain DRAFT-ONLY.
