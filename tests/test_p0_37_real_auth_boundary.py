@@ -10,7 +10,9 @@ import sqlite3
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from test_executor_auth import _invoke, _token, signing_key
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from test_executor_auth import _invoke, _token
 
 from auto_router.executor_auth import ExecutorInferenceAuthMiddleware
 from auto_router.request_idempotency import (
@@ -55,15 +57,28 @@ async def test_internal_service_token_is_service_auth_not_human_auth(monkeypatch
     assert observed[0] == observed[1]
 
 
+@pytest.fixture
+def isolated_executor_signer(monkeypatch):
+    private = Ed25519PrivateKey.generate()
+    public_key_pem = private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_VERIFY_KEY_PEM", public_key_pem)
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_KEY_ID", "test-key")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
+    return private
+
+
 @pytest.mark.asyncio
 async def test_executor_claim_auth_uses_agent_task_not_human_subject(
-    signing_key, monkeypatch,
+    isolated_executor_signer, monkeypatch,
 ):
     monkeypatch.delenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", raising=False)
     for claimed_human in ("alice", "bob"):
         sent, captured = await _invoke(
             ExecutorInferenceAuthMiddleware,
-            _token(signing_key),
+            _token(isolated_executor_signer),
             {
                 "model": "auto/code",
                 "messages": [{"role": "user", "content": "synthetic"}],
