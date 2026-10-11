@@ -97,7 +97,7 @@
         <div class="rounded-3xl border {% if assistx_tasks_configured %}border-emerald-300/20 bg-emerald-300/10{% else %}border-rose-300/20 bg-rose-300/10{% endif %} p-5">
             <div class="text-xs font-semibold uppercase tracking-wider {% if assistx_tasks_configured %}text-emerald-200{% else %}text-rose-200{% endif %}">AssistX backlog</div>
             <div class="mt-2 text-3xl font-black text-white">{{ 'on' if assistx_tasks_configured else 'off' }}</div>
-            <div class="mt-1 truncate text-xs {% if assistx_tasks_configured %}text-emerald-100/70{% else %}text-rose-100/70{% endif %}">{{ assistx_tasks_url or 'task intake not configured' }}</div>
+            <div class="mt-1 truncate text-xs {% if assistx_tasks_configured %}text-emerald-100/70{% else %}text-rose-100/70{% endif %}">{{ 'configured · destination hidden' if assistx_tasks_configured else 'task intake not configured' }}</div>
         </div>
     </div>
 
@@ -409,7 +409,7 @@
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.retry or 0 }}</span> retry events</div>
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.delivered or 0 }}</span> delivered events</div>
                 <div class="rounded-2xl border {% if assistx_event_sink_configured %}border-emerald-300/20 bg-emerald-300/10 text-emerald-100/80{% else %}border-rose-300/20 bg-rose-300/10 text-rose-100/80{% endif %} p-3 text-xs truncate">
-                    {{ assistx_event_sink_url or 'AssistX event sink not configured' }}
+                    {{ 'configured · destination hidden' if assistx_event_sink_configured else 'AssistX event sink not configured' }}
                 </div>
             </div>
         </div>
