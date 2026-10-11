@@ -106,10 +106,12 @@ def test_two_signed_test_idp_subjects_cross_actual_router_middleware_and_shared_
     folder_a.mkdir()
     folder_b.mkdir()
     app_a, observed_a, _ = _app(
-        folder_a, monkeypatch, signer, owner_authority=authority_a
+        folder_a, monkeypatch, signer, owner_authority=authority_a,
+        require_body_digest=True
     )
     app_b, observed_b, _ = _app(
-        folder_b, monkeypatch, signer, owner_authority=authority_b
+        folder_b, monkeypatch, signer, owner_authority=authority_b,
+        require_body_digest=True
     )
 
     prompt = {
