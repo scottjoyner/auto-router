@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -99,3 +100,46 @@ def test_previously_live_admin_actions_remain_visible_as_nonclickable_references
         assert "API auth required" in source
         assert 'X-Admin-Token' in source
         assert not re.search(r'<button\\b[^>]*hx-(?:post|get)="/admin/', source, flags=re.I | re.S)
+
+
+def test_public_dashboard_templates_redact_raw_runtime_service_destinations():
+    """Keep private URL values out of public HTML, even if a future URL adds
+    embedded user-info or secret-looking query/path components.
+    """
+    secret_url = "http://private-host.example:8088/api?SYNTHETIC_BROWSER_SECRET=never"
+    context = {
+        "assistx_tasks_url": secret_url,
+        "assistx_event_sink_url": secret_url,
+        "assistx_tasks_configured": True,
+        "assistx_event_sink_configured": True,
+        "gateway": SimpleNamespace(base_url=secret_url, openai_base_url=secret_url),
+    }
+    target_files = (
+        "fragments/dashboard_summary.html",
+        "fragments/ops_summary.html",
+    )
+    watched_names = (
+        "assistx_tasks_url", "assistx_event_sink_url",
+        "gateway.base_url", "gateway.openai_base_url",
+    )
+    counts = 0
+    for template in target_files:
+        source = (TPL_ROOT / template).read_text(encoding="utf-8")
+        for expression in re.findall(r"\\{\\{([\\s\\S]*?)\\}\\}", source):
+            if not any(name in expression for name in watched_names):
+                continue
+            counts += 1
+            output = ENV.from_string("{{" + expression + "}}").render(**context)
+            assert "SYNTHETIC_BROWSER_SECRET" not in output, template
+            assert "private-host.example" not in output, template
+            assert "configured" in output, (template, output)
+    assert counts >= 6, "Expected all current public runtime destination displays"
+
+
+def test_no_direct_jinja_output_of_sensitive_runtime_origin_values():
+    for template in TPL_ROOT.rglob("*.html"):
+        source = template.read_text(encoding="utf-8")
+        assert not re.search(
+            r"\\{\\{\\s*(?:assistx_tasks_url|assistx_event_sink_url"
+            r"|gateway\\.(?:base_url|openai_base_url))\\b", source,
+        ), template
