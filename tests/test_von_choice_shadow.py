@@ -257,6 +257,31 @@ class TestVonAdapter(unittest.TestCase):
             self.assertEqual(out.read_text(), "sentinel")
             self.assertEqual(len(StubVon.requested), 0)
 
+    def test_simulated_server_rows_are_consumable_by_offline_scorer(self):
+        # This is a protocol fixture, NOT any actual Von weight execution.
+        import typed_decision_shadow as E
+        with server() as url, tempfile.TemporaryDirectory(dir="/tmp") as d:
+            cases_path = Path(d) / "cases.jsonl"
+            observations_path = Path(d) / "von.jsonl"
+            combined_path = Path(d) / "paired.jsonl"
+            case = sample()
+            write_case(cases_path, case)
+            with patch.object(sys, "argv", ["prog", str(cases_path), "--execute",
+                                            "--ack-sanitized", "--ack-preloaded",
+                                            "--url", url, "--out", str(observations_path)]):
+                self.assertEqual(V.main(), 0)
+            von_row = json.loads(observations_path.read_text())
+            base_row = V.observation(case, model_id="baseline",
+                                     revision="synthetic-policy-v1", status="ok",
+                                     choice="node_a", confidence=.95, duration=.2)
+            base_row["source_kind"] = "synthetic"
+            write_case(combined_path, base_row, von_row)
+            rows, _ = E.load(combined_path)
+            metrics = E.score(rows, "baseline")
+            self.assertEqual(metrics["comparisons_to_baseline"]["von"]["paired_valid"], 1)
+            self.assertFalse(metrics["execution_attested"])
+            self.assertFalse(metrics["promotion_approved"])
+
     def test_output_must_be_tmp(self):
         with self.assertRaisesRegex(ValueError, "under /tmp"):
             V.output_path(Path("/nas/somewhere/observations.jsonl"))
