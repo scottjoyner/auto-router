@@ -213,5 +213,25 @@ intentionally given the running image as both candidate and rollback, so it
 also correctly flagged `CANDIDATE_EQUALS_ROLLBACK` and the absence of a
 matching candidate revision label. No image was rebuilt or deployed.
 
+
+### Docker storage-pressure gate (observed, do not build yet)
+
+Read-only x1-370 check on October 11 found Docker's data root under
+`/media/scott/SSD_4TB/docker`, on a **3.6 TB filesystem 97% used**
+(about **109 GB available**), compared with the system root filesystem at
+76% use. The currently present router image is roughly 292 MB. A new Docker
+build can still create transient layers, caches and multiple images; the image
+size alone is not a reliable upper bound on required staging capacity.
+
+**Do not build or pull the candidate onto that Docker data root as an
+automatic response to this runbook.** Before controlled image staging, the
+storage owner must verify current headroom, agree on a capacity floor and
+artifact retention policy, select an approved lower-pressure builder/cache
+or free space through a separately verified non-destructive workflow.
+Preserve the owner-private rollback image identity and keep its exact image
+bytes available. Do not use unverified NAS mounts or delete images/cache
+as an implicit repair. Capacity acceptance is separate from security #156,
+source provenance, Compose digest pinning and the remote admin-401 gates.
+
 This section remains an *operator-controlled release procedure*; it is not
 a request to mutate container tags, images, networks or active services.
