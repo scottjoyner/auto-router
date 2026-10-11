@@ -83,7 +83,7 @@ def _token(
     return f"{encoded_header}.{encoded_claims}.{_b64(signer.sign(message))}"
 
 
-def _app(tmp_path, monkeypatch, signer):
+def _app(tmp_path, monkeypatch, signer, *, restart=False):
     monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
     monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", _SERVICE)
     ledger = RequestIdempotencyLedger(
@@ -108,7 +108,8 @@ def _app(tmp_path, monkeypatch, signer):
         public_key=signer.public_key(),
         key_id=_KID,
         owner_ledger=RootOwnerLedger(
-            tmp_path / "p0-owner-test.sqlite", b"x" * 32, bootstrap=True
+            tmp_path / "p0-owner-test.sqlite", b"x" * 32,
+            bootstrap=not restart,
         ),
     )
     app.add_middleware(
@@ -389,3 +390,77 @@ def test_large_delegated_request_is_rejected_before_downstream_execution(
         assert db.execute(
             "SELECT COUNT(*) FROM inference_request_idempotency"
         ).fetchone()[0] == 0
+
+
+def test_renewed_signed_attempt_cannot_rebind_existing_root_to_bob(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    root = str(uuid.uuid4())
+    app, observed, ledger = _app(tmp_path, monkeypatch, signer)
+    a_token = _token(signer, "alice", root=root)
+    b_token = _token(signer, "bob", root=root)
+    with TestClient(app) as client:
+        first = _request(client, a_token, asserted_user="bob")
+        rejected = _request(client, b_token, asserted_user="alice")
+    assert first.status_code == 200
+    assert rejected.status_code == 409
+    assert len(observed) == 1
+    assert observed[0]["actor"]["subject"] == "alice"
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 1
+
+
+def test_conflicting_gateway_claim_after_actual_app_restart_is_not_forwarded(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    root = str(uuid.uuid4())
+    a_token = _token(signer, "alice", root=root)
+    b_token = _token(signer, "bob", root=root)
+    app_a, observed_a, _ = _app(tmp_path, monkeypatch, signer)
+    with TestClient(app_a) as client:
+        assert _request(client, a_token).status_code == 200
+    assert len(observed_a) == 1
+
+    app_b, observed_b, ledger = _app(
+        tmp_path, monkeypatch, signer, restart=True
+    )
+    with TestClient(app_b) as client:
+        assert _request(client, b_token).status_code == 409
+        assert _request(client, a_token).status_code == 409
+    assert observed_b == []
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 1
+
+
+def test_existing_root_reissued_for_new_model_is_rejected_before_idempotency(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    root = str(uuid.uuid4())
+    app, observed, ledger = _app(tmp_path, monkeypatch, signer)
+    with TestClient(app) as client:
+        original = _request(client, _token(signer, "alice", root=root))
+        new_model = client.post(
+            "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {_SERVICE}",
+                "Idempotency-Key": "changed-model",
+                "X-Auto-Router-User-Delegation": _token(
+                    signer, "alice", root=root, model="auto/review"
+                ),
+            },
+            json={"model": "auto/review", "max_tokens": 8},
+        )
+    assert original.status_code == 200
+    assert new_model.status_code == 409
+    assert len(observed) == 1
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 1
