@@ -245,6 +245,8 @@ def main() -> int:
     p.add_argument("--model-revision", default="von-1.3.0")
     p.add_argument("--out", type=Path)
     p.add_argument("--timeout", type=float, default=30.0)
+    p.add_argument("--max-requests", type=int, default=4,
+                   help="explicit bound for full fixture execution (default four)")
     args = p.parse_args()
     try:
         rows, digest = fixture(args.cases)
@@ -256,6 +258,10 @@ def main() -> int:
             print(json.dumps({"validated_cases": len(rows), "fixture_sha256": digest,
                               "network_requests": 0, "model_inference": False}))
             return 0
+        if not 1 <= args.max_requests <= MAX_CASES:
+            raise ValueError("--max-requests must be between 1 and 500")
+        if len(rows) > args.max_requests:
+            raise ValueError("fixture exceeds approved maximum requests; no POST sent")
         if not (args.ack_sanitized and args.ack_preloaded and args.out and args.url):
             raise ValueError("execution requires explicit --url, both acknowledgements and --out")
         endpoint = loopback_endpoint(args.url)
