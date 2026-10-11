@@ -464,3 +464,29 @@ def test_existing_root_reissued_for_new_model_is_rejected_before_idempotency(
         assert db.execute(
             "SELECT COUNT(*) FROM inference_request_idempotency"
         ).fetchone()[0] == 1
+
+
+def test_runtime_storage_loss_returns_503_before_idempotency_or_routing(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    app, observed, ledger = _app(tmp_path, monkeypatch, signer)
+    (tmp_path / "p0-owner-test.sqlite").unlink()  # Disposable fixture only.
+    with TestClient(app) as client:
+        response = _request(client, _token(signer, "alice"))
+    assert response.status_code == 503
+    assert observed == []
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 0
+
+
+def test_restart_with_lost_owner_ledger_refuses_app_construction(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    _app(tmp_path, monkeypatch, signer)
+    (tmp_path / "p0-owner-test.sqlite").unlink()  # Disposable fixture only.
+    with pytest.raises(Exception, match="explicit provisioning"):
+        _app(tmp_path, monkeypatch, signer, restart=True)
