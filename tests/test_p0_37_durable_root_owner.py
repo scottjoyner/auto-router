@@ -24,7 +24,6 @@ from auto_router.user_root_ledger import (
     read_pinned_root_secret,
 )
 
-
 _SECRET = b"\xb7" * 32
 
 
