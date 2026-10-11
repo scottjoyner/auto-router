@@ -28,7 +28,9 @@ _SECRET = b"\xb7" * 32
 
 
 def _ledger(path, *, secret=_SECRET):
-    return RootOwnerLedger(path, secret)
+    # Test-only explicit provisioning; production constructor refuses an
+    # unknown/missing database and NEVER automatically recreates it.
+    return RootOwnerLedger(path, secret, bootstrap=not path.exists())
 
 
 def _claim(signer, subject, root, attempt, *, model="auto/code"):
