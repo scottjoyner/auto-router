@@ -8,10 +8,10 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 from test_executor_auth import _invoke, _token
 
 from auto_router.executor_auth import ExecutorInferenceAuthMiddleware
