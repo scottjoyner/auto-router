@@ -267,9 +267,11 @@ def test_shared_authority_works_with_insert_select_only_role(authority):
     password = uuid.uuid4().hex
     admin_dsn = os.environ["P0_37_TEST_PG_DSN"]
     with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        from psycopg import sql
         admin.execute(
-            'CREATE ROLE "' + role + '" LOGIN PASSWORD %s',
-            (password,),
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                sql.Identifier(role), sql.Literal(password)
+            )
         )
         try:
             with psycopg.connect(authority._dsn) as manager:
