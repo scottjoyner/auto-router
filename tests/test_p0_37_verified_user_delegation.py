@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -23,6 +24,7 @@ from auto_router.request_idempotency import (
     RequestIdempotencyLedger,
     RequestIdempotencyMiddleware,
 )
+from auto_router.user_root_ledger import RootOwnerLedger
 from auto_router.user_delegation import (
     UserDelegationShadowMiddleware,
     install_user_delegation_shadow,
@@ -105,6 +107,9 @@ def _app(tmp_path, monkeypatch, signer):
         UserDelegationShadowMiddleware,
         public_key=signer.public_key(),
         key_id=_KID,
+        owner_ledger=RootOwnerLedger(
+            tmp_path / "p0-owner-test.sqlite", b"x" * 32
+        ),
     )
     app.add_middleware(
         ExecutorInferenceAuthMiddleware,
@@ -301,6 +306,14 @@ def test_installer_disabled_unless_opted_in_and_fails_missing_key(
     ))
     monkeypatch.setenv("AUTO_ROUTER_P0_USER_DELEGATION_VERIFY_KEY_FILE", str(key_path))
     monkeypatch.setenv("AUTO_ROUTER_P0_USER_DELEGATION_KEY_ID", _KID)
+    secret_path = tmp_path / "ledger-key.bin"
+    secret_path.write_bytes(os.urandom(32))
+    secret_path.chmod(0o600)
+    monkeypatch.setenv("AUTO_ROUTER_P0_ROOT_OWNER_HMAC_KEY_FILE", str(secret_path))
+    monkeypatch.setenv(
+        "AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE",
+        str(tmp_path / "owner-ledger.sqlite"),
+    )
     install_user_delegation_shadow(app)
     assert app.state.p0_user_delegation_shadow_installed is True
 
