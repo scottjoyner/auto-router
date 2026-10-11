@@ -273,8 +273,14 @@ def test_missing_or_wrong_order_observer_stage_cannot_upgrade_an_incomplete_stre
     observer = _SyntheticProcessObserver(gateway)
     correlator = _FixtureCorrelator(gateway, observer.signer.public_key())
     events = observer.sequence(token)
-    assert correlator.compare(token, receipt, events[:2])["fixture_observer_correlation"] == "unobserved"
-    assert correlator.compare(token, receipt, events[::-1])["fixture_observer_correlation"] == "unobserved"
+    assert (
+        correlator.compare(token, receipt, events[:2])["fixture_observer_correlation"]
+        == "unobserved"
+    )
+    assert (
+        correlator.compare(token, receipt, events[::-1])["fixture_observer_correlation"]
+        == "unobserved"
+    )
     correlated = correlator.compare(token, receipt, events)
     assert correlated["fixture_observer_correlation"] == "synthetic_matched_sequence"
     assert correlated["terminal_status"] == "incomplete"
