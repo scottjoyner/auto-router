@@ -88,8 +88,8 @@ rejects more than one authentication presentation channel even if one is
 correct: duplicated `X-Admin-Token` (including casing variants), mixed
 `X-Admin-Token` and Bearer/Basic, multiple `Authorization` headers,
 unsupported schemes, folded/comma-joined Bearer, noncanonical or malformed
-Basic base64, wrong Basic username, control characters, non-ASCII, and
-oversize/invalid raw headers. Basic credentials are decoded only in memory;
+Basic base64, wrong Basic username, control characters, non-ASCII, underscore-aliased `X_Admin_Token`, invalid header-name grammar,
+and oversize/invalid raw headers. Basic credentials are decoded only in memory;
 the result is an enum, never a credential or parsed headers. This is NOT a
 production header/middleware implementation. The trusted ASGI/proxy boundary,
 TLS peer identity, and management of multiple auth sources remain unproven.
