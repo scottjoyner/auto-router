@@ -6,6 +6,7 @@ owner/idempotency stores are disposable local pytest tmp_path files.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -25,7 +26,7 @@ def _payload():
     }
 
 
-def _delegation(signer, payload, *, changes=None):
+def _delegation(signer, payload, *, changes=None, root=None):
     claims = {
         "schema": "p0-user-shadow-v2",
         "request_path": _PATH,
@@ -33,7 +34,7 @@ def _delegation(signer, payload, *, changes=None):
     }
     if changes:
         claims.update(changes)
-    return _token(signer, "alice", claims_changes=claims)
+    return _token(signer, "alice", root=root, claims_changes=claims)
 
 
 def _post(client, token, body):
@@ -151,3 +152,38 @@ def test_router_v2_digest_matches_independent_assistx_golden_vector():
     assert delegated_body_digest(_PATH, payload) == (
         "6efd8e288e4698a4515ea0f1a882d0a6572831061eb09048dde70fd8f8c9c141"
     )
+
+
+
+def test_distinct_signed_retry_attempt_cannot_change_prompt_on_same_root(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    app, observed, ledger = _app(
+        tmp_path, monkeypatch, signer, require_body_digest=True
+    )
+    root = str(uuid.uuid4())
+    first_body = _payload()
+    second_body = {
+        **first_body, "messages": [
+            {"role": "user", "content": "different signed prompt"}
+        ],
+    }
+    with TestClient(app) as client:
+        first = _post(client, _delegation(signer, first_body, root=root), first_body)
+        second = _post(client, _delegation(signer, second_body, root=root), second_body)
+        retry = _post(client, _delegation(signer, first_body, root=root), first_body)
+    assert [first.status_code, second.status_code, retry.status_code] == [
+        200, 409, 200
+    ]
+    assert len(observed) == 2
+    assert observed[0]["actor"]["root_request_id"] == root
+    assert observed[1]["actor"]["root_request_id"] == root
+    assert (
+        observed[0]["actor"]["request_sha256"]
+        == observed[1]["actor"]["request_sha256"]
+    )
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 2
