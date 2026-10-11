@@ -1,4 +1,11 @@
-FROM python:3.12-slim
+# The verified release workflow passes a digest-pinned Python base reference.
+# Developer builds keep the default; neither base nor source label authorizes release.
+ARG PYTHON_BASE=python:3.12-slim
+FROM ${PYTHON_BASE}
+
+ARG SOURCE_REVISION=unverified-local-build
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
+LABEL org.opencontainers.image.source="https://github.com/scottjoyner/auto-router"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
