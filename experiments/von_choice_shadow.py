@@ -131,12 +131,23 @@ def loopback_endpoint(url: str) -> str:
     return f"http://127.0.0.1:{parsed.port}/v1/systemone"
 
 
+def question_digest(case: dict) -> str:
+    # Bind instructions, option descriptions AND their presentation order.
+    # JSON dictionary key sorting applies to outer keys only, not the option list.
+    canonical = json.dumps({
+        "instructions": case["instructions"],
+        "criteria_in_order": list(case["criteria"].items()),
+    }, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def observation(case: dict, *, model_id: str, revision: str, status: str,
                 choice: str | None, confidence: float | None, duration: float | None) -> dict:
     row = {
         "case_id": case["case_id"], "model_id": model_id, "model_revision": revision,
         "task_type": case["task_type"], "variant": case["variant"],
         "state_sha256": sha256(case["state"].encode()).hexdigest(),
+        "question_sha256": question_digest(case),
         "gold": case["gold"], "prediction": choice, "confidence": confidence,
         "eligible_options": sorted(case["eligible_options"]),
         "evidence_complete": case["evidence_complete"], "latency_ms": duration,
