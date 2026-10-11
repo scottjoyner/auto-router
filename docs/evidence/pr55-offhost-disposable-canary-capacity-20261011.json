@@ -1,0 +1,72 @@
+{
+  "schema": "auto-router-pr55-offhost-canary-capacity-v1",
+  "observed_date_utc": "2026-10-11",
+  "method": "x1-370 Fleet Commander readonly SSH with strict host-key verification; Docker daemon metadata + local filesystem statvfs only",
+  "hosts": [
+    {
+      "host": "xwing",
+      "docker_available": true,
+      "server_reachable": true,
+      "compose_available": true,
+      "docker_root_free_gib": 655.2,
+      "docker_root_used_pct": 58.7,
+      "canary_candidate": "best_capacity_if_owner_approves"
+    },
+    {
+      "host": "destroyer",
+      "docker_available": true,
+      "server_reachable": true,
+      "compose_available": true,
+      "docker_root_free_gib": 74,
+      "docker_root_used_pct": 84.2,
+      "canary_candidate": "less_headroom"
+    },
+    {
+      "host": "lenovo",
+      "docker_available": false,
+      "canary_candidate": "docker_unavailable"
+    }
+  ],
+  "x1_baseline": {
+    "docker_root_free_gib": 107.04,
+    "docker_root_used_pct": 97.08
+  },
+  "hosted_pr55_archive_compressed_bytes": 76416730,
+  "candidate_image_archived_but_not_staged_on_any_fleet_host": true,
+  "suggested_offhost_test_constraints": [
+    "read-only-root",
+    "network-none",
+    "cap-drop-all",
+    "no-new-privileges",
+    "bounded-cpu-and-memory",
+    "no-published-ports",
+    "synthetic-admin-token-only",
+    "exact-image-id-and-source-revision-check",
+    "automatic-removal",
+    "operator-approved-test-window",
+    "no-GPU-device-mount",
+    "CPU-quota-never-more-than-one-core",
+    "memory-cap-512MiB",
+    "pids-limit-128",
+    "do-not-run-alongside-critical-operations"
+  ],
+  "rollback_approved": false,
+  "owner_approved_offhost_staging": false,
+  "host_health_or_workload_capacity_verified": false,
+  "image_staged": false,
+  "image_downloaded": false,
+  "service_or_files_modified": false,
+  "finding": "xwing has substantially more spare Docker storage than x1, making it a sensible candidate for a separately authorized offline disposable canary, not a production router or admission replacement.",
+  "xwing_runtime_headroom_status_only": {
+    "logical_cpus": 24,
+    "load_1m": 2.3,
+    "load_5m": 2.39,
+    "memory_total_mib": 31357,
+    "memory_available_mib": 17515,
+    "swap_free_mib": 15937,
+    "running_container_count": 6,
+    "other_router_running": false,
+    "test_approved": false,
+    "security_observation": "system resources only; no information about active GPU allocations, scheduler reservations or peak workload"
+  }
+}

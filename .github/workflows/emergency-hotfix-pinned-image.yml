@@ -1,0 +1,337 @@
+name: Emergency Admin Hotfix Pinned Image (Undeployed)
+
+on:
+  # No path filter: require a complete new *exact-head* archived-image
+  # witness even if the runbook/test scope changes on this draft branch.
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-attest-undeployed-candidate:
+    if: github.head_ref == 'security/legacy-admin-auth-emergency-20261011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact PR source with no persisted Git credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse source drift or environment-variant build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SHA"
+          git diff --quiet
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          copied = [
+              pathlib.PurePosixPath(s.decode("utf-8", "surrogateescape"))
+              for s in tracked if s.startswith((b"src/", b"config/"))
+          ]
+          forbidden = [p for p in copied if p.name.lower() == ".env"
+                       or p.name.lower().startswith((".env.", ".env-", ".env_"))]
+          if forbidden:
+              raise SystemExit("Environment-variant path found in image build inputs")
+          print("tracked_copied_environment_variant_paths=0")
+          PY
+
+      - name: Resolve precise upstream Python image digest in runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull python:3.12-slim >/dev/null
+          base_ref="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          case "$base_ref" in
+            *@sha256:*) ;;
+            *) echo '::error::Python image is not resolved to a registry digest'; exit 1 ;;
+          esac
+          echo "BASE_REF=$base_ref" >> "$GITHUB_ENV"
+
+      - name: Build candidate with exact source label on disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="auto-router-pr55-undeployed:$REVIEWED_SHA"
+          docker build --pull=false --progress=plain \
+            --build-arg "PYTHON_BASE=$BASE_REF" \
+            --build-arg "SOURCE_REVISION=$REVIEWED_SHA" \
+            -t "$tag" .
+          id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$REVIEWED_SHA"
+          case "$id" in sha256:*) ;; *) exit 1 ;; esac
+          echo "CANDIDATE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "CANDIDATE_ID=$id" >> "$GITHUB_ENV"
+
+      - name: Verify actual packaged strict-live ASGI app without network
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-build-canary-only \
+            --entrypoint python "$CANDIDATE_TAG" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app, state
+          from auto_router.security import require_admin
+          from types import SimpleNamespace
+
+          paths = [r for r in app.router.routes if isinstance(r, APIRoute)
+                   and r.path.startswith("/admin/")]
+          assert len(paths) >= 13, "Unexpected mounted admin route count"
+          assert all(any(dep.call is require_admin for dep in r.dependant.dependencies)
+                     for r in paths), "Mounted admin route is not guarded"
+          import re
+          all_methods = sorted({(method, route.path) for route in paths
+                                for method in (route.methods or ())
+                                if method not in ("HEAD", "OPTIONS")})
+          assert any(method == "POST" for method, _ in all_methods), "Missing admin mutation coverage"
+          assert any("{" in path for _, path in all_methods), "Missing dynamic admin coverage"
+          client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
+          for method, route_template in all_methods:
+              # Generate only a disposable synthetic path; never supply a real
+              # circuit owner, provider name, model or workload identifier.
+              route_path = re.sub(r"\\{[^{}]+\\}", "synthetic-denied", route_template)
+              kwargs = {"json": {}} if method in ("POST", "PATCH", "PUT") else {}
+              for headers in ({}, {"X-Admin-Token": "wrong-synthetic"}):
+                  response = client.request(method, route_path, headers=headers, **kwargs)
+                  assert response.status_code == 401, (
+                      f"admin method not denied: {method} {route_template} "
+                      f"status={response.status_code}"
+                  )
+          # This minimum hotfix must NOT silently add the effective-catalog
+          # surface from draft PR #41. Only source-tree inherited guards.
+          assert not any(r.path == "/admin/providers/effective" for r in paths)
+          # Strictly synthetic empty state; authorized read should still work
+          # without starting lifespan, reaching providers or loading models.
+          state.providers = SimpleNamespace(providers=[])
+          response = client.get("/admin/providers",
+                                headers={"X-Admin-Token": "synthetic-build-canary-only"})
+          assert response.status_code == 200
+          assert response.json() == {"providers": []}
+          print(f"packaged_strict_live_admin_routes={len(paths)}")
+          print(f"anonymous_and_wrong_token_admin_methods={len(all_methods)}")
+          print("admin_unsafe_methods_and_dynamic_paths_denied=PASS")
+          print("synthetic_authorized_legacy_read=PASS")
+          PY
+
+      - name: Export reviewed-image archive and metadata (never a deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/router-candidate-$REVIEWED_SHA.docker.tar.gz"
+          docker save "$CANDIDATE_TAG" | gzip -1 > "$archive"
+          bytes="$(stat -c %s "$archive")"
+          test "$bytes" -gt 1000000
+          test "$bytes" -lt 1073741824 || { echo '::error::Archive exceeds 1 GiB'; exit 1; }
+          sha256sum "$archive" | awk '{print $1}' > "$RUNNER_TEMP/router-candidate-archive.sha256"
+          REVIEWED_SHA="$REVIEWED_SHA" BASE_REF="$BASE_REF" CANDIDATE_ID="$CANDIDATE_ID" \
+            python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import datetime
+          p = Path(os.environ["RUNNER_TEMP"]) / "router-candidate-metadata.json"
+          p.write_text(json.dumps({
+              "schema": "auto-router-pr55-undeployed-candidate-v1",
+              "reviewed_git_sha": os.environ["REVIEWED_SHA"],
+              "python_base_digest_ref": os.environ["BASE_REF"],
+              "candidate_image_id": os.environ["CANDIDATE_ID"],
+              "candidate_is_deployed": False,
+              "production_admission_authorized": False,
+              "credential_custody_verified": False,
+              "build_source": "exact_public_pr_checkout_no_runtime_secrets",
+              "observed_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          }, sort_keys=True, indent=2) + "\n")
+          PY
+          # A minimal override is a REVIEW CANDIDATE only. It changes no live host.
+          # Docker image IDs can be referenced directly without mutable tags.
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          candidate = os.environ["CANDIDATE_ID"]
+          assert candidate.startswith("sha256:") and len(candidate) == 71
+          Path(os.environ["RUNNER_TEMP"], "router-candidate.override.yml").write_text(
+              "services:\n  llm-router:\n    build: !reset null\n    image: " + candidate + "\n    pull_policy: never\n"
+          )
+          PY
+          echo "undelivered_archive_size_bytes=$bytes"
+          echo 'No production host, model, credential, router endpoint or NAS was contacted.'
+
+      - name: Retain test candidate as short-lived workflow artifact, not release
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr55-undelivered-image-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/router-candidate-${{ github.event.pull_request.head.sha }}.docker.tar.gz
+            ${{ runner.temp }}/router-candidate-archive.sha256
+            ${{ runner.temp }}/router-candidate-metadata.json
+            ${{ runner.temp }}/router-candidate.override.yml
+          retention-days: 3
+          if-no-files-found: error
+
+  restore-archive-and-prove-loadability:
+    needs: [build-and-attest-undeployed-candidate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout reviewed Compose base without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download candidate only from this exact workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: pr55-undelivered-image-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/reviewed-candidate
+
+      - name: Verify archive bytes, metadata, and immutable override before loading
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/reviewed-candidate"
+          archive="router-candidate-$REVIEWED_SHA.docker.tar.gz"
+          test -f "$archive"
+          expected="$(cat router-candidate-archive.sha256)"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          actual="$(sha256sum "$archive" | awk '{print $1}')"
+          test "$expected" = "$actual"
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import re
+          root = Path(os.environ["RUNNER_TEMP"]) / "reviewed-candidate"
+          obj = json.loads((root / "router-candidate-metadata.json").read_text())
+          rev = os.environ["REVIEWED_SHA"]
+          assert obj["reviewed_git_sha"] == rev
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}", obj["candidate_image_id"])
+          assert obj["candidate_is_deployed"] is False
+          assert obj["production_admission_authorized"] is False
+          assert obj["credential_custody_verified"] is False
+          override = (root / "router-candidate.override.yml").read_text()
+          assert override == ("services:\n  llm-router:\n    build: !reset null\n    image: " + obj["candidate_image_id"] + "\n    pull_policy: never\n")
+          print("offline_artifact_bytes_and_release_metadata=PASS")
+          PY
+          docker compose -f router-candidate.override.yml config -q
+
+      - name: Reject an inherited build in the actual merged Compose deployment model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "reviewed-candidate"
+          metadata = json.loads((root / "router-candidate-metadata.json").read_text())
+          env = dict(os.environ)
+          # Use synthetic interpolation values. Never dump resolved Compose JSON
+          # because operator configurations can contain secret-bearing fields.
+          env["AUTO_ROUTER_INTERNAL_SERVICE_TOKEN"] = "synthetic-merge-only"
+          env["AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE"] = "/dev/null"
+          cmd = [
+              "docker", "compose", "-f", str(Path(os.environ["GITHUB_WORKSPACE"]) / "docker-compose.yml"),
+              "-f", str(root / "router-candidate.override.yml"),
+              "config", "--format", "json",
+          ]
+          result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
+          if result.returncode:
+              raise SystemExit("HOLD_COMPOSE_MERGE_CONFIG_UNAVAILABLE")
+          try:
+              merged = json.loads(result.stdout)
+              router = merged["services"]["llm-router"]
+          except (ValueError, KeyError, TypeError):
+              raise SystemExit("HOLD_COMPOSE_MERGE_SCHEMA")
+          if router.get("build") is not None:
+              raise SystemExit("HOLD_COMPOSE_MERGE_INHERITED_BUILD")
+          if router.get("image") != metadata["candidate_image_id"]:
+              raise SystemExit("HOLD_COMPOSE_MERGE_CANDIDATE_MISMATCH")
+          if router.get("pull_policy") != "never":
+              raise SystemExit("HOLD_COMPOSE_MERGE_PULL_POLICY")
+          print("merged_real_compose_candidate_image_only=PASS")
+          print("merged_compose_build_absent=PASS")
+          print("merged_compose_no_automatic_pull=PASS")
+          PY
+
+      - name: Load only into disposable hosted runner and re-verify embedded code
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/reviewed-candidate"
+          docker load --input "router-candidate-$REVIEWED_SHA.docker.tar.gz" >/dev/null
+          tag="auto-router-pr55-undeployed:$REVIEWED_SHA"
+          id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$REVIEWED_SHA"
+          CANDIDATE_ID="$id" python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          root = Path(os.environ["RUNNER_TEMP"]) / "reviewed-candidate"
+          metadata = json.loads((root / "router-candidate-metadata.json").read_text())
+          assert os.environ["CANDIDATE_ID"] == metadata["candidate_image_id"]
+          PY
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-restore-only \
+            --entrypoint python "$id" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app
+          from auto_router.security import require_admin
+          paths = [r for r in app.routes if isinstance(r, APIRoute)
+                   and r.path.startswith("/admin/")]
+          assert len(paths) >= 13
+          assert all(any(d.call is require_admin for d in r.dependant.dependencies)
+                     for r in paths)
+          import re
+          client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
+          all_methods = sorted({(method, route.path) for route in paths
+                                for method in (route.methods or ())
+                                if method not in ("HEAD", "OPTIONS")})
+          assert any(method == "POST" for method, _ in all_methods)
+          assert any("{" in path for _, path in all_methods)
+          assert not any(r.path == "/admin/providers/effective" for r in paths)
+          for method, template in all_methods:
+              route_path = re.sub(r"\\{[^{}]+\\}", "synthetic-denied", template)
+              kwargs = {"json": {}} if method in ("POST", "PATCH", "PUT") else {}
+              for headers in ({}, {"X-Admin-Token": "wrong-synthetic"}):
+                  response = client.request(method, route_path, headers=headers, **kwargs)
+                  assert response.status_code == 401, (
+                      f"restored image admin method not denied: {method} {template} "
+                      f"status={response.status_code}"
+                  )
+          print("reloaded_image_secure_live_route_auth=PASS")
+          print(f"reloaded_admin_http_methods_denied={len(all_methods)}")
+          print("reloaded_admin_route_count", len(paths))
+          PY
+          echo 'Candidate loadability proved on disposable hosted runner only.'

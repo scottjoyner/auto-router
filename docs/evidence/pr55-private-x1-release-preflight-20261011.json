@@ -1,0 +1,64 @@
+{
+  "schema": "auto-router-pr55-private-host-acceptance-v1",
+  "observed_date_utc": "2026-10-11",
+  "reviewed_exact_script_head": "c9a20cf6a545d5de70fcb5c4c505e5bad9c61408",
+  "project": "Emergency legacy admin auth hotfix",
+  "original_container_name": "git-router-1",
+  "original_router_running": true,
+  "original_router_image_retrievable_by_immutable_id": true,
+  "original_router_image_virtual_size_mib": 278.8,
+  "original_router_restart_policy_present": true,
+  "old_router_image_id_disclosed": false,
+  "private_compose_file_count": 1,
+  "private_operator_compose_basename": "compose.auto-router-fleet.yml",
+  "private_operator_compose_actual_candidate_status": "HOLD_PRIVATE_COMPOSE",
+  "private_operator_compose_actual_candidate_reasons": [
+    "COMPOSE_IMAGE_NOT_EXACT_CANDIDATE_ID",
+    "COMPOSE_PULL_POLICY_NOT_NEVER"
+  ],
+  "synthetic_overlay_status": "PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY",
+  "synthetic_overlay_checks": {
+    "all_other_compose_fields_unchanged": true,
+    "network_config_unchanged": true,
+    "no_build_in_resolved_service": true,
+    "no_pull_requested": true,
+    "other_services_unchanged": true,
+    "router_other_fields_unchanged": true,
+    "synthetic_image_selected": true,
+    "volume_config_unchanged": true
+  },
+  "git_hosted_image_workflow": "https://github.com/scottjoyner/auto-router/actions/runs/38166523035",
+  "hosted_candidate_archive_compressed_bytes": 76416730,
+  "hosted_candidate_archive_retention_days": 3,
+  "docker_root_used_pct": 97.08,
+  "docker_root_free_gib": 107.04,
+  "candidate_image_staged_on_x1": false,
+  "note_on_storage": "Archive compressed size is not equivalent to Docker unpacked image/layer storage; 97.08% used requires retention, quota and rollback owner review.",
+  "known_live_auth_status": {
+    "anonymous_legacy_providers": 200,
+    "anonymous_circuits": 200,
+    "effective_provider_route": 404
+  },
+  "shared_admin_token_transport_and_rotation_issue": "https://github.com/scottjoyner/auto-assist/issues/299",
+  "historical_public_credential_custody_issue": "https://github.com/scottjoyner/auto-assist/issues/156",
+  "operator_browser_links_affected": [
+    "legacy_providers",
+    "legacy_context",
+    "legacy_circuits",
+    "legacy_agent_workers"
+  ],
+  "operator_browser_shared_admin_token_exposure_authorized": false,
+  "operator_must_approve": {
+    "candidate_image_immutable_id": false,
+    "candidate_local_loadability": false,
+    "private_operator_compose_real_candidate_binding": false,
+    "rollback_image_and_no_delete_policy": false,
+    "client_first_auth_continuity": false,
+    "dual_stack_physical_postcutover_deny": false,
+    "credential_custody": false
+  },
+  "production_release_authorized": false,
+  "service_or_network_changes": false,
+  "files_or_image_deleted": false,
+  "private_values_or_image_id_disclosed": false
+}
