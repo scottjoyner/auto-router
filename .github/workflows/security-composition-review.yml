@@ -1,0 +1,287 @@
+name: Composed Router Security Candidate (Undeployed)
+
+on:
+  push:
+    branches: [security/admin-release-composition-review-20261011]
+  pull_request:
+    branches: [security/effective-provider-snapshot-20261010]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  composed-authorization-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify source identity and disallow copied environment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 - <<'PY'
+          import pathlib, subprocess
+          entries=subprocess.check_output(["git","ls-files","-z"]).split(b"\0")
+          for raw in entries:
+              if not raw.startswith((b"src/",b"config/")):
+                  continue
+              path=pathlib.PurePosixPath(raw.decode("utf-8","surrogateescape"))
+              assert not (path.name.lower()==".env" or
+                          path.name.lower().startswith((".env.",".env-",".env_"))), "unsafe copied config file"
+          print("tracked_copied_env_variant_count=0")
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+
+      - name: Test composed source without production networks
+        run: |
+          python -m pytest -q \
+            tests/test_agent_job_read_auth.py \
+            tests/test_public_dashboard_endpoint_redaction.py \
+            tests/test_admin_ui_link_safety.py \
+            tests/test_effective_provider_security.py \
+            tests/test_ops_admin_auth_cutover.py \
+            tests/test_admin_cutover_readonly.py \
+            tests/test_release_image_identity_readonly.py \
+            tests/test_remote_admin_auth_readonly.py
+
+      - name: Resolve Python upstream image to immutable digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull python:3.12-slim >/dev/null
+          ref="$(docker image inspect python:3.12-slim --format '{{index .RepoDigests 0}}')"
+          case "$ref" in *@sha256:*) ;; *) echo '::error::missing upstream digest'; exit 1 ;; esac
+          echo "BASE_REF=$ref" >> "$GITHUB_ENV"
+
+      - name: Build ephemeral exact-source strict-live image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="auto-router-composed-undeployed:$SOURCE_SHA"
+          docker build --pull=false --progress=plain \
+            --build-arg "PYTHON_BASE=$BASE_REF" \
+            --build-arg "SOURCE_REVISION=$SOURCE_SHA" \
+            -t "$tag" .
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$SOURCE_SHA"
+          image_id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          case "$image_id" in sha256:*) ;; *) exit 1 ;; esac
+          echo "CANDIDATE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "CANDIDATE_ID=$image_id" >> "$GITHUB_ENV"
+
+      - name: Prove packaged admin, job-read and synthetic catalog under no network
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-composition-canary-only \
+            --entrypoint python "$CANDIDATE_TAG" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          import re
+          from types import SimpleNamespace
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app, state
+          from auto_router.security import require_admin
+
+          admin=[r for r in app.routes if isinstance(r,APIRoute) and r.path.startswith("/admin/")]
+          assert len(admin)>=20
+          def explicitly_guarded(route):
+              pending=list(route.dependant.dependencies)
+              seen=set()
+              while pending:
+                  d=pending.pop()
+                  if id(d) in seen: continue
+                  seen.add(id(d))
+                  if d.call is require_admin: return True
+                  pending.extend(d.dependencies)
+              return False
+          assert all(explicitly_guarded(r) for r in admin)
+          jobs={"/jobs/agent/{job_id}","/jobs/agent/{job_id}/artifacts"}
+          job_routes=[r for r in app.routes if isinstance(r,APIRoute) and
+                      "GET" in r.methods and r.path in jobs]
+          assert {r.path for r in job_routes}==jobs
+          assert len(job_routes)==2 and all(explicitly_guarded(r) for r in job_routes)
+          class FakeJobs:
+              def __init__(self):self.lookups=0
+              def get(self,_):
+                  self.lookups+=1
+                  return None
+          fake=FakeJobs()
+          state.agent_jobs=fake
+          client=TestClient(app,raise_server_exceptions=False,follow_redirects=False)
+          methods={(method,r.path) for r in admin for method in (r.methods or ())
+                   if method not in ("HEAD","OPTIONS")}
+          assert any(m=="POST" for m,_ in methods)
+          for method,route in sorted(methods):
+              url=re.sub(r"\{[^{}]+\}","synthetic-denied",route)
+              opts={"json":{}} if method in ("POST","PATCH","PUT") else {}
+              for headers in ({},{"X-Admin-Token":"wrong-synthetic"}):
+                  response=client.request(method,url,headers=headers,**opts)
+                  assert response.status_code==401,(method,route,response.status_code)
+          for suffix in ("","/artifacts"):
+              for headers in ({},{"X-Admin-Token":"wrong-synthetic"}):
+                  response=client.get("/jobs/agent/synthetic-nonexistent"+suffix,headers=headers)
+                  assert response.status_code==401
+          assert fake.lookups==0, "Job looked up before authentication"
+          for suffix in ("","/artifacts"):
+              response=client.get("/jobs/agent/synthetic-nonexistent"+suffix,
+                                  headers={"X-Admin-Token":"synthetic-composition-canary-only"})
+              assert response.status_code==404
+          assert fake.lookups==2
+          state.providers=SimpleNamespace(providers=[])
+          response=client.get("/admin/providers/effective",
+                              headers={"X-Admin-Token":"synthetic-composition-canary-only"})
+          assert response.status_code==200
+          catalog=response.json()
+          assert catalog["schema_version"]==1 and catalog["provider_count"]==0
+          assert catalog["may_modify_routes"] is False
+          assert catalog["may_prove_model_loaded"] is False
+          print(f"packaged_admin_routes={len(admin)}")
+          print(f"packaged_admin_method_paths_denied={len(methods)}")
+          print("packaged_agent_job_gets_denied_before_lookup=2/2")
+          print("packaged_sanitized_provider_snapshot=PASS")
+          print("all_probes_synthetic_no_network=PASS")
+          PY
+
+      - name: Export candidate for review only, never deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/router-security-composed-$SOURCE_SHA.docker.tar.gz"
+          docker save "$CANDIDATE_TAG" | gzip -1 > "$archive"
+          test "$(stat -c %s "$archive")" -gt 1000000
+          test "$(stat -c %s "$archive")" -lt 1073741824
+          sha256sum "$archive" | awk '{print $1}' > "$RUNNER_TEMP/composed-archive.sha256"
+          python3 - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ["RUNNER_TEMP"])/"composed-metadata.json"
+          p.write_text(json.dumps({
+              "schema":"draft-threeway-security-composition-v1",
+              "source_sha":os.environ["SOURCE_SHA"],
+              "image_id":os.environ["CANDIDATE_ID"],
+              "base_digest_ref":os.environ["BASE_REF"],
+              "authenticated_admin_integration":"tested_with_synthetic_values",
+              "agent_job_gets":"tested_with_synthetic_values",
+              "dashboard_url_redaction":"source_tests_only",
+              "security_owner_signed_off":False,
+              "credential_custody_closed":False,
+              "client_first_deployed":False,
+              "production_authorized":False,
+          },sort_keys=True,indent=2)+"\n")
+          PY
+          echo 'Composed review artifact built only on ephemeral hosted runner.'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: undeployed-security-composition-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/router-security-composed-${{ github.event.pull_request.head.sha || github.sha }}.docker.tar.gz
+            ${{ runner.temp }}/composed-archive.sha256
+            ${{ runner.temp }}/composed-metadata.json
+          retention-days: 3
+          if-no-files-found: error
+
+  independent-archive-restore:
+    needs: composed-authorization-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Retrieve archive only from the current successful workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: undeployed-security-composition-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/composed-review
+
+      - name: Verify archived bytes and explicit nonrelease metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/composed-review"
+          archive="router-security-composed-$SOURCE_SHA.docker.tar.gz"
+          test -f "$archive"
+          expected="$(cat composed-archive.sha256)"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          test "$expected" = "$(sha256sum "$archive" | awk '{print $1}')"
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])/"composed-review"
+          data=json.loads((root/"composed-metadata.json").read_text())
+          assert data["schema"]=="draft-threeway-security-composition-v1"
+          assert data["source_sha"]==os.environ["SOURCE_SHA"]
+          assert re.fullmatch("sha256:[0-9a-f]{64}",data["image_id"])
+          assert "@sha256:" in data["base_digest_ref"]
+          for key in ("security_owner_signed_off","credential_custody_closed",
+                      "client_first_deployed","production_authorized"):
+              assert data[key] is False,key
+          print("archive_checksum_and_unreleased_metadata=PASS")
+          PY
+
+      - name: Reload image in independent disposable runner, inspect and probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/composed-review"
+          docker load --input "router-security-composed-$SOURCE_SHA.docker.tar.gz" >/dev/null
+          tag="auto-router-composed-undeployed:$SOURCE_SHA"
+          image_id="$(docker image inspect "$tag" --format '{{.Id}}')"
+          revision="$(docker image inspect "$tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          test "$revision" = "$SOURCE_SHA"
+          IMAGE_ID="$image_id" python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])/"composed-review"
+          metadata=json.loads((root/"composed-metadata.json").read_text())
+          assert metadata["image_id"]==os.environ["IMAGE_ID"]
+          PY
+          docker run --rm -i --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /data:rw,nosuid,nodev,size=64m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_ADMIN_TOKEN=synthetic-restore-canary-only \
+            --entrypoint python "$image_id" - <<'PY'
+          import logging
+          logging.disable(logging.CRITICAL)
+          from fastapi.routing import APIRoute
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app
+          from auto_router.security import require_admin
+          routes=[r for r in app.routes if isinstance(r,APIRoute)]
+          paths={"/jobs/agent/{job_id}","/jobs/agent/{job_id}/artifacts"}
+          protected=[r for r in routes if "GET" in r.methods and r.path in paths]
+          assert len(protected)==2
+          assert all(any(d.call is require_admin for d in r.dependant.dependencies)
+                     for r in protected)
+          client=TestClient(app,raise_server_exceptions=False,follow_redirects=False)
+          for p in ("/admin/providers","/admin/context","/admin/circuits",
+                    "/jobs/agent/synthetic-nonexistent",
+                    "/jobs/agent/synthetic-nonexistent/artifacts"):
+              assert client.get(p).status_code==401,p
+          print("independently_restored_strict_live_auth=PASS")
+          print("independently_restored_sensitive_job_reads=2/2")
+          PY
+          echo 'No production container/image, router listener or credentials touched.'
