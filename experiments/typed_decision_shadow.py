@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from hashlib import sha256
 import json
 import math
-from pathlib import Path
 import re
 import statistics
 import sys
+from collections import defaultdict
+from hashlib import sha256
+from pathlib import Path
 
 FIELDS = frozenset({"case_id", "model_id", "model_revision", "task_type", "variant",
                     "state_sha256", "gold", "prediction", "confidence", "eligible_options",
@@ -203,7 +203,8 @@ def score(rows: list[dict], baseline: str) -> dict:
             c_only = sum(c and not b for b, c in paired)
             comparisons[model] = {
                 "baseline": baseline, "baseline_cases": len(anchors),
-                "candidate_cases": len(candidate), "common_cases": len(anchors.keys() & candidate.keys()),
+                "candidate_cases": len(candidate),
+                "common_cases": len(anchors.keys() & candidate.keys()),
                 "paired_valid": len(paired), "baseline_only_correct": b_only,
                 "candidate_only_correct": c_only,
                 "exact_mcnemar_p": mcnemar(b_only, c_only) if paired else None,
@@ -212,7 +213,8 @@ def score(rows: list[dict], baseline: str) -> dict:
     return {
         "models": reports, "comparisons_to_baseline": comparisons,
         "execution_attested": False, "promotion_approved": False,
-        "notice": "DECLARED model IDs, not execution proof; no authority for routing, admission or claims.",
+        "notice": ("DECLARED model IDs, not execution proof; "
+                   "no authority for routing, admission or claims."),
     }
 
 
