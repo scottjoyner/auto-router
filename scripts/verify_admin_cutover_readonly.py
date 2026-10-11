@@ -13,7 +13,7 @@ import os
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 ANONYMOUS_PATHS = (
     "/admin/providers",
@@ -140,7 +140,9 @@ def main() -> int:
     parser.add_argument("--anonymous-only", action="store_true")
     args = parser.parse_args()
     try:
-        opener = build_opener(_DenyRedirect)
+        # Never send an operator credential to a process-wide HTTP proxy.
+        # The accepted target is loopback, and redirects remain forbidden.
+        opener = build_opener(ProxyHandler({}), _DenyRedirect())
         report = check(
             args.base_url,
             token=os.environ.get("AUTO_ROUTER_ADMIN_TOKEN"),
