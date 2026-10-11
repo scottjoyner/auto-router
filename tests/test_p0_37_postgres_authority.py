@@ -13,7 +13,6 @@ import subprocess
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from threading import Barrier
 
 import pytest
