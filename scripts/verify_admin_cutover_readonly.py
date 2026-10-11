@@ -20,6 +20,8 @@ ANONYMOUS_PATHS = (
     "/admin/providers/effective",
     "/admin/providers/health",
     "/admin/context",
+    "/admin/circuits",
+    "/admin/agent-workers",
 )
 ALLOWED_PROVIDER_FIELDS = frozenset(
     (
