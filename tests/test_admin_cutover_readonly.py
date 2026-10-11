@@ -79,11 +79,11 @@ def test_only_local_fixed_transport_accepted(base):
         gate.validate_loopback_base(base)
 
 
-def test_anonymous_only_has_no_token_and_four_readonly_gets():
+def test_anonymous_only_has_no_token_and_six_readonly_gets():
     transport = FakeOpener()
     result = gate.check("http://127.0.0.1:8088", token=TOKEN, opener=transport, anonymous_only=True)
     assert result == {"anonymous_admin_denied": True, "authenticated_snapshot": "NOT_CHECKED"}
-    assert len(transport.calls) == 4
+    assert len(transport.calls) == 6
     assert all(token is None and timeout == 5 for _, token, timeout in transport.calls)
 
 
@@ -91,7 +91,7 @@ def test_hardened_anonymous_and_sanitized_auth_paths_pass():
     transport = FakeOpener()
     result = gate.check("http://127.0.0.1:8088", token=TOKEN, opener=transport)
     assert result == {"anonymous_admin_denied": True, "authenticated_snapshot": "PASS"}
-    assert len(transport.calls) == 5
+    assert len(transport.calls) == 7
     assert transport.calls[-1][1] == TOKEN
     assert transport.calls[-1][0].endswith("/admin/providers/effective")
     assert all(token is None for _, token, _ in transport.calls[:-1])
@@ -107,11 +107,28 @@ def test_anonymous_200_is_blocker_and_does_not_request_with_admin_token():
     assert all(token is None for _, token, _ in transport.calls)
 
 
+@pytest.mark.parametrize("exposed_route", ["/admin/providers", "/admin/providers/effective", "/admin/providers/health", "/admin/context", "/admin/circuits", "/admin/agent-workers"])
+def test_each_anonymous_admin_route_is_required_to_deny(exposed_route):
+    class RouteAwareOpener(FakeOpener):
+        def open(self, request, timeout):
+            if request.full_url.endswith(exposed_route):
+                self.calls.append((request.full_url, request.get_header("X-admin-token"), timeout))
+                return FakeResponse(200, b"PRIVATE_BODY_MUST_NOT_BE_READ")
+            return super().open(request, timeout)
+
+    transport = RouteAwareOpener()
+    report = gate.check("http://127.0.0.1:8088", token=TOKEN, opener=transport)
+    assert report["reason"] == "ANONYMOUS_ADMIN_NOT_DENIED"
+    assert report["anonymous_admin_denied"] is False
+    assert all(token is None for _, token, _ in transport.calls)
+    assert "PRIVATE_BODY_MUST_NOT_BE_READ" not in json.dumps(report)
+
+
 def test_no_token_refuses_to_certify_authenticated_endpoint():
     transport = FakeOpener()
     result = gate.check("http://127.0.0.1:8088", token=None, opener=transport)
     assert result["reason"] == "APPROVED_ADMIN_TOKEN_REQUIRED"
-    assert len(transport.calls) == 4
+    assert len(transport.calls) == 6
 
 
 @pytest.mark.parametrize("bad", [
@@ -139,7 +156,7 @@ def test_auth_denial_never_falls_back_to_anonymous():
     transport = FakeOpener(auth_status=403)
     report = gate.check("http://127.0.0.1:8088", token=TOKEN, opener=transport)
     assert report["reason"] == "AUTHENTICATED_SNAPSHOT_NOT_AVAILABLE"
-    assert len(transport.calls) == 5
+    assert len(transport.calls) == 7
 
 
 def test_operator_transport_disables_proxy_and_redirect_before_any_token(monkeypatch, capsys):
