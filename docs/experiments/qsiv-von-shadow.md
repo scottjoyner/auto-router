@@ -121,3 +121,14 @@ The policy oracle stores no fabricated latency or confidence, and its observatio
 The opt-in Von adapter defaults to a maximum FOUR requests on --execute. Passing the 216-row corpus without an explicit larger --max-requests refuses execution BEFORE /health or any inference POST. This bounds accidental CPU load; it does not attest weights, memory budgets, preloading or authorization.
 
 **NO-GO remains:** independently review 100+ separate real/held-out matched cases; pin exact weights, calibration, model/backend and code hashes; observe the same sanitized cases; record actual CPU/GPU, RAM, energy and latency; independently attest user ownership and physical model execution. The generated corpus alone can NEVER satisfy these gates.
+
+
+## Exact question-contract binding (paired-evaluation integrity)
+
+Every observation now requires BOTH a sanitized state_sha256 and a question_sha256. The Von adapter hashes the normalized instructions and an ORDERED list of (option key, option description) pairs, so changing wording, available answer descriptions or display order changes the question contract.
+
+- For comparisons on the same case ID and variant, the scorer refuses a pair if model A and model B have different state digests, independent gold, eligible_options, or question digests.
+- For an original/permuted pair, the scorer requires the SAME state/labels/authorization, but a DIFFERENT question fingerprint. The Von fixture parser also independently checks that the actual options were reordered.
+- Digests are matching identifiers, not signatures or physical runtime evidence. Since the scorer cannot reconstruct inputs from hashes alone, the trusted producer must archive the canonical, SANITIZED question-render contract separately and verify its digest.
+- This is an intentional draft-only schema change, with no impact on any production router routes, streams or request receipts. Older experimental JSONL observations without question_sha256 are refused rather than silently considered comparable.
+- QSIV does not yet have a real inference adapter. When that exists, it must hash the same model-visible typed contract before emitting comparable observations; matching only the shared document is insufficient.
