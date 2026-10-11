@@ -100,3 +100,44 @@ service logs. Only then consider a bounded low-I/O size inventory or a
 copy-verified evacuation/retention plan. Never perform blind
 `rm`, `docker system prune`, journal vacuum, filesystem reserve adjustment,
 or reformat under issue #37. Keep the model canary NO_GO.
+
+## Read-only process and source/destination reconciliation
+
+A narrow `ps` inspection (without recursively scanning any additional
+filesystem) showed these **active, distinct task groups** on Beelink.
+Process IDs are time-specific observations, not stable task identifiers:
+
+| Owner/process group | Source or scan | Destination / impact |
+| --- | --- | --- |
+| root, `rsync -rnc` (PID group 1168938/1168939/1168940) | `/mnt/nas5-output-primary/b-output-s2/` | `/nas/fileserver/archive/dashcam/beelink/b-output-s2/`; **recursive checksum dry run**, no target writes, potentially expensive reads |
+| scott, detached `rsync -av` group | `/media/scott/SSD_4TB/research/ai-research-vault/vault/repos/` | `/nas/fileserver/research-data/ai-research-vault/vault/repos/`; transfer group one |
+| scott, detached `rsync -av --progress` group | **Same SSD-backed source** | **Same NAS destination**; transfer group two, overlapping work |
+| root, detached `find` groups | `/mnt/nas5-output-direct/NAS_BKP` | Broad recovery-file scans; some include per-file size output |
+| scott, detached `find` groups | `/` for `60-Mappings`, `AGENTS.md`, `rip-dvd*`; one `/media/scott` search | Broad namespace traversal, potentially crossing mounted storage |
+
+The two research `rsync` parent shells are owned by `scott` and reparented
+to PID 1; the recovery `find` parents are root-owned shells, and the NAS5
+checksum transfer is managed through a root-owned `timeout` parent.
+**No process was signaled, reniced, throttled, stopped, or reconfigured.**
+
+These data points support a likely **I/O contention** mechanism:
+simultaneous checksums, duplicated research transfers, and broad scans.
+They do **not** establish what accounts for ~441 GiB of root-file blocks.
+The research copy's destination is on `/nas`; it must not be counted
+as root consumption merely because Beelink initiated the command.
+`/media/scott/SSD_4TB` is an NFS mount, not evidence of a locally
+attached four-terabyte disk.
+
+**Owner-controlled follow-up:** preserve exact rsync source/destination,
+checkpoints, activity and data-custody requirements in the NAS knowledge
+repo. Confirm whether the two duplicate transfer groups are intentionally
+staged or competing before considering a graceful suspension. Investigate
+orphaned `find /` tasks by origin/session, but avoid killing any process
+until its owner verifies it is disposable. Keep all NAS recovery and copy
+pipeline receipts, and do not use an unbounded `du` or content-hash scan
+while I/O PSI is high.
+
+The physical Auto-router canary remains **NO_GO** regardless of how the
+ongoing transfers are reconciled: independent human auth, approved
+per-subject custody and real request-level provider attestation are still
+unproven.
