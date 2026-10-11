@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi.routing import APIRoute
 
 from auto_router import main
 from auto_router.config import ProviderRegistry
@@ -15,6 +16,7 @@ from auto_router.effective_provider_snapshot import (
     endpoint_reference,
 )
 from auto_router.models import ModelConfig, ProviderConfig
+from auto_router.security import require_admin
 
 TOKEN = "synthetic-admin-only-not-production-token"
 
@@ -61,6 +63,20 @@ def client(monkeypatch):
         yield test
     finally:
         test.close()
+
+
+def test_all_registered_legacy_admin_routes_depend_on_shared_admin_auth():
+    """Catch a newly mounted admin endpoint even if GATED is not updated."""
+    routes = [
+        route for route in main.app.routes
+        if isinstance(route, APIRoute) and route.path.startswith("/admin/")
+    ]
+    assert len(routes) >= 13
+    for route in routes:
+        calls = {item.call for item in route.dependant.dependencies}
+        assert require_admin in calls, (
+            f"admin authentication missing: {','.join(sorted(route.methods or []))} {route.path}"
+        )
 
 
 GATED = [
