@@ -158,7 +158,7 @@ jobs:
           candidate = os.environ["CANDIDATE_ID"]
           assert candidate.startswith("sha256:") and len(candidate) == 71
           Path(os.environ["RUNNER_TEMP"], "router-candidate.override.yml").write_text(
-              "services:\n  llm-router:\n    image: " + candidate + "\n"
+              "services:\n  llm-router:\n    build: !reset null\n    image: " + candidate + "\n    pull_policy: never\n"
           )
           PY
           echo "undelivered_archive_size_bytes=$bytes"
@@ -183,6 +183,13 @@ jobs:
     env:
       REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Checkout reviewed Compose base without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download candidate only from this exact workflow run
         uses: actions/download-artifact@v4
         with:
@@ -214,10 +221,51 @@ jobs:
           assert obj["production_admission_authorized"] is False
           assert obj["credential_custody_verified"] is False
           override = (root / "router-candidate.override.yml").read_text()
-          assert override == "services:\n  llm-router:\n    image: " + obj["candidate_image_id"] + "\n"
+          assert override == ("services:\n  llm-router:\n    build: !reset null\n    image: " + obj["candidate_image_id"] + "\n    pull_policy: never\n")
           print("offline_artifact_bytes_and_release_metadata=PASS")
           PY
           docker compose -f router-candidate.override.yml config -q
+
+      - name: Reject an inherited build in the actual merged Compose deployment model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "reviewed-candidate"
+          metadata = json.loads((root / "router-candidate-metadata.json").read_text())
+          env = dict(os.environ)
+          # Use synthetic interpolation values. Never dump resolved Compose JSON
+          # because operator configurations can contain secret-bearing fields.
+          env["AUTO_ROUTER_INTERNAL_SERVICE_TOKEN"] = "synthetic-merge-only"
+          env["AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE"] = "/dev/null"
+          cmd = [
+              "docker", "compose", "-f", str(Path(os.environ["GITHUB_WORKSPACE"]) / "docker-compose.yml"),
+              "-f", str(root / "router-candidate.override.yml"),
+              "config", "--format", "json",
+          ]
+          result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
+          if result.returncode:
+              raise SystemExit("HOLD_COMPOSE_MERGE_CONFIG_UNAVAILABLE")
+          try:
+              merged = json.loads(result.stdout)
+              router = merged["services"]["llm-router"]
+          except (ValueError, KeyError, TypeError):
+              raise SystemExit("HOLD_COMPOSE_MERGE_SCHEMA")
+          if router.get("build") is not None:
+              raise SystemExit("HOLD_COMPOSE_MERGE_INHERITED_BUILD")
+          if router.get("image") != metadata["candidate_image_id"]:
+              raise SystemExit("HOLD_COMPOSE_MERGE_CANDIDATE_MISMATCH")
+          if router.get("pull_policy") != "never":
+              raise SystemExit("HOLD_COMPOSE_MERGE_PULL_POLICY")
+          print("merged_real_compose_candidate_image_only=PASS")
+          print("merged_compose_build_absent=PASS")
+          print("merged_compose_no_automatic_pull=PASS")
+          PY
 
       - name: Load only into disposable hosted runner and re-verify embedded code
         shell: bash
