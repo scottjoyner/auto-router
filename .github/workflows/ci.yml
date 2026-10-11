@@ -277,6 +277,37 @@ jobs:
           assert projection.get("current") is None, projection
           assert isinstance(projection.get("retired_generations"), list), projection
           PY
+      - name: Verify every mounted strict-live admin route is explicitly authenticated
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.integration.yml exec -T llm-router python - <<'PY'
+          from fastapi.routing import APIRoute
+          from auto_router.secure_live import app
+          from auto_router.security import require_admin
+
+          admin = [
+              route for route in app.router.routes
+              if isinstance(route, APIRoute) and route.path.startswith("/admin/")
+          ]
+          assert admin, "no mounted admin routes: wrong entrypoint?"
+          missing = []
+          for route in admin:
+              pending = list(route.dependant.dependencies)
+              seen = set()
+              guarded = False
+              while pending:
+                  dependency = pending.pop()
+                  if id(dependency) in seen:
+                      continue
+                  seen.add(id(dependency))
+                  if dependency.call is require_admin:
+                      guarded = True
+                      break
+                  pending.extend(dependency.dependencies)
+              if not guarded:
+                  missing.append((route.path, sorted(route.methods)))
+          assert not missing, f"unguarded mounted admin routes: {missing}"
+          print(f"strict_live_admin_routes_explicitly_authenticated={len(admin)}")
+          PY
       - name: Capture diagnostics on failure
         if: failure()
         run: |
