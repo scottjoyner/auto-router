@@ -104,7 +104,7 @@ def write_new(path: Path, rows: list[dict]) -> str:
     dest = path.resolve(strict=False)
     if dest == Path("/tmp") or not dest.is_relative_to(Path("/tmp")):
         raise ValueError("outputs must be new files under /tmp")
-    content = "".join(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n"
+    content = "".join(json.dumps(row, separators=(",", ":"), sort_keys=False) + "\n"
                       for row in rows).encode("utf-8")
     with os.fdopen(os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                           getattr(os, "O_NOFOLLOW", 0), 0o600), "wb") as out:
