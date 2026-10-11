@@ -255,3 +255,86 @@ def test_independent_python_process_rejects_conflicting_human(
         capture_output=True, text=True, timeout=9, check=True,
     )
     assert proc.stdout.strip() == "DENIED"
+
+
+
+def test_shared_authority_works_with_insert_select_only_role(authority):
+    """Runtime needs no schema creation, update or deletion privileges.
+
+    Only a disposable loopback PostgreSQL container is touched.
+    """
+    database = psycopg.conninfo.conninfo_to_dict(authority._dsn)["dbname"]
+    role = "p0_writer_" + uuid.uuid4().hex[:16]
+    password = uuid.uuid4().hex
+    admin_dsn = os.environ["P0_37_TEST_PG_DSN"]
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(
+            'CREATE ROLE "' + role + '" LOGIN PASSWORD %s',
+            (password,),
+        )
+        try:
+            with psycopg.connect(authority._dsn) as manager:
+                manager.execute(
+                    'GRANT USAGE ON SCHEMA p0_verified_user_owner_v1 TO "' + role + '"'
+                )
+                manager.execute(
+                    'GRANT SELECT ON p0_verified_user_owner_v1.authority TO "'
+                    + role + '"'
+                )
+                manager.execute(
+                    'GRANT SELECT, INSERT ON p0_verified_user_owner_v1.root_owner,'
+                    'p0_verified_user_owner_v1.attempt_owner TO "' + role + '"'
+                )
+            limited_dsn = psycopg.conninfo.make_conninfo(
+                authority._dsn,
+                user=role,
+                password=password,
+            )
+            limited = PostgresRootOwnerAuthority(
+                limited_dsn, authority._secret, authority.authority_id,
+                require_tls=False,
+            )
+            signer = Ed25519PrivateKey.generate()
+            a, signed = _claims(signer, "alice")
+            assert limited.reserve(a, signed) is True
+            assert _clone(authority).reserve(a, signed) is False
+            with psycopg.connect(limited_dsn) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        "DELETE FROM p0_verified_user_owner_v1.root_owner"
+                    )
+        finally:
+            # Revoke in the disposable database before dropping global role.
+            with psycopg.connect(authority._dsn) as manager:
+                manager.execute(
+                    'REVOKE ALL ON ALL TABLES IN SCHEMA '
+                    'p0_verified_user_owner_v1 FROM "' + role + '"'
+                )
+                manager.execute(
+                    'REVOKE USAGE ON SCHEMA p0_verified_user_owner_v1 FROM "'
+                    + role + '"'
+                )
+            admin.execute('DROP ROLE "' + role + '"')
+
+
+def test_explicit_new_authority_cannot_bootstrap_again_or_rekey(authority):
+    with pytest.raises(RootOwnerStorageError, match="offline provisioning refused"):
+        PostgresRootOwnerAuthority(
+            authority._dsn, authority._secret, authority.authority_id,
+            bootstrap=True, require_tls=False,
+        )
+    with pytest.raises(RootOwnerStorageError, match="identity"):
+        PostgresRootOwnerAuthority(
+            authority._dsn, authority._secret, authority.authority_id + "-wrong",
+            require_tls=False,
+        )
+
+
+def test_disposable_authority_cannot_prove_execution_or_delivery(authority):
+    signer = Ed25519PrivateKey.generate()
+    claims, token = _claims(signer, "alice")
+    assert authority.reserve(claims, token) is True
+    assert "provider_execution_attested" not in claims
+    assert "response_delivered" not in claims
+    assert "provider_process" not in claims
+    assert "provider_execution_attested" not in vars(authority)
