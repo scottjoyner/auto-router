@@ -9,6 +9,7 @@ grant trace readback, verify an IdP or alter configured providers.
 from __future__ import annotations
 
 import base64
+import binascii
 import hmac
 import json
 import os
@@ -22,7 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
 
-from auto_router.request_idempotency import _PROTECTED_PATHS, _read_body
+from auto_router.request_idempotency import _PROTECTED_PATHS
 
 _HEADER = b"x-auto-router-user-delegation"
 _SCOPE_KEY = "auto_router.p0_verified_user_delegation"
@@ -52,7 +53,7 @@ def _decode_part(part: str) -> bytes:
         raise DelegationError("invalid delegation encoding")
     try:
         return base64.urlsafe_b64decode(part + "=" * ((4 - len(part) % 4) % 4))
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, binascii.Error) as exc:
         raise DelegationError("invalid delegation encoding") from exc
 
 
@@ -193,6 +194,31 @@ def _service_bearer(scope: dict[str, Any], secret: str) -> bool:
     return hmac.compare_digest(candidate[7:].strip(), secret)
 
 
+async def _bounded_request_body(receive: Any, *, max_bytes: int = 262144):
+    """Bound memory before parsing; retain client-disconnect propagation."""
+    body = bytearray()
+    more = True
+    while more:
+        message = await receive()
+        if message.get("type") != "http.request":
+            raise DelegationError("invalid delegated request body")
+        chunk = message.get("body", b"")
+        if not isinstance(chunk, bytes) or len(body) + len(chunk) > max_bytes:
+            raise DelegationError("delegated request too large")
+        body.extend(chunk)
+        more = bool(message.get("more_body", False))
+    replayed = False
+
+    async def replay():
+        nonlocal replayed
+        if replayed:
+            return await receive()
+        replayed = True
+        return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+    return bytes(body), replay
+
+
 class UserDelegationShadowMiddleware:
     """Runs after existing executor auth, before request idempotency.
 
@@ -230,9 +256,7 @@ class UserDelegationShadowMiddleware:
             service_secret = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
             if not _service_bearer(scope, service_secret):
                 raise DelegationError("delegation requires authenticated gateway service")
-            data, replay = await _read_body(receive)
-            if len(data) > 262144:
-                raise DelegationError("delegated request too large")
+            data, replay = await _bounded_request_body(receive)
             body = _decode_json(data)
             model = body.get("model")
             if not isinstance(model, str):
