@@ -111,3 +111,22 @@ client acceptance. Do not interpret a 401 result as proof of provider
 residency, model admission, legitimate caller functionality, WAN isolation,
 credential custody, or the ability to roll back safely. No production
 ingress or container configuration is changed by this runbook.
+
+## Refreshed downstream compatibility evidence (Oct 11, 2026)
+
+The earlier 833-pass/1-failure reference above is **historical**, not the
+latest downstream state. At AssistX PR #288 head
+`af96c45c6c5d4f3ebad969c7286e2c84e32f58c5`:
+
+- [Pinned three-way acceptance 38152607289](https://github.com/scottjoyner/auto-assist/actions/runs/38152607289) **PASS** for targeted, full non-integration unit and recovery canary. Its dependencies were PR #291 `41c37863dd1b0b03585f2c77221796fb6795bb18` and PR #290 `5c2ace82bf92d80c2871b5f3d5b81688522d6aed`.
+- [Source-binding composition 38152607284](https://github.com/scottjoyner/auto-assist/actions/runs/38152607284) **PASS**; [repair-stack composition 38152607282](https://github.com/scottjoyner/auto-assist/actions/runs/38152607282) **PASS**.
+- Standalone [PR #288 CI 38152607337](https://github.com/scottjoyner/auto-assist/actions/runs/38152607337) remains **FAILED** and is not waived.
+- A [read-only old-router compatibility receipt](https://github.com/scottjoyner/auto-assist/blob/af96c45c6c5d4f3ebad969c7286e2c84e32f58c5/docs/evidence/router-catalog-old-router-compatibility-readonly-20261011.json) records effective GET **404**, followed by configured-header legacy GET **200**, without deployment. It establishes compatibility, **not enforced authentication**: anonymous inherited admin GETs were also observed returning 200.
+
+These are downstream **client** checks, not tests of this router PR #41 at a
+physical deployment. The old router exposure and AssistX P0 #156 credential
+custody hold remain. Do not deploy, change port publishing, or claim a remote
+401 until both Destroyer and Lenovo independently return a signed-off
+status-only `PASS_REMOTE_401` on the actual candidate build after supervised
+cutover. A timestamp and exact candidate SHA must accompany the operator's
+receipts; successful synthetic tests cannot substitute for them.
