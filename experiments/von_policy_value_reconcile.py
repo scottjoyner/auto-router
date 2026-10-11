@@ -10,9 +10,7 @@ import argparse
 import json
 import math
 import os
-import statistics
 import sys
-from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 
