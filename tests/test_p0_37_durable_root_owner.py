@@ -11,19 +11,18 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from test_p0_37_verified_user_delegation import _token
 
+from auto_router.user_delegation import verify_user_delegation
 from auto_router.user_root_ledger import (
     RootOwnerConflict,
     RootOwnerLedger,
     RootOwnerStorageError,
     read_pinned_root_secret,
 )
-from test_p0_37_verified_user_delegation import _token
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from auto_router.user_delegation import verify_user_delegation
 
 
 _SECRET = b"\xb7" * 32
@@ -123,7 +122,8 @@ def test_concurrent_same_root_different_owner_has_one_winner(tmp_path):
     with sqlite3.connect(file) as db:
         assert db.execute("SELECT COUNT(*) FROM p0_root_owner").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM p0_attempt_owner").fetchone()[0] == 1
-    assert first.reserve(*a) is False or first.reserve(*b) is False
+    winner = a if results[0] is True else b
+    assert first.reserve(*winner) is False
 
 
 def test_concurrent_distinct_roots_from_two_owners_both_commit(tmp_path):
