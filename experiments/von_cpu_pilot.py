@@ -46,7 +46,7 @@ def admissible_workspace(path: Path) -> Path:
     root = path.resolve(strict=False)
     if not root.is_relative_to(Path("/tmp")) or root == Path("/tmp"):
         raise ValueError("workspace must reside under /tmp")
-    if root.is_symlink():
+    if path.is_symlink():
         raise ValueError("workspace symlink not permitted")
     return root
 
@@ -103,8 +103,8 @@ def check_snapshot(snapshot: Path) -> dict:
 
 def prefetch(work: Path) -> dict:
     physical_preflight()
-    if not work.exists() or any(work.iterdir()):
-        raise ValueError("prefetch requires new empty workspace under /tmp")
+    if not work.is_dir() or (work / "hf-cache").exists():
+        raise ValueError("prefetch requires a new model cache under /tmp")
     from huggingface_hub import snapshot_download
 
     snapshot = Path(snapshot_download(
@@ -112,8 +112,9 @@ def prefetch(work: Path) -> dict:
         allow_patterns=list(REQUIRED), max_workers=2,
     ))
     hashes = check_snapshot(snapshot)
+    # HF snapshots symlink to blobs; count disk blocks only once.
     cache_bytes = sum(p.stat().st_size for p in (work / "hf-cache").rglob("*")
-                      if p.is_file())
+                      if p.is_file() and not p.is_symlink())
     if cache_bytes > MAX_CACHE_BYTES:
         raise ValueError("download cache exceeds 4.5 GB evidence budget")
     return {
