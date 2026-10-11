@@ -254,3 +254,48 @@ def test_secret_file_requires_exact_bytes_safe_mode_and_owner(tmp_path):
 def test_storage_unavailable_denies_before_any_scope_grant(tmp_path):
     with pytest.raises(RootOwnerStorageError, match="parent directory"):
         _ledger(tmp_path / "does-not-exist" / "owner.sqlite")
+
+
+def test_lost_owner_database_cannot_silently_bootstrap_after_restart(tmp_path):
+    file = tmp_path / "lost.sqlite"
+    signer = Ed25519PrivateKey.generate()
+    row, token = _claim(signer, "alice", _uuid(), _uuid())
+    assert _ledger(file).reserve(row, token)
+    file.unlink()  # Disposable test file ONLY, never production custody.
+    with pytest.raises(RootOwnerStorageError, match="explicit provisioning"):
+        RootOwnerLedger(file, _SECRET)
+
+
+def test_replacing_owner_database_midrun_is_rejected(tmp_path):
+    file = tmp_path / "running.sqlite"
+    signer = Ed25519PrivateKey.generate()
+    row, token = _claim(signer, "alice", _uuid(), _uuid())
+    ledger = _ledger(file)
+    assert ledger.reserve(row, token)
+    replacement = tmp_path / "new.sqlite"
+    _ledger(replacement)
+    os.replace(replacement, file)  # Local tmp fixture, not live root storage.
+    new_row, new_token = _claim(signer, "bob", _uuid(), _uuid())
+    with pytest.raises(RootOwnerStorageError, match="storage identity changed"):
+        ledger.reserve(new_row, new_token)
+
+
+def test_startup_never_initializes_an_empty_existing_db_file(tmp_path):
+    file = tmp_path / "empty.sqlite"
+    file.write_bytes(b"")
+    file.chmod(0o600)
+    with pytest.raises(RootOwnerStorageError, match="initialization unavailable"):
+        RootOwnerLedger(file, _SECRET)
+
+
+def test_missing_identity_metadata_denies_new_reservations(tmp_path):
+    file = tmp_path / "metadata-running.sqlite"
+    signer = Ed25519PrivateKey.generate()
+    row, token = _claim(signer, "alice", _uuid(), _uuid())
+    ledger = _ledger(file)
+    assert ledger.reserve(row, token)
+    with sqlite3.connect(file) as db:
+        db.execute("DELETE FROM p0_owner_key_check")
+    new_row, new_token = _claim(signer, "bob", _uuid(), _uuid())
+    with pytest.raises(RootOwnerStorageError, match="key mismatch"):
+        ledger.reserve(new_row, new_token)
