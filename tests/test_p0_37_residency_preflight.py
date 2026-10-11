@@ -152,3 +152,33 @@ def test_cli_config_only_json_reports_unknown_not_unloaded(tmp_path, capsys):
 def test_probe_budgets_are_bounded(workers, timeout):
     with pytest.raises(ValueError):
         preflight.summarize([], max_workers=workers, timeout_seconds=timeout)
+
+
+def test_authoritative_residency_is_never_sufficient_for_physical_admission(
+    monkeypatch, tmp_path,
+):
+    services = preflight.configured_services(
+        _config(tmp_path, [_service("resident-service", "beelink", 1234)])
+    )
+
+    def resident_response(service, *, timeout_seconds):
+        return NodeInfo(
+            name=service["node_id"],
+            ip="127.0.0.1",
+            online=True,
+            loaded_models=["resident/model"],
+            all_models=["resident/model"],
+            inventory_authoritative=True,
+        )
+
+    monkeypatch.setattr(preflight, "_probe_provider", resident_response)
+    output = preflight.summarize(services, probe=True)
+    assert output["inventory_candidate_services"] == 1
+    assert output["physical_inference_permitted"] is False
+    assert output["host_pressure_checked"] is False
+    assert output["operator_approved"] is False
+    row = output["services"][0]
+    assert row["inventory_candidate"] is True
+    assert row["candidate_evidence_scope"] == "resident_inventory_only"
+    assert row["host_pressure_checked"] is False
+    assert row["physical_inference_permitted"] is False
