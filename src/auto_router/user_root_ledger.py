@@ -115,7 +115,8 @@ class RootOwnerLedger:
                         """CREATE TABLE IF NOT EXISTS p0_root_owner (
                                root_hash TEXT PRIMARY KEY,
                                owner_hash TEXT NOT NULL,
-                               model_hash TEXT NOT NULL
+                               model_hash TEXT NOT NULL,
+                               request_scope_hash TEXT NOT NULL
                            )"""
                     )
                     connection.execute(
@@ -128,6 +129,17 @@ class RootOwnerLedger:
                            )"""
                     )
                 connection.execute("PRAGMA foreign_keys=ON")
+                columns = {
+                    row[1] for row in connection.execute(
+                        "PRAGMA table_info(p0_root_owner)"
+                    )
+                }
+                if not {
+                    "root_hash", "owner_hash", "model_hash", "request_scope_hash"
+                }.issubset(columns):
+                    raise RootOwnerStorageError(
+                        "root ledger request-bound schema unavailable"
+                    )
                 expected = self._digest("ledger-key-check", "version-1")
                 row = connection.execute(
                     "SELECT key_check FROM p0_owner_key_check WHERE singleton=1"
@@ -162,6 +174,11 @@ class RootOwnerLedger:
             "owner", claims["issuer"], claims["tenant"], claims["subject"]
         )
         model_hash = self._digest("model", claims["model_handle"])
+        scope_hash = self._digest(
+            "request-scope",
+            claims.get("request_path", "legacy-v1-unbound"),
+            claims.get("request_sha256", "legacy-v1-unbound"),
+        )
         signer_jti_hash = self._digest("jti", claims["jti"])
         token_hash = self._digest("signed-jwt", token)
         connection = self._connect()
@@ -180,17 +197,21 @@ class RootOwnerLedger:
                 raise RootOwnerStorageError("root ledger key mismatch")
 
             root = connection.execute(
-                "SELECT owner_hash, model_hash FROM p0_root_owner WHERE root_hash=?",
+                "SELECT owner_hash, model_hash, request_scope_hash "
+                "FROM p0_root_owner WHERE root_hash=?",
                 (root_hash,),
             ).fetchone()
             if root is None:
                 connection.execute(
-                    "INSERT INTO p0_root_owner(root_hash, owner_hash, model_hash) "
-                    "VALUES (?, ?, ?)",
-                    (root_hash, owner_hash, model_hash),
+                    "INSERT INTO p0_root_owner("
+                    "root_hash, owner_hash, model_hash, request_scope_hash) "
+                    "VALUES (?, ?, ?, ?)",
+                    (root_hash, owner_hash, model_hash, scope_hash),
                 )
-            elif root != (owner_hash, model_hash):
-                raise RootOwnerConflict("delegated root owner or model conflict")
+            elif root != (owner_hash, model_hash, scope_hash):
+                raise RootOwnerConflict(
+                    "delegated root owner, model or request scope conflict"
+                )
 
             # A signed gateway JTI is one-time across the entire ledger,
             # never just within an owner or root namespace.
