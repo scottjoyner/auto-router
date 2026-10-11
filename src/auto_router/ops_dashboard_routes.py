@@ -8,13 +8,14 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
 from auto_router.preflight import build_preflight_report
 from auto_router.gateway import build_agentgateway_status
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status
+from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.ui_pages import get_ui_page_sections
 
@@ -32,11 +33,11 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
             context=data,
         )
 
-    @app.get("/admin/ops/summary")
+    @app.get("/admin/ops/summary", dependencies=[Depends(require_admin)])
     async def admin_ops_summary() -> dict[str, Any]:
         return build_ops_summary(state)
 
-    @app.get("/admin/ops/preflight")
+    @app.get("/admin/ops/preflight", dependencies=[Depends(require_admin)])
     async def admin_ops_preflight() -> dict[str, Any]:
         return build_preflight_report(state, get_settings())
 
