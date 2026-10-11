@@ -278,7 +278,7 @@ def main() -> int:
             print(json.dumps({
                 "synthetic_cases": len(design), "distinct_facts": 10,
                 "question_templates": list(TEMPLATES), "option_orders": list(ORDERS),
-                "actual_inference": False, "preflight": physical_preflight(False),
+                "actual_inference": False, "preflight": physical_preflight(require_capacity=False),
             }, sort_keys=True))
             return 0
         if not args.ack_cpu_impact or args.out is None:
