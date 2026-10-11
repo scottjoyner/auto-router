@@ -180,4 +180,6 @@ def test_synthetic_override_rejects_unrelated_top_level_changes(monkeypatch, tmp
     report = gate.run_synthetic_overlay_check([str(filename)], service="llm-router")
     assert report["decision"] == "HOLD_PRIVATE_COMPOSE"
     assert "ALL_OTHER_COMPOSE_FIELDS_UNCHANGED" in report["reason_codes"]
-    assert "PRIVATE" not in json.dumps(report)
+    assert all(value not in json.dumps(report) for value in (
+        "different-project", "unreviewed-secret", "unexpected-config"
+    ))
