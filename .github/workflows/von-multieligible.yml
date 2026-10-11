@@ -32,7 +32,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_von_multi_eligible_cpu.py' -q
           python -m unittest discover -s tests -p 'test_von_multi_eligible_reconcile.py' -q
-          python experiments/von_multi_eligible_cpu.py --workspace /tmp
+          research_dir=$(mktemp -d /tmp/von-multieligible-ci-XXXXXX)
+          python experiments/von_multi_eligible_cpu.py --workspace "$research_dir"
       - name: Lint all research-only files
         run: |
           ruff check \
