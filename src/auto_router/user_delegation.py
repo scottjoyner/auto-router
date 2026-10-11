@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import os
@@ -91,6 +92,16 @@ def _uuid4(value: Any) -> bool:
     return parsed.version == 4 and str(parsed) == value
 
 
+def delegated_body_digest(path: str, payload: dict[str, Any]) -> str:
+    """v2 signed-request scope; stable across JSON whitespace and key ordering."""
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"p0-delegated-body-v2\x00" + path.encode("ascii") + b"\x00" + canonical
+    ).hexdigest()
+
+
 def verify_user_delegation(
     token: str,
     *,
@@ -98,6 +109,9 @@ def verify_user_delegation(
     key_id: str,
     model: str,
     now: int | None = None,
+    request_path: str | None = None,
+    request_body: dict[str, Any] | None = None,
+    require_body_digest: bool = False,
 ) -> dict[str, Any]:
     """Validate gateway signature AND exact model scope, no client metadata.
 
@@ -129,13 +143,33 @@ def verify_user_delegation(
         "schema", "iss", "aud", "tenant", "subject", "root_request_id",
         "attempt_id", "model_handle", "iat", "nbf", "exp", "jti",
     }
-    if set(claims) != required:
-        raise DelegationError("invalid delegation claims schema")
-    if (
-        claims["schema"] != "p0-user-shadow-v1"
-        or claims["iss"] != _ISSUER
-        or claims["aud"] != _AUDIENCE
-    ):
+    schema = claims.get("schema")
+    if schema == "p0-user-shadow-v2":
+        if set(claims) != required | {"request_path", "request_sha256"}:
+            raise DelegationError("invalid v2 delegation claims")
+        digest = claims["request_sha256"]
+        path = claims["request_path"]
+        if (
+            path != "/v1/chat/completions"
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise DelegationError("invalid signed request scope")
+        if request_path is not None or request_body is not None or require_body_digest:
+            if not isinstance(request_path, str) or not isinstance(request_body, dict):
+                raise DelegationError("delegated request body required")
+            if request_path != path or not hmac.compare_digest(
+                digest, delegated_body_digest(request_path, request_body)
+            ):
+                raise DelegationError("signed delegated request digest mismatch")
+    elif schema == "p0-user-shadow-v1" and not require_body_digest:
+        # Backward compatibility for isolated v1 research tests only.
+        # The live experimental installer always requires v2 body binding.
+        if set(claims) != required:
+            raise DelegationError("invalid legacy delegation claims")
+    else:
+        raise DelegationError("request-bound delegation v2 required")
+    if claims["iss"] != _ISSUER or claims["aud"] != _AUDIENCE:
         raise DelegationError("invalid delegation audience")
     for name in ("tenant", "subject", "jti"):
         if not isinstance(claims[name], str) or not _IDENTIFIER.fullmatch(claims[name]):
@@ -243,11 +277,13 @@ class UserDelegationShadowMiddleware:
     def __init__(
         self, app: Any, *, public_key: Ed25519PublicKey, key_id: str,
         owner_ledger: RootOwnerLedger,
+        require_body_digest: bool = False,
     ) -> None:
         self.app = app
         self.public_key = public_key
         self.key_id = key_id
         self.owner_ledger = owner_ledger
+        self.require_body_digest = require_body_digest
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if (
@@ -282,6 +318,9 @@ class UserDelegationShadowMiddleware:
                 public_key=self.public_key,
                 key_id=self.key_id,
                 model=model,
+                request_path=str(scope.get("path", "")),
+                request_body=body,
+                require_body_digest=self.require_body_digest,
             )
             # Persist the unique owner/model/root/attempt binding BEFORE any
             # downstream idempotency reservation or routing. A repeated
@@ -375,6 +414,7 @@ def install_user_delegation_shadow(app: Any) -> None:
         UserDelegationShadowMiddleware,
         public_key=public_key, key_id=key_id,
         owner_ledger=owner_ledger,
+        require_body_digest=True,
     )
     app.state.p0_user_delegation_shadow_installed = True
 
