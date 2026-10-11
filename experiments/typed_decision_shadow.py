@@ -13,7 +13,8 @@ from hashlib import sha256
 from pathlib import Path
 
 FIELDS = frozenset({"case_id", "model_id", "model_revision", "task_type", "variant",
-                    "state_sha256", "gold", "prediction", "confidence", "eligible_options",
+                    "state_sha256", "question_sha256", "gold", "prediction", "confidence",
+                    "eligible_options",
                     "evidence_complete", "latency_ms", "status", "source_kind"})
 KINDS = {"noul", "choice", "score"}
 VARIANTS = {"original", "permuted", "missing_evidence", "contradiction"}
@@ -33,8 +34,9 @@ def check(row: object) -> dict:
         raise ValueError("invalid task_type or variant")
     if row["status"] not in STATUSES or row["source_kind"] not in SOURCES:
         raise ValueError("invalid status or source_kind")
-    if not isinstance(row["state_sha256"], str) or not DIGEST.fullmatch(row["state_sha256"]):
-        raise ValueError("invalid sanitized-state digest")
+    for field in ("state_sha256", "question_sha256"):
+        if not isinstance(row[field], str) or not DIGEST.fullmatch(row[field]):
+            raise ValueError("invalid " + field + " digest")
     if type(row["evidence_complete"]) is not bool:
         raise ValueError("evidence_complete must be bool")
     if row["variant"] == "missing_evidence" and row["evidence_complete"]:
@@ -94,11 +96,14 @@ def load(path: Path) -> tuple[list[dict], str]:
                 if model in sources and sources[model] != kind:
                     raise ValueError("source kinds mixed under one model_id")
                 revisions[model], sources[model] = rev, kind
-                contract = (row["task_type"], row["state_sha256"], row["gold"],
-                            row["evidence_complete"], tuple(sorted(row["eligible_options"])))
+                shared = (row["task_type"], row["state_sha256"], row["gold"],
+                          row["evidence_complete"], tuple(sorted(row["eligible_options"])))
+                # Option order must match within a variant across model observations,
+                # but intentionally differ between original and permuted variants.
+                contract = shared + (row["question_sha256"],)
                 cv = (case, variant)
                 if cv in contracts and contracts[cv] != contract:
-                    raise ValueError("case contract changed between models")
+                    raise ValueError("case or question contract changed between models")
                 contracts[cv] = contract
                 if variant == "original":
                     originals[(case, model)] = contract
@@ -110,8 +115,11 @@ def load(path: Path) -> tuple[list[dict], str]:
     for row in rows:
         if row["variant"] == "permuted":
             anchor = originals.get((row["case_id"], row["model_id"]))
-            if anchor is None or anchor != contracts[(row["case_id"], "permuted")]:
-                raise ValueError("permutation must have same original case, label and state")
+            altered = contracts[(row["case_id"], "permuted")]
+            if anchor is None or anchor[:5] != altered[:5]:
+                raise ValueError("permutation must preserve original state and authority")
+            if anchor[5] == altered[5]:
+                raise ValueError("permutation must change the question contract digest")
     return rows, h.hexdigest()
 
 
