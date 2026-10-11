@@ -7,10 +7,12 @@ on:
       - "scripts/verify_remote_admin_auth_readonly.py"
       - "scripts/verify_release_image_identity_readonly.py"
       - "scripts/verify_private_compose_candidate_readonly.py"
+      - "scripts/verify_router_ingress_containment_readonly.py"
       - "tests/test_admin_cutover_readonly.py"
       - "tests/test_remote_admin_auth_readonly.py"
       - "tests/test_release_image_identity_readonly.py"
       - "tests/test_private_compose_candidate_readonly.py"
+      - "tests/test_router_ingress_containment_readonly.py"
       - ".github/workflows/admin-cutover-readonly.yml"
   push:
     paths:
@@ -18,10 +20,12 @@ on:
       - "scripts/verify_remote_admin_auth_readonly.py"
       - "scripts/verify_release_image_identity_readonly.py"
       - "scripts/verify_private_compose_candidate_readonly.py"
+      - "scripts/verify_router_ingress_containment_readonly.py"
       - "tests/test_admin_cutover_readonly.py"
       - "tests/test_remote_admin_auth_readonly.py"
       - "tests/test_release_image_identity_readonly.py"
       - "tests/test_private_compose_candidate_readonly.py"
+      - "tests/test_router_ingress_containment_readonly.py"
       - ".github/workflows/admin-cutover-readonly.yml"
 
 permissions:
@@ -43,11 +47,13 @@ jobs:
           python -m py_compile scripts/verify_admin_cutover_readonly.py \
             scripts/verify_remote_admin_auth_readonly.py \
             scripts/verify_release_image_identity_readonly.py \
-            scripts/verify_private_compose_candidate_readonly.py
+            scripts/verify_private_compose_candidate_readonly.py \
+            scripts/verify_router_ingress_containment_readonly.py
       - name: Test auth, remote denial, and immutable-image readiness without production access
         run: |
           python -m pytest -q --noconftest \
             tests/test_admin_cutover_readonly.py \
             tests/test_remote_admin_auth_readonly.py \
             tests/test_release_image_identity_readonly.py \
-            tests/test_private_compose_candidate_readonly.py
+            tests/test_private_compose_candidate_readonly.py \
+            tests/test_router_ingress_containment_readonly.py
