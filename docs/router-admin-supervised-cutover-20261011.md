@@ -288,3 +288,53 @@ resolved router service configuration, stage only the approved immutable image,
 retain the actual running rollback image, and independently satisfy the custody,
 network, authenticated caller, and Destroyer/Lenovo remote-401 release gates.
 No Docker build, image pull, or automatic `up` is authorized by this document.
+
+## Production-specific Compose acceptance (Oct 11, metadata-only)
+
+Read-only Fleet Commander inspection of the running x1-370 `git-router-1`
+container identified **one actual operator Compose file** named
+`compose.auto-router-fleet.yml`. This is **not** the checked-in
+`docker-compose.yml` exercised by the disposable image-candidate workflow.
+The running service is `llm-router`, running under Compose, and binds
+container port 8088 to all IPv4 and IPv6 host interfaces. No public-WAN
+reachability conclusion follows from these bindings.
+
+The existing operator Compose structure (values and paths not published) has
+an image reference **by mutable name/tag**, no `build` entry, and no explicit
+`pull_policy`. Its environment and mount sources are private and were
+**not** copied into this repository. A read-only `docker compose config
+--no-env-resolution --format json` inspection against the actual file
+returned a deliberate `HOLD_COMPOSE_STRUCTURE` for
+`IMAGE_NOT_PINNED_TO_RUNNING_IMMUTABLE_ID` and
+`PULL_POLICY_NOT_NEVER`. No Compose config JSON, environment variable
+values, private paths, image identifiers, or secrets were printed.
+
+**New review-only gate:** `scripts/verify_private_compose_candidate_readonly.py`
+takes the *actual operator Compose file stack in deployment order*, and an
+approved exact `sha256:` candidate image ID. It runs only
+`docker compose ... config --no-env-resolution --format json` (no `up`,
+`pull`, `build`, network probe or restart), captures output privately,
+and prints reason codes only. A PASS requires the resolved `llm-router`
+service's `image` to equal the candidate ID, its `build` to be absent
+and `pull_policy` to equal `never`. A missing file, interpolation
+failure, malformed response or mismatch returns HOLD. Unit tests exercise
+synthetic secrets without logging their values.
+
+The operator should run the verifier **only on an approved, locally
+reviewed candidate file stack** after independently capturing the currently
+running image/rollback metadata. Do **not** modify the live Compose file to
+force a PASS, substitute the public CI base for the actual private base,
+or print `docker compose config` in a shared log. The gate does not
+evaluate private network/mount authorization, credential custody,
+service continuity, inference admission or rollback capability. Each
+remains an independent release condition.
+
+Fresh Docker evidence: x1-370's current router container is running and
+the existing image is locally present. Its Docker data filesystem is about
+**97.1% used**, with about **107 GiB** free. This is a staging HOLD
+pending storage-owner acceptance; no images or caches were deleted or
+changed. P0 AssistX credential custody #156 remains unresolved. The
+router is **not** on PR #41, and physical postcutover six-route 401 checks
+from Destroyer and Lenovo have not been performed.
+
+**Decision: DRAFT / NO DEPLOY.**
