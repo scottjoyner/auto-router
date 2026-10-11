@@ -20,10 +20,11 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from test_p0_37_postgres_authority import disposable_pg
 from test_p0_37_verified_user_delegation import _app
 
 from auto_router.user_root_postgres import PostgresRootOwnerAuthority
+
+pytest_plugins = ("test_p0_37_postgres_authority",)
 
 
 def _b64(value: bytes) -> str:
