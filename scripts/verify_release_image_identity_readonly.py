@@ -24,6 +24,7 @@ def inspect_release_structure(
     compose: object, *,
     service: str, candidate_image_id: str, rollback_image_id: str,
     reviewed_source_sha: str, observed_running_image_id: str,
+    observed_container_service: str, observed_container_running: bool,
     observed_compose_image_id: str,
     candidate_embedded_revision: str, candidate_present: bool,
     rollback_present: bool,
@@ -53,6 +54,10 @@ def inspect_release_structure(
         problems.append("CANDIDATE_EQUALS_ROLLBACK")
     if observed_running_image_id != rollback_image_id:
         problems.append("RUNNING_IMAGE_DIFFERS_FROM_ROLLBACK_REFERENCE")
+    if observed_container_service != service:
+        problems.append("RUNNING_CONTAINER_SERVICE_IDENTITY_MISMATCH")
+    if observed_container_running is not True:
+        problems.append("ROUTER_CONTAINER_NOT_RUNNING")
     if not candidate_present:
         problems.append("CANDIDATE_IMAGE_NOT_LOCALLY_AVAILABLE")
     if not rollback_present:
@@ -93,6 +98,13 @@ def main() -> int:
         # Only a fixed set of safe image/container metadata fields is read.
         manifest = yaml.safe_load(Path(args.compose).read_text(encoding="utf-8"))
         actual = docker_field(["inspect", "--type", "container", "--format", "{{.Image}}", args.container])
+        actual_service = docker_field([
+            "inspect", "--type", "container", "--format",
+            '{{index .Config.Labels "com.docker.compose.service"}}', args.container,
+        ])
+        actual_running = docker_field([
+            "inspect", "--type", "container", "--format", "{{.State.Running}}", args.container,
+        ]) == "true"
         label = docker_field([
             "image", "inspect", "--format",
             '{{index .Config.Labels "org.opencontainers.image.revision"}}',
@@ -117,6 +129,8 @@ def main() -> int:
             rollback_image_id=args.rollback_image_id,
             reviewed_source_sha=args.reviewed_source_sha,
             observed_running_image_id=actual,
+            observed_container_service=actual_service,
+            observed_container_running=actual_running,
             observed_compose_image_id=compose_image_id,
             candidate_embedded_revision=label,
             candidate_present=candidate_id == args.candidate_image_id,
