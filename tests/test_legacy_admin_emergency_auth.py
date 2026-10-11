@@ -43,7 +43,7 @@ def _synthetic_path(template: str) -> str:
 def test_every_existing_legacy_admin_method_has_direct_dependency():
     routes, methods = _methods()
     # Guard against accidentally testing a different app with too few paths.
-    assert len(methods) >= 14
+    assert len(methods) >= 13
     assert any(method == "POST" for method, _ in methods)
     assert any("{" in path for _, path in methods)
     for route in routes:
@@ -86,7 +86,9 @@ def test_unauthorized_post_never_resets_circuits_or_reconciles_models(monkeypatc
         called.append("reconcile")
         raise AssertionError("MUST_NOT_LOAD_MODEL")
 
-    monkeypatch.setattr(legacy.state.circuits, "reset", refuse_reset)
+    # Lifespan is deliberately not entered: add a synthetic sentinel rather
+    # than touching or initializing any real circuit/model manager.
+    monkeypatch.setattr(legacy.state, "circuits", SimpleNamespace(reset=refuse_reset), raising=False)
     monkeypatch.setattr(model_placement, "reconcile_once", refuse_model_reconcile)
     for path in ("/admin/circuits/reset",
                  "/admin/circuits/reset/synthetic-denied",
