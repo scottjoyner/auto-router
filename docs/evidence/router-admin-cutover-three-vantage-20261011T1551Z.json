@@ -1,0 +1,73 @@
+{
+  "schema": "auto-router-admin-cutover-multi-vantage-evidence.v1",
+  "captured_at_utc": "2026-10-11T15:51:32Z",
+  "candidate_pr": 41,
+  "candidate_script_head": "842cde055ef22233ec8481be3ee786fc3c875db8",
+  "candidate_script_sha256": "b350703da2c71b723aa94ea286494005a0e92a7e9b392f0046c80a960d5d1f8d",
+  "method": "Existing read-only status checker, GET only; source streamed over SSH stdin to the two remote nodes without copying files; AUTO_ROUTER_ADMIN_TOKEN unset in all three processes",
+  "target": "running unpatched Auto-Router at x1-370 private loopback or Tailnet interface",
+  "vantage_points": [
+    {
+      "node": "x1-370",
+      "source_transport": "127.0.0.1:8088",
+      "captured_at_utc": "2026-10-11T15:50:25.961668+00:00",
+      "results": {
+        "/admin/providers": 200,
+        "/admin/circuits": 200,
+        "/admin/agent-workers": 200,
+        "/admin/runtime-projection": 401
+      },
+      "verdict": "HOLD",
+      "exit_code": 2
+    },
+    {
+      "node": "destroyer",
+      "source_transport": "x1-370 Tailnet:8088",
+      "captured_at_utc": "2026-10-11T15:51:25.788496+00:00",
+      "results": {
+        "/admin/providers": 200,
+        "/admin/circuits": 200,
+        "/admin/agent-workers": 200,
+        "/admin/runtime-projection": 401
+      },
+      "verdict": "HOLD",
+      "exit_code": 2
+    },
+    {
+      "node": "lenovo",
+      "source_transport": "x1-370 Tailnet:8088",
+      "captured_at_utc": "2026-10-11T15:51:32.529823+00:00",
+      "results": {
+        "/admin/providers": 200,
+        "/admin/circuits": 200,
+        "/admin/agent-workers": 200,
+        "/admin/runtime-projection": 401
+      },
+      "verdict": "HOLD",
+      "exit_code": 2
+    }
+  ],
+  "local_synthetic_test_count": 7,
+  "local_synthetic_tests_result": "PASS",
+  "current_admin_boundary": "OPEN_TO_TAILNET_PEERS_FOR_THREE_LISTED_ROUTES",
+  "required_postcutover_anonymous_status": 401,
+  "authenticated_effective_snapshot_verified_in_production": false,
+  "credentials_sent": false,
+  "unauthorized_response_bodies_read": false,
+  "side_effects": {
+    "admin_post": false,
+    "inference": false,
+    "service_restart": false,
+    "config_change": false,
+    "graph_write": false,
+    "model_load": false,
+    "storage_mutation": false
+  },
+  "limitations": [
+    "No public-WAN reachability inference",
+    "No confidential response payload saved",
+    "No claim that patched PR41 is deployed",
+    "No operator/phone release authority",
+    "No claim of model or signed-projection admission"
+  ]
+}
