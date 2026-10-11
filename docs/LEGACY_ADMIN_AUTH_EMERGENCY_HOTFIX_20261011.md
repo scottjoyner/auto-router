@@ -219,6 +219,22 @@ tests, hosted image and private Compose transformation* evidence. It
 privileged Docker network/firewall access review, complete caller
 acceptance, or successful postcutover physical authentication.
 
+### Public dashboard configuration URL redaction
+
+The existing public dashboard and ops-summary fragments previously displayed
+raw configured **AssistX task/event-sink URLs**, plus gateway base/OpenAI
+URLs. Even without URL userinfo or query parameters today, future paths
+could contain credentials and the raw private origin exposes internal
+topology. The draft presentation now shows only **configured / not
+configured** and hides destination values. The back-end authorized
+administrative APIs have **not** changed shape or been given new
+permissions. Synthetic Jinja regression tests inject URL values with a
+credential-looking path/query marker and fail if that marker or private
+hostname appears in any of the six affected rendered expressions.
+This is **public HTML output hygiene**, not transport encryption or an
+authorization fix for the dashboard itself. Separately audit other public
+routes before claiming complete information-disclosure coverage.
+
 ## Security-owner release choices
 
 **Option A — urgent reversible interim ingress containment** may precede
