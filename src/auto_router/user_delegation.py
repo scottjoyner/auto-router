@@ -52,9 +52,16 @@ def _decode_part(part: str) -> bytes:
     if not _JWT_PART.fullmatch(part):
         raise DelegationError("invalid delegation encoding")
     try:
-        return base64.urlsafe_b64decode(part + "=" * ((4 - len(part) % 4) % 4))
+        decoded = base64.urlsafe_b64decode(part + "=" * ((4 - len(part) % 4) % 4))
     except (ValueError, TypeError, binascii.Error) as exc:
         raise DelegationError("invalid delegation encoding") from exc
+    # Cryptographic verification authenticates bytes, not an arbitrary
+    # non-canonical Base64URL spelling of those bytes. Reject unused-bit
+    # aliases so one signature has exactly one accepted token encoding.
+    canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+    if canonical != part:
+        raise DelegationError("noncanonical delegation encoding")
+    return decoded
 
 
 def _decode_json(data: bytes) -> dict[str, Any]:
