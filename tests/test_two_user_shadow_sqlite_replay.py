@@ -157,3 +157,55 @@ def test_expired_delegation_cannot_append_after_reopen_but_prior_row_is_readable
     assert reopened.read(bob) == []
     with pytest.raises(PermissionError, match="unauthenticated"):
         reopened.read("spoofed-session")
+
+
+def test_simultaneous_duplicate_attempt_remains_single_immutable_row(tmp_path):
+    """Two independent SQLite connections race to replay one signed attempt."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    gateway = _FixtureGateway()
+    alice = _login(gateway, "alice")
+    path = tmp_path / "concurrent-replay.db"
+    token = gateway.delegate(alice, "auto/local")
+    rendezvous = Barrier(2)
+
+    def write_one():
+        local_store = _DisposableSQLiteReplay(path, gateway)
+        rendezvous.wait(timeout=3)
+        return local_store.accept(token, [b"data: [DONE]\n\n"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: write_one(), range(2)))
+    assert results[0] == results[1]
+    assert _DisposableSQLiteReplay(path, gateway).read(alice) == [results[0]]
+
+
+def test_simultaneous_distinct_owners_remain_isolated_in_sqlite(tmp_path):
+    """Concurrent Alice/Bob append with colliding client trace strings."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    gateway = _FixtureGateway()
+    sessions = [_login(gateway, "alice"), _login(gateway, "bob")]
+    tokens = [gateway.delegate(session, "auto/local") for session in sessions]
+    path = tmp_path / "concurrent-owners.db"
+    rendezvous = Barrier(2)
+
+    def write_one(token):
+        local_store = _DisposableSQLiteReplay(path, gateway)
+        rendezvous.wait(timeout=3)
+        return local_store.accept(
+            token,
+            [b"data: [DONE]\n\n"],
+            client_metadata={"trace_id": "same-caller-id", "subject_id": "spoofed"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = list(pool.map(write_one, tokens))
+    reopened = _DisposableSQLiteReplay(path, gateway)
+    assert receipts[0]["attempt_id"] != receipts[1]["attempt_id"]
+    assert receipts[0]["client_trace_fingerprint"] == receipts[1]["client_trace_fingerprint"]
+    for index, session in enumerate(sessions):
+        assert reopened.read(session) == [receipts[index]]
+        assert reopened.read(session, root_request_id=receipts[1-index]["root_request_id"]) == []
