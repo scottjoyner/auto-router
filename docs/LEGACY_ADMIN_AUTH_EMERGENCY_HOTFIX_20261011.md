@@ -126,6 +126,38 @@ mounts. Preserve the existing image and container until the owner
 independently proves rollback; do not `docker prune`, rebuild the old
 image from a mutable tag, or change storage policy to clear this gate.
 
+## Safer off-host disposable canary opportunity (not staged)
+
+Before any local image action, I inspected read-only Docker availability and
+storage capacity through strict-host-key SSH from x1-370:
+
+| Fleet node | Docker daemon | Docker root used | Free |
+|---|---|---:|---:|
+| **xwing** | Reachable | **58.7%** | **655.2 GiB** |
+| Destroyer | Reachable | 84.2% | 74.0 GiB |
+| Lenovo | Docker unavailable | — | — |
+| x1-370 (current router) | Reachable | **97.08%** | **107.04 GiB** |
+
+[Sanitized per-node capacity witness](evidence/pr55-offhost-disposable-canary-capacity-20261011.json).
+
+**Recommendation:** If the owner explicitly approves a *nonproduction*
+physical canary, prefer **xwing** over writing additional Docker layers
+to x1's pressured root. Use only the independently verified reviewed
+immutable image and an isolated, short-lived container: no network,
+no published ports, read-only root, no new privileges, dropped Linux
+capabilities, bounded CPU/memory/PIDs, synthetic authentication values,
+no mounted production paths and automatic cleanup. Verify the restored
+image's revision/digest and all admin-denial routes independently.
+This is a **candidate** selection from storage metadata only; xwing's
+current inference load, reservations, available RAM and safety of
+starting even an isolated test are **not yet approved or verified**.
+
+No image was copied, staged, loaded or removed on xwing, Destroyer,
+Lenovo or x1 as part of this examination. A PASS from xwing would
+validate *off-host packaged runtime behavior*, not production x1
+Compose continuity, firewall security, physical deployment or
+credential custody. Production cutover remains under owner control.
+
 ## Known legacy client compatibility gaps
 
 - **AssistX coordination status** already uses an authenticated,
