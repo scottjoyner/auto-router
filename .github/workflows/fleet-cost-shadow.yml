@@ -1,0 +1,90 @@
+name: Fictional Fleet Cost Shadow Contract
+
+on:
+  push:
+    branches:
+      - experiment/fleet-cost-shadow-authority-20261011
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-only-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only lint tooling — no model SDK or weights
+        run: python -m pip install 'ruff>=0.6,<1'
+      - name: Exercise all offline evaluation and cost-shadow safety tests
+        run: |
+          python -m unittest discover -s tests -p 'test_*shadow.py' -q
+          python -m unittest discover -s tests -p 'test_synthetic_decision_challenge.py' -q
+          python -m unittest discover -s tests -p 'test_von_cpu_pilot.py' -q
+          python -m unittest discover -s tests -p 'test_von_matched_wording.py' -q
+          python -m unittest discover -s tests -p 'test_von_abstention_ablation.py' -q
+          python -m unittest discover -s tests -p 'test_von_policy_value_reconcile.py' -q
+          python -m unittest discover -s tests -p 'test_von_multi_eligible_cpu.py' -q
+          python -m unittest discover -s tests -p 'test_von_multi_eligible_reconcile.py' -q
+          python -m unittest discover -s tests -p 'test_fleet_authority_recovery_gate.py' -q
+      - name: Strict lint new shadow scorer and inherited research source
+        run: |
+          ruff check \
+            experiments/fleet_cost_shadow.py \
+            tests/test_fleet_cost_shadow.py \
+            experiments/fleet_authority_recovery_gate.py \
+            tests/test_fleet_authority_recovery_gate.py \
+            experiments/typed_decision_shadow.py \
+            experiments/von_choice_shadow.py \
+            experiments/build_synthetic_decision_challenge.py \
+            experiments/von_cpu_pilot.py \
+            experiments/von_cpu_controls.py \
+            experiments/von_matched_wording.py \
+            experiments/von_abstention_ablation.py \
+            experiments/von_policy_value_reconcile.py \
+            experiments/von_multi_eligible_cpu.py \
+            experiments/von_multi_eligible_reconcile.py \
+            tests/test_typed_decision_shadow.py \
+            tests/test_von_choice_shadow.py \
+            tests/test_synthetic_decision_challenge.py \
+            tests/test_von_cpu_pilot.py \
+            tests/test_von_matched_wording.py \
+            tests/test_von_abstention_ablation.py \
+            tests/test_von_policy_value_reconcile.py \
+            tests/test_von_multi_eligible_cpu.py \
+            tests/test_von_multi_eligible_reconcile.py
+      - name: Validate fictional-only read-only entry point
+        run: |
+          python experiments/fleet_cost_shadow.py \
+            experiments/fixtures/fleet_cost_fictional.json > /tmp/fictional-cost-shadow.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("/tmp/fictional-cost-shadow.json").read_text())
+          assert result["status"] == "RANKED_SYNTHETIC_ONLY"
+          assert result["ranked_synthetic_ids"] == ["runtime_a", "runtime_b"]
+          assert result["eligible_count"] == 2
+          assert result["authority_to_dispatch"] is False
+          assert result["physical_execution_attested"] is False
+          assert result["production_promotion_approved"] is False
+          assert result["input_kind"] == "fictional-only"
+          print("Synthetic-only read-only contract accepted; NO real authority.")
+          PY
+          python experiments/fleet_authority_recovery_gate.py \
+            experiments/fixtures/fleet_authority_observed_20261011.json \
+              > /tmp/fleet-authority-blockers-20261011.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("/tmp/fleet-authority-blockers-20261011.json").read_text())
+          assert d["status"] == "BLOCKED"
+          assert "CANONICAL_APPROVAL_EXPIRED" in d["blockers"]
+          assert "NO_FRESH_ADMITTED_RUNTIME" in d["blockers"]
+          assert "LEGACY_PROVIDER_ADMIN_ANONYMOUS_200" in d["blockers"]
+          assert d["can_dispatch"] is False and d["can_promote"] is False
+          PY
+          test ! -e /tmp/von-fleet-model-checkpoint

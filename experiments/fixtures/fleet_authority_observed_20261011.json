@@ -1,0 +1,38 @@
+{
+  "schema": "fleet-authority-recovery-observation-v1",
+  "kind": "unsigned_operator_aggregate",
+  "observed_at_utc": "2026-10-11T16:40:01Z",
+  "router": {
+    "health_http": 200,
+    "anonymous_legacy_providers_http": 200,
+    "effective_providers_http": 404,
+    "runtime_projection_fresh": false,
+    "runtime_projection_last_error_present": true,
+    "cached_runtime_count": 1
+  },
+  "assistx": {
+    "health_http": 200,
+    "runtime_projection_http": 503,
+    "operations_ready": true,
+    "operations_safe_to_dispatch": true,
+    "mobile_runtime_count": 0,
+    "fleet_nodes_count": 0,
+    "inference_models_count": 0
+  },
+  "neo4j": {
+    "canonical_status": "approved",
+    "canonical_generation": 642,
+    "approval_expires_in_minutes": -5393.4,
+    "has_approved_by": true,
+    "has_approval_id": true,
+    "has_manifest_checksum": true,
+    "admitted_runtimes": 1,
+    "current_admitted_runtimes": 0,
+    "admitted_loaded_models": 1,
+    "current_loaded_models": 0,
+    "approved_paths": 2,
+    "current_approved_paths": 0,
+    "approved_capacity": 1,
+    "current_approved_capacity": 0
+  }
+}
