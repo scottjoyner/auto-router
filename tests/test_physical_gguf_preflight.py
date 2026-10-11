@@ -139,6 +139,29 @@ class TestPhysicalGgufPreflight(unittest.TestCase):
         self.assertFalse(r["network_path_canaries_passed"])
         self.assertTrue(r["operator_review_required"])
 
+    def test_unsigned_lan_and_tailscale_canary_metadata_never_grants_approval(self):
+        path = ROOT / "experiments" / "evidence" / "beelink-physical-preflight-20261011.json"
+        evidence = json.loads(path.read_text())
+        self.assertEqual(evidence["evidence_kind"],
+                         "unsigned_operator_observed_physical_preflight")
+        self.assertEqual(evidence["matching_process_count"], 1)
+        self.assertEqual(evidence["inventory_loaded_count"], 1)
+        self.assertEqual({x["transport"] for x in evidence["direct_canaries"]},
+                         {"lan", "tailscale"})
+        self.assertTrue(all(x["http"] == 200 and x["exact_expected_marker"]
+                            and x["max_tokens"] <= 24
+                            for x in evidence["direct_canaries"]))
+        self.assertFalse(evidence["independent_host_signature"])
+        self.assertFalse(evidence["trusted_owner_receipt"])
+        self.assertFalse(evidence["current_canonical_approval"])
+        self.assertFalse(evidence["can_auto_renew"])
+        self.assertFalse(evidence["can_dispatch"])
+        self.assertTrue(evidence["must_obtain_operator_reapproval"])
+        raw = path.read_text()
+        self.assertNotIn("192.168.", raw)
+        self.assertNotIn("100.64.", raw)
+        self.assertNotIn("Bearer ", raw)
+
     def test_root_never_contains_raw_model_path_or_secrets(self):
         self.fake_proc(123)
         raw = json.dumps(self.check())
