@@ -17,7 +17,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from von_cpu_pilot import HF_REV, WEIGHTS
-from von_multi_eligible_cpu import MODEL_ID, analyze, build
+from von_multi_eligible_cpu import analyze, build
 
 REPORT_SHA256 = "216cdb6753ac87f6d9197435d27db24f2971ca0b390948617197f94234313423"
 EXPECTED_FIELDS = frozenset({
