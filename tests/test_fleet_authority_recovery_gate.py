@@ -1,7 +1,6 @@
 """Fail-closed checks for unsigned read-only production-blocker evidence."""
 from __future__ import annotations
 
-import copy
 import importlib.util
 import json
 import sys
