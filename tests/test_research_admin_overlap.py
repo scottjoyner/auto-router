@@ -110,13 +110,13 @@ def test_last_allowed_second_then_expiry():
     ) == policy.AuthenticationDecision.DENY
 
 
-def test_monotonic_shortens_window_on_large_forward_clock_skew():
+def test_monotonic_expiry_remains_a_separate_guard():
     assert check(
-        observed_at_utc=1_800_000_500,
+        observed_at_utc=1_800_000_599,
         observed_monotonic_seconds=1499,
     ) == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
     assert check(
-        observed_at_utc=1_800_000_500,
+        observed_at_utc=1_800_000_599,
         observed_monotonic_seconds=1500,
     ) == policy.AuthenticationDecision.DENY
 
