@@ -103,7 +103,9 @@ def load(path: Path) -> tuple[list[dict], str]:
                 contract = shared + (row["question_sha256"],)
                 cv = (case, variant)
                 if cv in contracts and contracts[cv] != contract:
-                    raise ValueError("case or question contract changed between models")
+                    if contracts[cv][:5] != shared:
+                        raise ValueError("case contract changed between models")
+                    raise ValueError("question contract changed between models")
                 contracts[cv] = contract
                 if variant == "original":
                     originals[(case, model)] = contract
