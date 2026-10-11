@@ -355,12 +355,7 @@
                     <h3 class="font-black text-white">Provider tap test</h3>
                     <p class="text-xs text-router-muted">Latest durable `/models` snapshots and live tap status</p>
                 </div>
-                <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100 hover:bg-cyan-300/20"
-                        hx-post="/admin/providers/probe"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    probe all providers
-                </button>
+                <span class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100 hover:bg-cyan-300/20" data-admin-api-path="/admin/providers/probe" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">probe all providers <span class="text-[10px] text-router-muted">· API auth required</span></span>
             </div>
             <div class="space-y-2">
                 {% for snapshot in live_models[:6] %}
@@ -384,12 +379,7 @@
                     <h3 class="font-black text-white">Agent CLI discovery</h3>
                     <p class="text-xs text-router-muted">Codex, Gemini CLI, and OpenCode on this node</p>
                 </div>
-                <button class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-100 hover:bg-emerald-300/20"
-                        hx-post="/admin/agent-clis/discover"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    discover
-                </button>
+                <span class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-100 hover:bg-emerald-300/20" data-admin-api-path="/admin/agent-clis/discover" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">discover <span class="text-[10px] text-router-muted">· API auth required</span></span>
             </div>
             <div class="space-y-2">
                 {% for cli in cli_discovery %}
@@ -412,12 +402,7 @@
                     <h3 class="font-black text-white">Outbox and AssistX</h3>
                     <p class="text-xs text-router-muted">Pending graph/provenance events</p>
                 </div>
-                <button class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-bold text-amber-100 hover:bg-amber-300/20"
-                        hx-post="/admin/outbox/dispatch?dry_run=true&limit=10"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    dispatch dry-run
-                </button>
+                <span class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-bold text-amber-100 hover:bg-amber-300/20" data-admin-api-path="/admin/outbox/dispatch?dry_run=true&limit=10" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">dispatch dry-run <span class="text-[10px] text-router-muted">· API auth required</span></span>
             </div>
             <div class="space-y-2 text-sm">
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.pending or 0 }}</span> pending events</div>
