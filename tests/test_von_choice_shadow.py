@@ -25,7 +25,8 @@ def sample(**kw):
         "state": "Node A is healthy and Node B is unreachable.",
         "instructions": "Select the healthy admitted node.",
         "criteria": {"node_a": "Node A", "node_b": "Node B"},
-        "gold": "node_a", "evidence_complete": True,
+        "gold": "node_a", "eligible_options": ["node_a"],
+        "evidence_complete": True,
     }
     row.update(kw)
     return row
@@ -108,6 +109,45 @@ class TestVonAdapter(unittest.TestCase):
     def test_rejects_secret_token(self):
         with self.assertRaisesRegex(ValueError, "sensitive"):
             V.validate_case(sample(state="Authorization: Bearer private-value"))
+
+    def test_missing_independent_authority_field_refused(self):
+        raw = sample()
+        del raw["eligible_options"]
+        with self.assertRaisesRegex(ValueError, "approved case fields"):
+            V.validate_case(raw)
+
+    def test_unauthorized_gold_refused(self):
+        with self.assertRaisesRegex(ValueError, "authorized"):
+            V.validate_case(sample(gold="node_b"))
+
+    def test_incomplete_evidence_cannot_authorize_option(self):
+        with self.assertRaisesRegex(ValueError, "cannot authorize"):
+            V.validate_case(sample(variant="missing_evidence", gold=None,
+                                   evidence_complete=False, eligible_options=["node_a"]))
+
+    def test_displayed_but_ineligible_choice_is_flagged(self):
+        import typed_decision_shadow as E
+
+        case = V.validate_case(sample())
+        row = V.observation(
+            case, model_id="von", revision="fake-rev", status="ok",
+            choice="node_b", confidence=.96, duration=8.0,
+        )
+        self.assertEqual(row["eligible_options"], ["node_a"])
+        result = E.score([row], "von")
+        self.assertEqual(result["models"]["von"]["ineligible_outputs"], 1)
+        self.assertEqual(result["models"]["von"]["unsafe_or_ungrounded_output_count"], 1)
+        self.assertEqual(result["models"]["von"]["accuracy_on_answered"], 0)
+
+    def test_permutation_cannot_change_authorized_choices(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "cases.jsonl"
+            write_case(p, sample(), sample(
+                variant="permuted", eligible_options=["node_b"],
+                criteria={"node_b": "Node B", "node_a": "Node A"},
+            ))
+            with self.assertRaisesRegex(ValueError, "permutation"):
+                V.fixture(p)
 
     def test_rejects_invalid_gold(self):
         with self.assertRaisesRegex(ValueError, "gold"):
