@@ -2,17 +2,19 @@
 import contextlib
 import importlib.util
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 import sys
 import tempfile
 import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "experiments"))
-SPEC = importlib.util.spec_from_file_location("von_choice_shadow", ROOT / "experiments" / "von_choice_shadow.py")
+SPEC = importlib.util.spec_from_file_location(
+    "von_choice_shadow", ROOT / "experiments" / "von_choice_shadow.py"
+)
 V = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(V)
 
@@ -190,10 +192,14 @@ class TestVonAdapter(unittest.TestCase):
             p = Path(d) / "cases.jsonl"
             out = Path(d) / "observations.jsonl"
             write_case(p, sample())
-            with patch.object(V, "verify_von_service", side_effect=AssertionError("should not call")), \
-                    patch.object(sys, "argv", ["prog", str(p), "--execute",
-                                              "--ack-sanitized", "--ack-preloaded",
-                                              "--out", str(out)]):
+            with (
+                patch.object(
+                    V, "verify_von_service", side_effect=AssertionError("should not call")
+                ),
+                patch.object(sys, "argv", ["prog", str(p), "--execute",
+                                          "--ack-sanitized", "--ack-preloaded",
+                                          "--out", str(out)]),
+            ):
                 self.assertEqual(V.main(), 2)
             self.assertFalse(out.exists())
 
