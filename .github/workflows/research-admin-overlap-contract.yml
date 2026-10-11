@@ -5,12 +5,14 @@ on:
     paths:
       - "src/auto_router/research_admin_overlap.py"
       - "tests/test_research_admin_overlap.py"
+      - "tests/test_research_admin_transition_model.py"
       - "docs/ADMIN_CREDENTIAL_OVERLAP_RESEARCH_20261011.md"
       - ".github/workflows/research-admin-overlap-contract.yml"
   push:
     paths:
       - "src/auto_router/research_admin_overlap.py"
       - "tests/test_research_admin_overlap.py"
+      - "tests/test_research_admin_transition_model.py"
       - ".github/workflows/research-admin-overlap-contract.yml"
 
 permissions:
@@ -34,4 +36,4 @@ jobs:
           python -m py_compile src/auto_router/research_admin_overlap.py
           test -f docs/ADMIN_CREDENTIAL_OVERLAP_RESEARCH_20261011.md
       - name: Run purely synthetic overlap cases
-        run: python -m pytest -q --noconftest tests/test_research_admin_overlap.py
+        run: python -m pytest -q --noconftest tests/test_research_admin_overlap.py tests/test_research_admin_transition_model.py
