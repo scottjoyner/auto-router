@@ -83,7 +83,10 @@ def _token(
     return f"{encoded_header}.{encoded_claims}.{_b64(signer.sign(message))}"
 
 
-def _app(tmp_path, monkeypatch, signer, *, restart=False):
+def _app(
+    tmp_path, monkeypatch, signer, *, restart=False, owner_authority=None,
+    require_body_digest=False,
+):
     monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
     monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", _SERVICE)
     ledger = RequestIdempotencyLedger(
@@ -107,9 +110,14 @@ def _app(tmp_path, monkeypatch, signer, *, restart=False):
         UserDelegationShadowMiddleware,
         public_key=signer.public_key(),
         key_id=_KID,
-        owner_ledger=RootOwnerLedger(
-            tmp_path / "p0-owner-test.sqlite", b"x" * 32,
-            bootstrap=not restart,
+        require_body_digest=require_body_digest,
+        owner_ledger=(
+            owner_authority
+            if owner_authority is not None
+            else RootOwnerLedger(
+                tmp_path / "p0-owner-test.sqlite", b"x" * 32,
+                bootstrap=not restart,
+            )
         ),
     )
     app.add_middleware(
@@ -384,7 +392,7 @@ def test_large_delegated_request_is_rejected_before_downstream_execution(
                 "max_tokens": 8,
             },
         )
-    assert response.status_code == 401
+    assert response.status_code == 413
     assert observed == []
     with sqlite3.connect(ledger.path) as db:
         assert db.execute(

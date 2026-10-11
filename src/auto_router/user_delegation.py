@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import os
@@ -91,6 +92,16 @@ def _uuid4(value: Any) -> bool:
     return parsed.version == 4 and str(parsed) == value
 
 
+def delegated_body_digest(path: str, payload: dict[str, Any]) -> str:
+    """v2 signed-request scope; stable across JSON whitespace and key ordering."""
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"p0-delegated-body-v2\x00" + path.encode("ascii") + b"\x00" + canonical
+    ).hexdigest()
+
+
 def verify_user_delegation(
     token: str,
     *,
@@ -98,6 +109,10 @@ def verify_user_delegation(
     key_id: str,
     model: str,
     now: int | None = None,
+    request_path: str | None = None,
+    request_body: dict[str, Any] | None = None,
+    require_body_digest: bool = False,
+    original_request_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Validate gateway signature AND exact model scope, no client metadata.
 
@@ -129,13 +144,51 @@ def verify_user_delegation(
         "schema", "iss", "aud", "tenant", "subject", "root_request_id",
         "attempt_id", "model_handle", "iat", "nbf", "exp", "jti",
     }
-    if set(claims) != required:
-        raise DelegationError("invalid delegation claims schema")
-    if (
-        claims["schema"] != "p0-user-shadow-v1"
-        or claims["iss"] != _ISSUER
-        or claims["aud"] != _AUDIENCE
-    ):
+    schema = claims.get("schema")
+    if schema == "p0-user-shadow-v2":
+        if set(claims) != required | {"request_path", "request_sha256"}:
+            raise DelegationError("invalid v2 delegation claims")
+        digest = claims["request_sha256"]
+        path = claims["request_path"]
+        if (
+            path != "/v1/chat/completions"
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            raise DelegationError("invalid signed request scope")
+        if (
+            request_path is not None or request_body is not None
+            or require_body_digest or original_request_sha256 is not None
+        ):
+            if not isinstance(request_path, str) or request_path != path:
+                raise DelegationError("signed delegated route mismatch")
+            # The real outer executor-auth layer enriches metadata before
+            # this verifier sees the body. It must supply a trusted digest
+            # of ORIGINAL JSON from the authenticated service path. Never
+            # strip "assistx_service" from an altered body to reconstruct
+            # a purported original prompt.
+            if require_body_digest and original_request_sha256 is None:
+                raise DelegationError("original signed request digest unavailable")
+            if original_request_sha256 is not None:
+                observed = original_request_sha256
+            elif isinstance(request_body, dict):
+                observed = delegated_body_digest(request_path, request_body)
+            else:
+                raise DelegationError("delegated request body required")
+            if (
+                not isinstance(observed, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", observed)
+                or not hmac.compare_digest(digest, observed)
+            ):
+                raise DelegationError("signed delegated request digest mismatch")
+    elif schema == "p0-user-shadow-v1" and not require_body_digest:
+        # Backward compatibility for isolated v1 research tests only.
+        # The live experimental installer always requires v2 body binding.
+        if set(claims) != required:
+            raise DelegationError("invalid legacy delegation claims")
+    else:
+        raise DelegationError("request-bound delegation v2 required")
+    if claims["iss"] != _ISSUER or claims["aud"] != _AUDIENCE:
         raise DelegationError("invalid delegation audience")
     for name in ("tenant", "subject", "jti"):
         if not isinstance(claims[name], str) or not _IDENTIFIER.fullmatch(claims[name]):
@@ -174,6 +227,13 @@ def verify_user_delegation(
         "attempt_id": claims["attempt_id"],
         "model_handle": bound_model,
         "jti": claims["jti"],
+        **(
+            {
+                "request_path": claims["request_path"],
+                "request_sha256": claims["request_sha256"],
+            }
+            if schema == "p0-user-shadow-v2" else {}
+        ),
     }
 
 
@@ -243,11 +303,13 @@ class UserDelegationShadowMiddleware:
     def __init__(
         self, app: Any, *, public_key: Ed25519PublicKey, key_id: str,
         owner_ledger: RootOwnerLedger,
+        require_body_digest: bool = False,
     ) -> None:
         self.app = app
         self.public_key = public_key
         self.key_id = key_id
         self.owner_ledger = owner_ledger
+        self.require_body_digest = require_body_digest
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if (
@@ -282,6 +344,12 @@ class UserDelegationShadowMiddleware:
                 public_key=self.public_key,
                 key_id=self.key_id,
                 model=model,
+                request_path=str(scope.get("path", "")),
+                request_body=body,
+                require_body_digest=self.require_body_digest,
+                original_request_sha256=scope.get(
+                    "auto_router.p0_original_request_sha256"
+                ),
             )
             # Persist the unique owner/model/root/attempt binding BEFORE any
             # downstream idempotency reservation or routing. A repeated
@@ -340,20 +408,42 @@ def install_user_delegation_shadow(app: Any) -> None:
         raise RuntimeError("invalid P0 shadow delegation verification key") from exc
     if not isinstance(public_key, Ed25519PublicKey):
         raise RuntimeError("P0 delegation verification key must be Ed25519")
-    ledger_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE", "")
     secret_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_HMAC_KEY_FILE", "")
-    if not ledger_file.startswith("/") or not secret_file.startswith("/"):
-        raise RuntimeError("P0 shadow requires separate pinned durable owner ledger and key")
+    if not secret_file.startswith("/"):
+        raise RuntimeError("P0 admission requires a private root authority HMAC key")
+    mode = os.getenv("AUTO_ROUTER_P0_OWNER_AUTHORITY", "sqlite").lower()
     try:
-        owner_ledger = RootOwnerLedger(
-            Path(ledger_file), read_pinned_root_secret(secret_file)
-        )
+        secret = read_pinned_root_secret(secret_file)
+        if mode == "sqlite":
+            ledger_file = os.getenv("AUTO_ROUTER_P0_ROOT_OWNER_LEDGER_FILE", "")
+            if not ledger_file.startswith("/"):
+                raise RootOwnerStorageError("root owner ledger path missing")
+            owner_ledger = RootOwnerLedger(Path(ledger_file), secret)
+        elif mode == "postgres":
+            # Read env only as paths/authority labels. No DSN, passwords,
+            # or raw signed user token is exposed in logs or error bodies.
+            from auto_router.user_root_postgres import (
+                PostgresRootOwnerAuthority,
+                read_authority_dsn_file,
+            )
+            dsn = read_authority_dsn_file(
+                os.getenv("AUTO_ROUTER_P0_OWNER_PG_DSN_FILE", "")
+            )
+            owner_ledger = PostgresRootOwnerAuthority(
+                dsn,
+                secret,
+                os.getenv("AUTO_ROUTER_P0_OWNER_PG_AUTHORITY_ID", ""),
+                require_tls=True,
+            )
+        else:
+            raise RootOwnerStorageError("unknown p0 owner authority mode")
     except RootOwnerStorageError as exc:
-        raise RuntimeError("P0 durable owner ledger not ready") from exc
+        raise RuntimeError("P0 durable owner authority not ready") from exc
     app.add_middleware(
         UserDelegationShadowMiddleware,
         public_key=public_key, key_id=key_id,
         owner_ledger=owner_ledger,
+        require_body_digest=True,
     )
     app.state.p0_user_delegation_shadow_installed = True
 

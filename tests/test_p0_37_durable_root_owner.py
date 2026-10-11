@@ -284,7 +284,7 @@ def test_startup_never_initializes_an_empty_existing_db_file(tmp_path):
     file = tmp_path / "empty.sqlite"
     file.write_bytes(b"")
     file.chmod(0o600)
-    with pytest.raises(RootOwnerStorageError, match="initialization unavailable"):
+    with pytest.raises(RootOwnerStorageError, match="request-bound schema unavailable"):
         RootOwnerLedger(file, _SECRET)
 
 

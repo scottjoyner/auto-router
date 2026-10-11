@@ -1,0 +1,71 @@
+name: P0 shared-owner proof (disposable PostgreSQL)
+
+on:
+  pull_request:
+    paths:
+      - "src/auto_router/executor_auth.py"
+      - "src/auto_router/user_delegation.py"
+      - "src/auto_router/user_root_ledger.py"
+      - "src/auto_router/user_root_postgres.py"
+      - "src/auto_router/request_idempotency.py"
+      - "tests/test_p0_37_*.py"
+      - ".github/workflows/p0-shared-owner-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p0-disposable-authority:
+    name: Owner signature and PostgreSQL admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      p0-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: p0test
+          POSTGRES_PASSWORD: ci-ephemeral-only-not-production
+          POSTGRES_DB: postgres
+        ports:
+          - 15437:5432
+        options: >-
+          --health-cmd "pg_isready -U p0test -d postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      P0_37_TEST_EPHEMERAL: "1"
+      P0_37_TEST_PG_DSN: "host=127.0.0.1 port=15437 dbname=postgres user=p0test password=ci-ephemeral-only-not-production sslmode=disable"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install router and isolated test dependencies
+        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Validate request-integrity and authority code
+        run: |
+          python -m py_compile \
+            src/auto_router/executor_auth.py \
+            src/auto_router/user_delegation.py \
+            src/auto_router/user_root_ledger.py \
+            src/auto_router/user_root_postgres.py
+          ruff check \
+            src/auto_router/executor_auth.py \
+            src/auto_router/user_delegation.py \
+            src/auto_router/user_root_ledger.py \
+            src/auto_router/user_root_postgres.py \
+            tests/test_p0_37_request_digest.py \
+            tests/test_p0_37_verified_user_delegation.py \
+            tests/test_p0_37_durable_root_owner.py \
+            tests/test_p0_37_postgres_authority.py \
+            tests/test_p0_37_postgres_installer.py
+      - name: Verify strict v2 signatures, immutable retry scope and real PostgreSQL races
+        run: |
+          python -m pytest -q --disable-warnings \
+            tests/test_p0_37_request_digest.py \
+            tests/test_p0_37_verified_user_delegation.py \
+            tests/test_p0_37_durable_root_owner.py \
+            tests/test_p0_37_postgres_authority.py \
+            tests/test_p0_37_postgres_installer.py

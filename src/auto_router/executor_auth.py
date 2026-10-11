@@ -141,12 +141,21 @@ def _bearer(headers: list[tuple[bytes, bytes]]) -> str:
     return ""
 
 
-async def _read_body(receive: Any) -> tuple[bytes, Any]:
+async def _read_body(
+    receive: Any, *, max_bytes: int | None = None,
+) -> tuple[bytes, Any]:
     body = bytearray()
     more = True
     while more:
         message = await receive()
-        body.extend(message.get("body", b""))
+        if message.get("type") != "http.request":
+            raise ExecutorAuthError("invalid executor request body")
+        chunk = message.get("body", b"")
+        if not isinstance(chunk, bytes) or (
+            max_bytes is not None and len(body) + len(chunk) > max_bytes
+        ):
+            raise ExecutorAuthError("delegated request is too large")
+        body.extend(chunk)
         more = bool(message.get("more_body", False))
     sent = False
 
@@ -158,6 +167,16 @@ async def _read_body(receive: Any) -> tuple[bytes, Any]:
         return {"type": "http.request", "body": bytes(body), "more_body": False}
 
     return bytes(body), replay
+
+
+def _reject_duplicated_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Delegated bodies must not acquire ambiguous meaning at the outer auth."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ExecutorAuthError("duplicate field in signed delegated JSON")
+        result[key] = value
+    return result
 
 
 def _estimate_tokens(payload: Mapping[str, Any]) -> int:
@@ -239,14 +258,38 @@ class ExecutorInferenceAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        body, replay = await _read_body(receive)
+        delegated = any(
+            key.lower() == b"x-auto-router-user-delegation"
+            for key, _ in scope.get("headers") or []
+        )
         try:
-            payload = json.loads(body)
+            body, replay = await _read_body(
+                receive, max_bytes=262144 if delegated else None
+            )
+        except ExecutorAuthError:
+            await JSONResponse(
+                status_code=413, content={"detail": "delegated request rejected"}
+            )(scope, receive, send)
+            return
+        try:
+            payload = json.loads(
+                body,
+                object_pairs_hook=_reject_duplicated_json_pairs if delegated else None,
+            )
             if not isinstance(payload, dict):
                 raise ExecutorAuthError("inference request must be a JSON object")
             bearer = _bearer(list(scope.get("headers") or []))
             service_token = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
             if service_token and hmac.compare_digest(bearer, service_token):
+                if delegated:
+                    # This is the only trustworthy point for the ORIGINAL
+                    # gateway-supplied body, before adding service metadata.
+                    # ASGI scope is internal; caller headers cannot set it.
+                    from auto_router.user_delegation import delegated_body_digest
+
+                    scope["auto_router.p0_original_request_sha256"] = (
+                        delegated_body_digest(str(scope.get("path", "")), payload)
+                    )
                 metadata = payload.get("metadata")
                 if not isinstance(metadata, dict):
                     metadata = {}
