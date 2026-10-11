@@ -80,3 +80,14 @@ The comparison scorer can consume these new observations when joined to separate
 **As of this checkpoint, no actual Von model inference was performed on x1-370**; all protocol tests use an intentionally fake HTTP server.
 
 **Port collision verified on x1-370 (2026-10-11):** 127.0.0.1:8000 is an AssistX API listener, NOT Von. The adapter therefore has no default --url and requires an operator-selected port (example 18051 is illustrative, NOT a confirmed available or serving port). Before any POST, it performs a GET /health and requires service=von-decision-server and engine=von-1.3; mismatches produce no model request and no output evidence file. This is *process-type identity only*, not hash-pinned weight attestation or proof that the server was preloaded. Never bind Von to an occupied production port.
+
+
+### Comparable Von CPU configuration (reference only; not started)
+
+The upstream Von 1.3 backend enables chain-of-options by default. This can execute several model passes and would make a one-pass QSIV/Choice latency comparison misleading. Official Von backend and CLI support disabling it with VON_CHAINS_DIR=off / --no-chains. Before any permitted physical trial, use a **dedicated service on an independently verified free loopback port**, not AssistX's active port 8000:
+
+    VON_CHAINS_DIR=off VON_ON_OVERFLOW=refuse \
+      von serve --host 127.0.0.1 --port 18051 \
+      --device openvino:cpu --no-chains --on-overflow refuse
+
+This command is **documentation only**: its dependencies/weights are not installed or preloaded, and its example port 18051 is not confirmed available. Running it can download multi-GB weights and consume significant CPU/RAM/SSD; obtain operator resource admission before startup. The adapter's /health check identifies the server type, but does not prove it was started with --no-chains or --on-overflow refuse, nor does it attest weight/calibration hashes. Capture those facts separately with an immutable startup manifest. Keep all reports experimental regardless of observed confidence or latency.
