@@ -58,3 +58,45 @@ Separately, `scripts/p0_37_provider_residency_preflight.py` now includes explici
 5. Run a tiny physical two-user LM Studio experiment only after all those independent gates, then perform a separate llama.cpp and physical-iPhone validation.
 
 **P0 release disposition:** NO_GO for Beelink physical inference at the observed time. Draft PR chain #35 → #36 → #42 → #45 remains non-deployed. A passing synthetic test suite cannot substitute for live execution and custody proof.
+
+## Follow-up mount, capacity and workload assessment (read-only)
+
+At 2026-10-11 15:00 UTC, Beelink was rechecked by strict-host-key SSH:
+
+- Root `/`: **ext4** on `/dev/nvme0n1p2`; `df -hT` showed **468 GiB
+  filesystem, 441 GiB used, ~3.0 GiB available to unprivileged processes,
+  rounded 100% utilization**. `stat -f` reported 4096-byte blocks,
+  122,512,118 total, 7,028,026 free including reserved, but only
+  786,375 unprivileged-available. The difference is ext4 reserved
+  allocation, not discretionary free capacity for applications.
+  Inode utilization was **4%**. Do not alter reserve percentage as
+  an incidental response to a full root filesystem.
+- Canonical `/nas`: **btrfs** on `/dev/sdd2`, ~81 TiB total with ~40 TiB
+  available, distinctly mounted from root. `/mnt/nas5-output-primary`
+  and `/mnt/nas5-output-direct` are separate exFAT mounts;
+  `/mnt/recover` and `/media/scott/SSD_4TB` are NFS mounts.
+  These mount identities must be verified before any recovery relocation
+  or purported deletion of stale output.
+- I/O PSI increased to `full avg10=28.77%`, `some avg10=32.13%`
+  in another sample, with ~6.15 one-minute system load. Active high-CPU
+  processes included `uvicorn`, Samba, `rsync`, multiple long-running
+  `find` scans and Docker control-plane processes. Their file ownership
+  and custody are not yet established.
+- `journalctl --disk-usage` reported **2.0 GiB of active/archived journals**.
+  This is a bounded data point, **not** a recommendation to purge logs.
+  Even recovering those bytes would not by itself address the observed
+  10 GiB free-space threshold or high I/O stall.
+- Root top-level home listings included multiple named NAS5 recovery
+  ledgers and dated recovery output directories. A listing cannot
+  establish their aggregate byte count, backup custody or deletion safety.
+  A recursive full-tree size/hash scan was **not** started because doing
+  so under high I/O pressure could worsen the NAS workload.
+
+**Operationally safe next diagnosis:** coordinate with the NAS recovery
+owner to identify which filesystems and paths the current rsync/find/uvicorn
+processes write, record active destinations and checkpoints, and map known
+root-local spool/cache volumes through existing producer manifests or
+service logs. Only then consider a bounded low-I/O size inventory or a
+copy-verified evacuation/retention plan. Never perform blind
+`rm`, `docker system prune`, journal vacuum, filesystem reserve adjustment,
+or reformat under issue #37. Keep the model canary NO_GO.
