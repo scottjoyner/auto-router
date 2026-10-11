@@ -207,3 +207,40 @@ on x1-370: host/inventory preflight Ruff passed; **469 passed,
 11 skipped, 1 deselected** in 4.06 seconds for the full isolated suite
 excluding only the existing live registry-drift test. The unfiltered
 suite remains not green. All work is draft-only.
+
+## Actual strict-live middleware evidence and Beelink process custody (follow-up)
+
+The existing `auto_router.secure_live` stack was reviewed without modifying
+its runtime. A new test-only characterization module,
+`tests/test_p0_37_real_auth_boundary.py`, exercises the actual existing
+executor authentication and request-idempotency middleware.
+
+All **3 tests pass**, demonstrating an **OPEN** per-human identity gap:
+an authenticated internal service token is not a verified Alice/Bob human;
+signed AssistX executor claims authenticate task/agent/claim, not a tenant
+and individual subject; and explicit idempotency keys under one shared
+bearer share a namespace even when the client's `user` label differs.
+Raw human labels in client request bodies/metadata remain untrusted.
+See [strict-live human-auth handoff](P0_37_STRICT_LIVE_AUTH_HANDOFF_20261011.md)
+for a proposed disabled-by-default signed gateway delegation contract,
+required trusted actor scope, and independent provider-observer gate.
+
+The Beelink read-only pressure investigation also established that
+`/` is ext4 with reserved blocks and 4% inode usage, while `/nas` is
+separately mounted btrfs. Two distinct `rsync -av` research-copy process
+groups are active from the same SSD-backed NFS source to the same NAS
+destination; a separate `rsync -rnc` NAS5 checksum/dry-run is reading
+recovery data; and multiple long-running `find /` or NAS5 tree scans
+are active. These are plausible I/O-contention sources but not proven
+accounting for root-used bytes. **No processes were signaled; no full-tree
+size scan, cleanup, file moves or inference occurred.** The original
+root-capacity and host-pressure NO_GO remains binding.
+See [Beelink NO_GO and process mapping](P0_37_BEELINK_HOST_PRESSURE_NO_GO_20261011.md).
+
+After adding characterization tests and the two reports, x1-370
+isolated-checkout Ruff passed. The full repository test suite **with
+only the separately failing live provider registry-drift check
+deselected** returned **472 passed, 11 skipped, 1 deselected** in 9.74 s
+at the later code/document revision. The unfiltered full suite remains
+**NOT GREEN** and there is no independently confirmed physical two-user
+provider execution or approved trace custody. Keep PR #45 draft-only.
