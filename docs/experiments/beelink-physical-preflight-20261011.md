@@ -45,6 +45,21 @@ At **2026-10-11T17:23:33Z**, result **PHYSICAL_PRECHECK_PASSED**:
 
 The approved manifest intentionally declares **one slot**, even though the existing process reports parallel=4. This tool does **not** convert process parallelism into admission capacity.
 
+## Additional completed private-path canaries (before 17:29:21 UTC)
+
+After the physical hash/preflight passed, Fleet Commander loaded ONLY the two previously operator-reviewed private path addresses from the private, mode-0600 manifest on x1. It did not print or commit either endpoint.
+
+It sent one tightly bounded **24-token** direct benign completion request to each existing path, with no routing through Auto-Router and no new model load. Both returned **HTTP 200** and exactly the expected marker `PING_OK`:
+
+| Transport | HTTP | Exact marker | Observed duration |
+|---|---:|---|---:|
+| Approved private LAN path | 200 | PASS | 1,268 ms |
+| Approved private Tailscale path | 200 | PASS | 284 ms |
+
+The canary completion checks finished before **2026-10-11T17:29:21Z**; individual exact wall-clock timestamps were not captured. The paths were independently reached from x1 but point to the same Beelink model; this is **not an independent signer or per-user execution receipt**. The model's context/process/GGUF evidence was observed separately at 17:23:33 UTC and still does not prove an authentic source-owner admission lease.
+
+[Sanitized unsigned metadata](../../experiments/evidence/beelink-physical-preflight-20261011.json) is versioned with these results. It explicitly states current_canonical_approval=false, independent_host_signature=false, trusted_owner_receipt=false, can_auto_renew=false, and can_dispatch=false. The original private manifest and approval artifacts remain out of GitHub/NAS. **The previously approved 643 lease had already expired before these canaries; no approval was renewed.**
+
 ## Follow-on gates
 
 1. Obtain operator-specific authorization for a **new** observation/reapproval cycle (not an indefinite or automatic lease). Recheck model hash, current process, exact running model and LAN/Tailscale completion evidence immediately before review.
