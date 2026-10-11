@@ -162,6 +162,34 @@ def test_two_signed_test_idp_subjects_cross_actual_router_middleware_and_shared_
         ))
     assert len(observed_a) == 1
 
+    # End-to-end mutation AFTER legitimate IdP verification and gateway
+    # signature but BEFORE the router receives bytes. The stolen signature
+    # and authenticated service bearer must NOT authorize a changed prompt.
+    class TamperAfterGatewaySignature(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            altered = json.loads(request.content)
+            altered["messages"][0]["content"] = "altered while in transit"
+            forwarded = httpx.Request(
+                request.method,
+                request.url,
+                headers={
+                    key: value for key, value in request.headers.items()
+                    if key.lower() not in {"content-length", "transfer-encoding"}
+                },
+                json=altered,
+            )
+            return await httpx.ASGITransport(app=app_a).handle_async_request(
+                forwarded
+            )
+
+    tampered_status, tampered_reply = asyncio.run(gateway.forward(
+        _idp(idp, "idp-a"), prompt,
+        transport=TamperAfterGatewaySignature(),
+    ))
+    assert tampered_status == 401
+    assert "digest mismatch" in tampered_reply.get("detail", "")
+    assert len(observed_a) == 1
+
     # Fail-closed on shared-owner-authority loss: no local SQLite fallback.
     authority_b._dsn = (
         "host=127.0.0.1 port=1 dbname=unreachable connect_timeout=1"
