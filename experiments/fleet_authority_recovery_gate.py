@@ -86,12 +86,13 @@ def validate(doc: object) -> dict:
                         "approval_expires_in_minutes", "has_approved_by",
                         "has_approval_id", "has_manifest_checksum"}:
         integer(graph[key], key)
-    for prefix in ("runtimes", "loaded_models", "paths", "capacity"):
-        prefix_total = ("admitted_" if prefix in ("runtimes", "loaded_models")
-                        else "approved_") + prefix
-        current = ("current_admitted_" if prefix in ("runtimes", "loaded_models")
-                   else "current_approved_") + prefix
-        if graph[current] > graph[prefix_total]:
+    for total, current in (
+        ("admitted_runtimes", "current_admitted_runtimes"),
+        ("admitted_loaded_models", "current_loaded_models"),
+        ("approved_paths", "current_approved_paths"),
+        ("approved_capacity", "current_approved_capacity"),
+    ):
+        if graph[current] > graph[total]:
             raise ValueError("more current evidence than total approved evidence")
     return d
 
