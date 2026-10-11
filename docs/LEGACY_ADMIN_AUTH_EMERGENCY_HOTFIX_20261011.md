@@ -36,10 +36,52 @@ add, rename, enable or load models and does not add an endpoint.
   CI router. It discards all response bodies.
 - No physical POST, model probing, local service restart, firewall rule,
   token rotation, Docker image staging, or NAS operation is performed.
-- This branch is not a portable production image or signed provenance
-  certificate. The artifact custody/Compose/rollback work proven in PR #41
-  must be independently recreated or adopted by an owner-approved emergency
-  build procedure before **any** source-only hotfix deployment.
+- The branch's image workflow supplies independent **undeployed** packaging,
+  archive and restored-image evidence; this is not a signed production
+  certificate. Actual private Compose, image custody, rollback and security
+  owner approval remain mandatory before any physical deployment.
+
+## Pinned, undeployed emergency image acceptance
+
+The emergency hotfix now has a **separate** disposable GitHub Actions
+[undeployed-image workflow](../.github/workflows/emergency-hotfix-pinned-image.yml).
+It does not reuse a PR #41 image, tag or provenance receipt.
+
+- On the reviewed exact PR head, CI resolves an upstream Python base
+  **digest**, builds the same single-purpose Dockerfile with a
+  `org.opencontainers.image.revision` label and refuses tracked environment
+  variants in image inputs. The only Dockerfile changes are optional pinned
+  base/revision arguments and build-time creation of the legacy installed
+  package's `static/vendor` path so import succeeds on a read-only root.
+- It imports the actual packaged `auto_router.secure_live:app` in a
+  disposable **network-disabled/read-only/capabilities-dropped** container,
+  refuses a missing direct `require_admin` dependency for any mounted admin
+  route and tests anonymous/wrong-token rejection across **every registered
+  admin GET or state-changing HTTP method**, including dynamic paths.
+  Authorized synthetic empty-state `GET /admin/providers` must still return
+  the expected legacy response. The **new** `/admin/providers/effective`
+  from full PR #41 must remain absent on this narrow hotfix.
+- CI exports an image archive + archive SHA-256 + immutable Docker image ID,
+  revision metadata and an **undeployed** Compose override, with a short
+  retention period. A second disposable runner compares the archive digest,
+  source revision and resolved repository **base + override** Compose model
+  (`build` absent; candidate ID exact; `pull_policy: never`), reloads the
+  archive and independently reruns the packaged admin-route denial checks.
+- **A green hosted build is necessary, never sufficient.** The checked-in
+  Compose base is **not** the actual x1-370 operator-private fleet Compose
+  stack. The physical host's image ID, rollback image, source-bound candidate,
+  Docker filesystem capacity and private override must still be accepted
+  separately. No image archive is transferred to x1 by the workflow.
+
+This minimal hotfix intentionally retains the legacy authorized
+`/admin/providers` response schema, which serializes provider configuration.
+A privileged caller may therefore receive configuration-sensitive fields.
+Use the admin credential **only in trusted service/operator custody**, never
+in a browser, untrusted trace, or publicly logged request. The sanitized
+`/admin/providers/effective` route in PR #41 is a separate enhancement.
+
+**Do not infer release readiness until all exact-head workflows finish
+successfully; CI jobs on earlier commits are not evidence for later heads.**
 
 ## Security-owner release choices
 
