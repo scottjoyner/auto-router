@@ -22,7 +22,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from typed_decision_shadow import ID, VARIANTS, check
 
 CASE_FIELDS = frozenset({"case_id", "variant", "task_type", "state", "instructions",
-                         "criteria", "gold", "evidence_complete"})
+                         "criteria", "gold", "evidence_complete", "eligible_options"})
 SENSITIVE = re.compile(
     r"(?:\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
     r"|\b(?:\d{1,3}\.){3}\d{1,3}\b"
@@ -61,11 +61,18 @@ def validate_case(row: object) -> dict:
         if not isinstance(key, str) or not ID.fullmatch(key):
             raise ValueError("invalid opaque option key")
         _text(description, 320)
+    approved = row["eligible_options"]
+    if (not isinstance(approved, list) or
+            len(set(str(x) for x in approved)) != len(approved) or
+            any(not isinstance(x, str) or x not in criteria for x in approved)):
+        raise ValueError("authorized eligible_options must be unique subset of criteria")
+    if not row["evidence_complete"] and approved:
+        raise ValueError("incomplete authority evidence cannot authorize any option")
     gold = row["gold"]
     if gold is not None and (not isinstance(gold, str) or not ID.fullmatch(gold)):
         raise ValueError("invalid gold label")
-    if row["evidence_complete"] and gold not in criteria:
-        raise ValueError("complete cases require independently labeled eligible gold")
+    if row["evidence_complete"] and gold not in approved:
+        raise ValueError("gold must come from independently authorized eligible_options")
     return row
 
 
@@ -103,6 +110,7 @@ def fixture(path: Path) -> tuple[list[dict], str]:
                     original["instructions"] != row["instructions"] or
                     original["criteria"] != row["criteria"] or
                     original["gold"] != row["gold"] or
+                    original["eligible_options"] != row["eligible_options"] or
                     original["evidence_complete"] != row["evidence_complete"]):
                 raise ValueError("permutation must preserve state/criteria/labels")
             if list(original["criteria"]) == list(row["criteria"]):
@@ -130,7 +138,7 @@ def observation(case: dict, *, model_id: str, revision: str, status: str,
         "task_type": case["task_type"], "variant": case["variant"],
         "state_sha256": sha256(case["state"].encode()).hexdigest(),
         "gold": case["gold"], "prediction": choice, "confidence": confidence,
-        "eligible_options": sorted(case["criteria"]),
+        "eligible_options": sorted(case["eligible_options"]),
         "evidence_complete": case["evidence_complete"], "latency_ms": duration,
         "status": status, "source_kind": "model_observation",
     }
