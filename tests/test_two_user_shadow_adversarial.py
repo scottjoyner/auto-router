@@ -1,7 +1,8 @@
 """Adversarial, fixture-only gates for issue #37. No production side effects."""
 import pytest
-from test_two_user_shadow_receipts import _FixtureGateway, _Principal, _ShadowReceipts
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from test_two_user_shadow_receipts import _FixtureGateway, _Principal, _ShadowReceipts
 
 
 def _session(gateway, principal):
