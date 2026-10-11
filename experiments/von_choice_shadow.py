@@ -17,7 +17,7 @@ import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from typed_decision_shadow import ID, VARIANTS, check
 
@@ -164,13 +164,35 @@ def decode_response(body: bytes, headers: object, case: dict, expected_model: st
     return prediction, float(probs[prediction])
 
 
+class NoRedirect(HTTPRedirectHandler):
+    """Reject redirects; a local service must never redirect to another host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _opener():
+    return build_opener(ProxyHandler({}), NoRedirect)
+
+
+def verify_von_service(endpoint: str, *, timeout: float) -> None:
+    """Read-only identity check; GET /health does not load Von weights."""
+    health_url = endpoint.removesuffix("/v1/systemone") + "/health"
+    try:
+        with _opener().open(Request(health_url, method="GET"), timeout=min(timeout, 3.0)) as res:
+            if res.status != 200:
+                raise ValueError("local service health is not HTTP 200")
+            data = json.loads(res.read(4097))
+            if (not isinstance(data, dict) or
+                    data.get("service") != "von-decision-server" or
+                    data.get("engine") != "von-1.3"):
+                raise ValueError("loopback listener is not a verified Von 1.3 service")
+    except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError) as err:
+        raise ValueError("Von identity preflight failed; no inference request sent") from None
+
+
 def request_von(case: dict, endpoint: str, *, timeout: float, expected_model: str):
-    # No environment proxy variables, no redirect handler, no remote hostname/DNS lookup.
-    from urllib.request import HTTPRedirectHandler
-    class NoRedirect(HTTPRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
-            return None
-    opener = build_opener(ProxyHandler({}), NoRedirect)
+    # No environment proxy variables, redirect hops, or hostname/DNS lookup.
+    opener = _opener()
     payload = json.dumps({
         "model": expected_model,
         "state": case["state"],
@@ -209,7 +231,7 @@ def main() -> int:
     p.add_argument("--ack-sanitized", action="store_true")
     p.add_argument("--ack-preloaded", action="store_true",
                    help="acknowledge possible lazy model/weight loading by the Von server")
-    p.add_argument("--url", default="http://127.0.0.1:8000")
+    p.add_argument("--url", help="REQUIRED on execution; explicit numeric loopback port")
     p.add_argument("--model-id", default="von")
     p.add_argument("--model-revision", default="von-1.3.0")
     p.add_argument("--out", type=Path)
@@ -217,7 +239,6 @@ def main() -> int:
     args = p.parse_args()
     try:
         rows, digest = fixture(args.cases)
-        endpoint = loopback_endpoint(args.url)
         if not ID.fullmatch(args.model_id) or not ID.fullmatch(args.model_revision):
             raise ValueError("invalid model id/revision")
         if not math.isfinite(args.timeout) or not 0.5 <= args.timeout <= 60:
@@ -226,9 +247,13 @@ def main() -> int:
             print(json.dumps({"validated_cases": len(rows), "fixture_sha256": digest,
                               "network_requests": 0, "model_inference": False}))
             return 0
-        if not (args.ack_sanitized and args.ack_preloaded and args.out):
-            raise ValueError("execution requires --ack-sanitized --ack-preloaded and --out")
+        if not (args.ack_sanitized and args.ack_preloaded and args.out and args.url):
+            raise ValueError("execution requires explicit --url, both acknowledgements and --out")
+        endpoint = loopback_endpoint(args.url)
         destination = output_path(args.out)
+        if destination.exists():
+            raise ValueError("output already exists: refusing to append/overwrite")
+        verify_von_service(endpoint, timeout=args.timeout)
         # Atomic exclusive create, never append/overwrite existing evidence.
         with os.fdopen(os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                               getattr(os, "O_NOFOLLOW", 0), 0o600), "w") as out:
