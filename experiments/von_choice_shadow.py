@@ -180,6 +180,10 @@ def decode_response(body: bytes, headers: object, case: dict, expected_model: st
         raise ValueError("invalid probability distribution")
     if prediction not in probs:
         raise ValueError("prediction absent from probability map")
+    # Treat an internally contradictory Choice as invalid evidence, not a
+    # calibrated answer. Tied maxima are allowed within rounding tolerance.
+    if float(probs[prediction]) + 1e-6 < max(float(p) for p in probs.values()):
+        raise ValueError("Choice contradicts its probability distribution")
     return prediction, float(probs[prediction])
 
 
