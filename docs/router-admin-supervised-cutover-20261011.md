@@ -338,3 +338,49 @@ router is **not** on PR #41, and physical postcutover six-route 401 checks
 from Destroyer and Lenovo have not been performed.
 
 **Decision: DRAFT / NO DEPLOY.**
+
+## Executable synthetic private-Compose parity gate — PASS, not release authority
+
+The operator-safe read-only tool now provides two complementary modes:
+
+- `--synthetic-overlay` checks that the *actual* private ordered Compose
+  file stack can accept an in-memory fake immutable image and
+  `pull_policy: never`, without modifying any other resolved router field,
+  other service, network, or volume. The tool uses `docker compose config`
+  only, with neither file writes nor image/container actions.
+- `--expected-image-id sha256:...` checks the *actual approved* candidate
+  image identifier, absence of inherited `build`, and `pull_policy: never`
+  after the operator has prepared the approved Compose override. It does
+  not certify the immutable image is staged, signed or safe to deploy.
+
+The operator should supply each `--compose-file` in the exact deployment
+order, keeping full private paths, environment values and raw Compose
+output in owner custody. The tool deliberately emits only status codes,
+boolean checks and reason codes. Do **not** attach `docker compose config`
+output to GitHub, Signal or other shared logs.
+
+The exact committed verifier source `02acad843cdacb85d053f25b45e10567af09b568`
+was streamed into a one-shot Python process on x1-370 and executed
+**without writing any local file** against the live container's actual
+Compose-file metadata. It returned
+`PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY` with all seven checks true:
+synthetic image selected; automatic pull prohibited; no build; router
+other fields unchanged; other services unchanged; network config
+unchanged; volume config unchanged. This check compared full resolved
+objects privately, without printing source values. See
+[`docs/evidence/router-private-compose-synthetic-readonly-20261011.json`](evidence/router-private-compose-synthetic-readonly-20261011.json).
+
+The baseline unmodified private configuration **still HOLDs**: the image
+reference remains a mutable tag and pull policy is not explicitly
+`never`. No candidate image is staged on x1, the original image
+remains running, and the 97%-used Docker root retains an independent
+storage-pressure HOLD. The synthetic test proves a *configuration
+transformation is structurally possible*, not an approved actual
+deployment plan or production admission.
+
+**Separate blockers still required:** AssistX security custody #156,
+explicit owner-approved rollback image and storage plan, approved
+candidate source/image provenance, authenticated client-first acceptance,
+and *postcutover* independent six-route anonymous-401 receipts from
+x1-370, Destroyer and Lenovo. All production changes remain forbidden
+by this runbook without an operator-approved cutover.
