@@ -180,3 +180,30 @@ Only after those gates permit a bounded two-user overlapping request canary
 on the same instance, with colliding client trace IDs, incomplete stream,
 retry and reconnect. Perform a second-node llama.cpp and physical-device
 acceptance separately. Until then keep the entire PR chain DRAFT-ONLY.
+
+## Physical canary capacity veto — Beelink
+
+The Beelink inventory candidate has now been **rejected for physical
+inference at the observed time**, based on a read-only SSH host inspection
+and a deterministic host-pressure evaluator. See
+[Beelink NO_GO evidence](P0_37_BEELINK_HOST_PRESSURE_NO_GO_20261011.md).
+
+The new explicit, opt-in `scripts/p0_37_host_pressure_preflight.py`
+only reads kernel pressure and filesystem counters; it cannot grant
+physical inference. In an actual Beelink run, it returned exit **2 / NO_GO**:
+approximately **3.0 GiB root available**, **99.36% root unprivileged
+capacity used**, and **23.64% full I/O stall (avg10)**, against conservative
+test thresholds of 10 GiB minimum, <90% used and <5% stall. NAS was mounted.
+No inference, model autoload, service changes or storage cleanup occurred.
+
+The companion inventory preflight now explicitly emits
+`inventory_candidate`, `host_pressure_checked=false` and
+`physical_inference_permitted=false` so model residency cannot be
+mistaken for approval to run. **No provider in the snapshot was
+physically admitted.**
+
+Exact-head check at `ffd672f25528a6d629556fa4ebecbdf4d32d5279`
+on x1-370: host/inventory preflight Ruff passed; **469 passed,
+11 skipped, 1 deselected** in 4.06 seconds for the full isolated suite
+excluding only the existing live registry-drift test. The unfiltered
+suite remains not green. All work is draft-only.
