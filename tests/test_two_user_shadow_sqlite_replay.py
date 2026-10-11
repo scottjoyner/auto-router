@@ -209,3 +209,55 @@ def test_simultaneous_distinct_owners_remain_isolated_in_sqlite(tmp_path):
     for index, session in enumerate(sessions):
         assert reopened.read(session) == [receipts[index]]
         assert reopened.read(session, root_request_id=receipts[1-index]["root_request_id"]) == []
+
+
+def test_gateway_key_rotation_reopens_rows_with_fresh_login_but_rejects_old_delegation(
+    tmp_path,
+):
+    """Fresh signer/session can read by authenticated actor, never reuse old token.
+
+    This is a fixture simulation, not proof of production IdP or key recovery.
+    """
+    principal_a = _Principal("same-tenant", "alice")
+    principal_b = _Principal("same-tenant", "bob")
+    keys = {
+        principal_a: Ed25519PrivateKey.generate(),
+        principal_b: Ed25519PrivateKey.generate(),
+    }
+
+    def authenticate(gateway, principal):
+        key = keys[principal]
+        gateway.register(principal, key.public_key())
+        challenge = gateway.challenge(principal)
+        return gateway.login(
+            principal,
+            challenge,
+            key.sign(gateway.proof_message(principal, challenge)),
+        )
+
+    first_gateway = _FixtureGateway()
+    first_alice = authenticate(first_gateway, principal_a)
+    old_delegation = first_gateway.delegate(first_alice, "auto/local")
+    path = tmp_path / "restart-key-rotation.db"
+    old_row = _DisposableSQLiteReplay(path, first_gateway).accept(
+        old_delegation, [b"data: [DONE]\n\n"]
+    )
+
+    # Simulated signer loss and new process with fresh sessions.
+    restarted_gateway = _FixtureGateway()
+    restarted_alice = authenticate(restarted_gateway, principal_a)
+    restarted_bob = authenticate(restarted_gateway, principal_b)
+    reopened = _DisposableSQLiteReplay(path, restarted_gateway)
+
+    assert reopened.read(restarted_alice) == [old_row]
+    assert reopened.read(restarted_bob) == []
+    assert reopened.read(restarted_bob, root_request_id=old_row["root_request_id"]) == []
+    with pytest.raises(PermissionError, match="invalid test delegation"):
+        reopened.accept(old_delegation, [b"data: [DONE]\n\n"])
+    with pytest.raises(PermissionError, match="root is not owned"):
+        restarted_gateway.delegate(
+            restarted_alice,
+            "auto/local",
+            retry_root=old_row["root_request_id"],
+        )
+    assert reopened.read(restarted_alice) == [old_row]
