@@ -39,7 +39,7 @@ TOTAL_ORIGINAL = len(FAMILIES) * CASES_PER_FAMILY
 
 def build() -> tuple[list[dict], list[dict]]:
     cases, baselines = [], []
-    for family_idx, (family, good, bad) in enumerate(FAMILIES):
+    for family, good, bad in FAMILIES:
         for iteration in range(CASES_PER_FAMILY):
             id_ = f"synthetic_{family}_{iteration:02d}"
             good_label = "node_a" if iteration % 2 == 0 else "node_b"
@@ -93,7 +93,7 @@ def validate_generated(cases: list[dict], baselines: list[dict]) -> None:
     assert sum(c["variant"] == "permuted" for c in cases) == 72
     assert sum(not c["evidence_complete"] for c in cases) == 24
     assert len({(c["case_id"], c["variant"]) for c in cases}) == len(cases)
-    for case, baseline in zip(cases, baselines):
+    for case, baseline in zip(cases, baselines, strict=True):
         assert baseline["case_id"] == case["case_id"]
         assert baseline["eligible_options"] == sorted(case["eligible_options"])
         assert baseline["prediction"] == case["gold"]
