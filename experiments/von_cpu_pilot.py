@@ -89,6 +89,33 @@ def physical_preflight(*, require_capacity: bool = True) -> dict:
     return result
 
 
+def validate_scope(memory: str, cpu: str) -> None:
+    """Refuse execution without an 8 GiB / 1.5 CPU hard cgroup-v2 quota."""
+    try:
+        mem = int(memory.strip())
+        quota, period = (int(x) for x in cpu.strip().split())
+        if not (0 < mem <= 8 * 1024 ** 3 and 0 < quota and 0 < period
+                and quota / period <= 1.5):
+            raise ValueError("CPU/memory resource scope exceeds research budget")
+    except (TypeError, ValueError) as err:
+        raise ValueError("missing or excessive CPU/memory cgroup quota") from err
+
+
+def require_resource_scope() -> None:
+    groups = Path("/proc/self/cgroup").read_text().splitlines()
+    cgroup = next((x.split(":", 2)[2] for x in groups if x.startswith("0::")), None)
+    if cgroup is None:
+        raise ValueError("cgroup-v2 resource scope required")
+    root = Path("/sys/fs/cgroup").resolve()
+    path = (root / cgroup.lstrip("/")).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("cgroup resource path escaped scope")
+    validate_scope(
+        (path / "memory.max").read_text(),
+        (path / "cpu.max").read_text(),
+    )
+
+
 def check_snapshot(snapshot: Path) -> dict:
     if not snapshot.is_dir():
         raise ValueError("pinned model snapshot absent")
@@ -103,6 +130,7 @@ def check_snapshot(snapshot: Path) -> dict:
 
 def prefetch(work: Path) -> dict:
     physical_preflight()
+    require_resource_scope()
     if not work.is_dir() or (work / "hf-cache").exists():
         raise ValueError("prefetch requires a new model cache under /tmp")
     from huggingface_hub import snapshot_download
@@ -126,6 +154,7 @@ def prefetch(work: Path) -> dict:
 
 def run(work: Path, cases: Path, out: Path, *, max_requests: int) -> dict:
     physical_preflight()
+    require_resource_scope()
     if not 1 <= max_requests <= 4:
         raise ValueError("pilot can evaluate at most four examples")
     rows, fixture_digest = fixture(cases)
