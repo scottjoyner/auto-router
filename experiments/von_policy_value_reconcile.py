@@ -17,7 +17,8 @@ from pathlib import Path
 from von_abstention_ablation import build as ablation_cases
 from von_abstention_ablation import summarize as ablation_summary
 from von_cpu_pilot import HF_REV, WEIGHTS
-from von_matched_wording import ABSTAIN, cases as wording_cases
+from von_matched_wording import ABSTAIN
+from von_matched_wording import cases as wording_cases
 from von_matched_wording import summarize as wording_summary
 
 REPORT_DIGESTS = {
