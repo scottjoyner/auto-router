@@ -13,8 +13,10 @@ import json
 import os
 import sqlite3
 import stat
+from contextlib import closing
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 class RootOwnerConflict(ValueError):
@@ -36,49 +38,67 @@ class RootOwnerLedger:
     A second node's independent DB is NOT equivalent to cluster-wide ownership.
     """
 
-    def __init__(self, path: Path, secret: bytes) -> None:
+    def __init__(self, path: Path, secret: bytes, *, bootstrap: bool = False) -> None:
         if not path.is_absolute() or path.name in ("", ".", ".."):
             raise RootOwnerStorageError("root ledger requires an absolute file path")
         if not isinstance(secret, bytes) or len(secret) < 32:
             raise RootOwnerStorageError("root ledger requires a separate secret")
         self.path = path
         self.secret = secret
-        self._initialize()
+        self._identity: tuple[int, int] | None = None
+        self._initialize(bootstrap=bootstrap)
 
     def _digest(self, kind: str, *parts: str) -> str:
         material = b"p0-root-owner-v1\x00" + _canonical([kind, *parts])
         return hmac.new(self.secret, material, hashlib.sha256).hexdigest()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _secure_db_stat(self) -> os.stat_result:
         try:
-            connection = sqlite3.connect(self.path, timeout=5)
+            attributes = self.path.lstat()
+        except OSError as exc:
+            raise RootOwnerStorageError("root ledger file missing") from exc
+        if not stat.S_ISREG(attributes.st_mode):
+            raise RootOwnerStorageError("root ledger must be a regular file")
+        if attributes.st_uid != os.getuid() or attributes.st_mode & 0o077:
+            raise RootOwnerStorageError("root ledger has unsafe ownership or permissions")
+        if self._identity is not None and (
+            attributes.st_dev, attributes.st_ino
+        ) != self._identity:
+            raise RootOwnerStorageError("root ledger storage identity changed")
+        return attributes
+
+    def _connect(self) -> sqlite3.Connection:
+        # SQLite's mode=rw refuses to recreate a missing store after a crash
+        # or unmount. A changed inode must not bypass previously bound roots.
+        self._secure_db_stat()
+        try:
+            uri = "file:" + quote(str(self.path), safe="/") + "?mode=rw"
+            connection = sqlite3.connect(uri, timeout=5, uri=True)
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("PRAGMA synchronous=FULL")
             return connection
         except sqlite3.Error as exc:
             raise RootOwnerStorageError("root ledger connection unavailable") from exc
 
-    def _initialize(self) -> None:
+    def _initialize(self, *, bootstrap: bool) -> None:
         if self.path.is_symlink():
             raise RootOwnerStorageError("root ledger symlink is forbidden")
         try:
-            # Do not implicitly create operational storage on an unknown mount.
-            if not self.path.parent.exists():
-                raise RootOwnerStorageError("root ledger parent directory is missing")
-            if not self.path.exists():
+            directory = self.path.parent.stat()
+            if not stat.S_ISDIR(directory.st_mode):
+                raise RootOwnerStorageError("root ledger parent directory invalid")
+            if directory.st_uid != os.getuid() or directory.st_mode & 0o022:
+                raise RootOwnerStorageError("root ledger parent directory is not private")
+            # Provisioning is an explicit, one-time offline action. Runtime
+            # initialization must NEVER recreate a lost or unmounted store.
+            if bootstrap:
                 flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
-                try:
-                    fd = os.open(self.path, flags, 0o600)
-                except FileExistsError:
-                    pass  # concurrent initializers; verify actual file below
-                else:
-                    os.close(fd)
-            attributes = self.path.lstat()
-            if not stat.S_ISREG(attributes.st_mode):
-                raise RootOwnerStorageError("root ledger must be a regular file")
-            if attributes.st_uid != os.getuid() or attributes.st_mode & 0o077:
-                raise RootOwnerStorageError("root ledger has unsafe ownership or permissions")
-            with self._connect() as connection:
+                fd = os.open(self.path, flags, 0o600)
+                os.close(fd)
+            elif not self.path.exists():
+                raise RootOwnerStorageError("root ledger requires explicit provisioning")
+            attributes = self._secure_db_stat()
+            with closing(self._connect()) as connection, connection:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute(
                     """CREATE TABLE IF NOT EXISTS p0_owner_key_check (
@@ -119,9 +139,10 @@ class RootOwnerLedger:
                         "INSERT INTO p0_owner_key_check (singleton, key_check) VALUES (1, ?)",
                         (expected,),
                     )
-                elif not hmac.compare_digest(row[0], expected):
+                elif not isinstance(row[0], str) or not hmac.compare_digest(row[0], expected):
                     raise RootOwnerStorageError("root ledger key mismatch")
                 connection.commit()
+            self._identity = (attributes.st_dev, attributes.st_ino)
         except RootOwnerStorageError:
             raise
         except (OSError, sqlite3.Error) as exc:
@@ -149,7 +170,11 @@ class RootOwnerLedger:
                 "SELECT key_check FROM p0_owner_key_check WHERE singleton=1"
             ).fetchone()
             expected = self._digest("ledger-key-check", "version-1")
-            if observed_key is None or not hmac.compare_digest(observed_key[0], expected):
+            if (
+                observed_key is None
+                or not isinstance(observed_key[0], str)
+                or not hmac.compare_digest(observed_key[0], expected)
+            ):
                 raise RootOwnerStorageError("root ledger key mismatch")
 
             root = connection.execute(
