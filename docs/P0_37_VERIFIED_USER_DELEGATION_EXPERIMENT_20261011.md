@@ -19,7 +19,7 @@ Stacked on the draft [two-user shadow receipts #45](https://github.com/scottjoyn
 
 The following names define the experimental interface. No secret values or user tokens are recorded in this repository:
 
-- `AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED` — absent/false by default.
+- `AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED` — absent/false by default.
 - `AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED` — must remain true.
 - `AUTO_ROUTER_INTERNAL_SERVICE_TOKEN` — existing private gateway-service bearer; its possession alone is **not** a human identity.
 - `AUTO_ROUTER_P0_USER_DELEGATION_VERIFY_KEY_FILE` — pinned absolute path to an **independent, trusted gateway public Ed25519 PEM**. Not the AssistX executor key.
@@ -66,3 +66,12 @@ CI run was established from this local test.
 **Release rule:** even after verified signed delegation, the router may know only that a trusted signing key asserted tenant/subject/model/root/attempt. It may **not** claim that a real IdP authenticated a specific person, that a model executed, that a response reached an iPhone, or that a tenant/actor trace is safely held until those independent sources actually exist.
 
 No production routing, storage, model configuration, signing key or privacy setting was modified by this experiment.
+
+
+**Feature-flag correction (same draft PR):** activation uses only
+`AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED` and the prior
+`AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED=true` is explicitly
+rejected at startup. This feature is **admission-changing**, not passive.
+A preprovisioned private root-ownership ledger and its separate pinned
+HMAC key are now mandatory when activated. See
+[durable ownership evidence](P0_37_DURABLE_ROOT_OWNERSHIP_20261011.md).
