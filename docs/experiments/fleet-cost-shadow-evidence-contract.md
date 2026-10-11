@@ -26,7 +26,7 @@ Neither draft admin endpoint is live proof of model residency, physical host or 
 
 ## Research contract enforced
 
-- Strict bounded allowlist, 64-runtime/telemetry limit, no raw prompt/network/secret fields. Duplicate runtime IDs, process IDs, reservation IDs and telemetry rows reject the **whole input**.
+- Strict bounded allowlist, 64-runtime/telemetry limit, no raw prompt/network/secret fields. Duplicate runtime IDs, **node-scoped physical process identities** (node ID + process ID), globally duplicated reservation IDs and telemetry rows reject the **whole input**. Identical local PIDs on different hosts are not automatically the same physical process.
 - An invented runtime passes the eligibility screen only when owner, request, model, task, LOADED state, HEALTHY state, free slot and active lease all match. AVAILABLE and UNKNOWN are not LOADED.
 - Performance telemetry must match the **same runtime, model, task and process**. This prevents a model swap or service restart inheriting old estimates. At least eight samples are required. Quality lower bound, deadline check and freshness must pass for **every eligible** runtime; otherwise return EVIDENCE_INCOMPLETE and no partial rankings.
 - Fictional as-of time: authority/runtime freshness 30 sec, measured performance freshness 120 sec, power freshness 60 sec, authority expiry within 30 sec. These are prototype limits, **not trusted clock or released production policy**.
