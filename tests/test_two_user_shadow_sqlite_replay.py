@@ -109,8 +109,8 @@ def test_reopen_preserves_owner_isolation_with_colliding_trace_ids(tmp_path):
     a = gateway.delegate(alice, "auto/local")
     b = gateway.delegate(bob, "auto/local")
     metadata = {"trace_id": "deliberate-collision", "subject_id": "spoofed"}
-    a_row = spool.accept(a, [b"data: [DONE]\\n\\n"], client_metadata=metadata)
-    b_row = spool.accept(b, [b"data: [DONE]\\n\\n"], client_metadata=metadata)
+    a_row = spool.accept(a, [b"data: [DONE]\n\n"], client_metadata=metadata)
+    b_row = spool.accept(b, [b"data: [DONE]\n\n"], client_metadata=metadata)
     reopened = _DisposableSQLiteReplay(path, gateway)
     assert a_row["client_trace_fingerprint"] == b_row["client_trace_fingerprint"]
     assert a_row["root_request_id"] != b_row["root_request_id"]
@@ -118,7 +118,7 @@ def test_reopen_preserves_owner_isolation_with_colliding_trace_ids(tmp_path):
     assert reopened.read(bob) == [b_row]
     assert reopened.read(alice, root_request_id=b_row["root_request_id"]) == []
     assert reopened.read(bob, root_request_id=a_row["root_request_id"]) == []
-    assert reopened.accept(a, [b"data: [DONE]\\n\\n"], client_metadata=metadata) == a_row
+    assert reopened.accept(a, [b"data: [DONE]\n\n"], client_metadata=metadata) == a_row
     assert len(reopened.read(alice)) == 1
 
 
@@ -128,11 +128,11 @@ def test_reopen_rejects_changed_attempt_without_overwriting_original(tmp_path):
     path = tmp_path / "immutable-shadow.db"
     signed_attempt = gateway.delegate(alice, "auto/local")
     row = _DisposableSQLiteReplay(path, gateway).accept(
-        signed_attempt, [b"data: [DONE]\\n\\n"]
+        signed_attempt, [b"data: [DONE]\n\n"]
     )
     reopened = _DisposableSQLiteReplay(path, gateway)
     with pytest.raises(ValueError, match="conflicting replay"):
-        reopened.accept(signed_attempt, [b'data: {"choices":[]}\\n\\n'])
+        reopened.accept(signed_attempt, [b'data: {"choices":[]}\n\n'])
     assert _DisposableSQLiteReplay(path, gateway).read(alice) == [row]
 
 
@@ -144,7 +144,7 @@ def test_expired_delegation_cannot_append_after_reopen_but_prior_row_is_readable
     path = tmp_path / "expiry-shadow.db"
     delegation = gateway.delegate(alice, "auto/local")
     receipt = _DisposableSQLiteReplay(path, gateway).accept(
-        delegation, [b'data: {"choices":[]}\\n\\n']
+        delegation, [b'data: {"choices":[]}\n\n']
     )
     assert receipt["terminal_status"] == "incomplete"
     assert receipt["response_delivered"] == "unknown"
@@ -152,7 +152,7 @@ def test_expired_delegation_cannot_append_after_reopen_but_prior_row_is_readable
     clock[0] = 1061.0
     reopened = _DisposableSQLiteReplay(path, gateway)
     with pytest.raises(PermissionError, match="expired"):
-        reopened.accept(delegation, [b"data: [DONE]\\n\\n"])
+        reopened.accept(delegation, [b"data: [DONE]\n\n"])
     assert reopened.read(alice) == [receipt]
     assert reopened.read(bob) == []
     with pytest.raises(PermissionError, match="unauthenticated"):
