@@ -8,6 +8,7 @@ grant trace readback, verify an IdP or alter configured providers.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hmac
@@ -285,7 +286,11 @@ class UserDelegationShadowMiddleware:
             # Persist the unique owner/model/root/attempt binding BEFORE any
             # downstream idempotency reservation or routing. A repeated
             # signed attempt never forwards again, even after a restart/TTL.
-            created = self.owner_ledger.reserve(bound, delegation)
+            # Disk admission may wait for SQLite's BEGIN IMMEDIATE lock.
+            # Never block the ASGI event loop on filesystem contention.
+            created = await asyncio.to_thread(
+                self.owner_ledger.reserve, bound, delegation
+            )
             if not created:
                 raise RootOwnerConflict("duplicate delegated attempt")
             # This is trusted in-process verifier scope, not caller metadata.
