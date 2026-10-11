@@ -79,3 +79,36 @@ No production .env, Docker, Tailscale, firewall, inference, or Git history
 was changed to prepare this proposal.
 
 **Disposition: RESEARCH_ONLY.**
+
+
+## Channel arbitration and four-service transition proof
+
+The unwired helper now also models *raw* synthetic HTTP header pairs. It
+rejects more than one authentication presentation channel even if one is
+correct: duplicated `X-Admin-Token` (including casing variants), mixed
+`X-Admin-Token` and Bearer/Basic, multiple `Authorization` headers,
+unsupported schemes, folded/comma-joined Bearer, noncanonical or malformed
+Basic base64, wrong Basic username, control characters, non-ASCII, and
+oversize/invalid raw headers. Basic credentials are decoded only in memory;
+the result is an enum, never a credential or parsed headers. This is NOT a
+production header/middleware implementation. The trusted ASGI/proxy boundary,
+TLS peer identity, and management of multiple auth sources remain unproven.
+
+The separate `tests/test_research_admin_transition_model.py` exhaustively
+checks all 24 sequential update orders for four abstract participants
+(router, API, worker, Hermes), assuming constant admin-request demand. With
+a single current token and no request drain, every serial transition has
+some intermediate authentication failure. A deliberately drained
+maintenance interval prevents requests during the mismatch but is **not**
+zero downtime. A theoretical overlap requires the router to enable bounded
+old+new acceptance first and every client to move before old-key expiry.
+A missed client, prior client-first activation or expired window still fails.
+These are discrete synthetic checks, NOT observed latency or availability
+guarantees. The actual shared credential is never used in these tests.
+
+**Decision recommendation:** Until owners can show restart-safe expiry,
+conflicting-channel denial in the real ASGI pipeline, authenticated transport
+and independently approved issuer/token custody, prefer a supervised
+maintenance window over dual-token runtime acceptance. Importing this research
+module from production authentication would require a new explicit security
+review, separate branch, and negative end-to-end tests.
