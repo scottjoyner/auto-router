@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from test_p0_37_verified_user_delegation import _app, _request, _token
 
-from auto_router.user_delegation import verify_user_delegation
+from auto_router.user_delegation import delegated_body_digest, verify_user_delegation
 from auto_router.user_root_ledger import RootOwnerConflict, RootOwnerStorageError
 from auto_router.user_root_postgres import PostgresRootOwnerAuthority
 
@@ -406,3 +406,40 @@ def test_private_dsn_file_requires_verify_full_and_cert_reference(
         read_authority_dsn_file(str(path))
     with pytest.raises(RootOwnerStorageError):
         read_authority_dsn_file("relative/dsn")
+
+
+
+def test_same_human_same_root_different_signed_prompt_is_rejected(authority):
+    """Fresh signed retry must not change what one logical request means."""
+    signer = Ed25519PrivateKey.generate()
+    root = str(uuid.uuid4())
+    original_body = {
+        "model": "auto/code", "messages": [{"role": "user", "content": "original"}],
+        "max_tokens": 8,
+    }
+    changed_body = {
+        "model": "auto/code", "messages": [{"role": "user", "content": "changed"}],
+        "max_tokens": 8,
+    }
+
+    def signed(body):
+        token = _token(
+            signer, "alice", root=root, claims_changes={
+                "schema": "p0-user-shadow-v2",
+                "request_path": "/v1/chat/completions",
+                "request_sha256": delegated_body_digest(
+                    "/v1/chat/completions", body
+                ),
+            },
+        )
+        claims = verify_user_delegation(
+            token, public_key=signer.public_key(),
+            key_id="fixture-human-key-1", model="auto/code",
+            request_path="/v1/chat/completions", request_body=body,
+        )
+        return claims, token
+
+    assert authority.reserve(*signed(original_body)) is True
+    with pytest.raises(RootOwnerConflict, match="request scope"):
+        authority.reserve(*signed(changed_body))
+    assert authority.reserve(*signed(original_body)) is True
