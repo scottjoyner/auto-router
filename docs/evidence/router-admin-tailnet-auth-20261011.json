@@ -39,6 +39,34 @@
       "credential_source": "existing AUTO_ROUTER_ADMIN_TOKEN environment",
       "http_status": 200,
       "body_read": false
+    },
+    {
+      "node": "destroyer",
+      "route": "GET /admin/circuits",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "destroyer",
+      "route": "GET /admin/agent-workers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/circuits",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/agent-workers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
     }
   ],
   "separate_lan_probe": {
@@ -71,6 +99,11 @@
     "expected_authorized_assistx_admin_status": 200,
     "require_production_client_inventory": true,
     "require_deployment_rollback": true,
-    "ready_for_operator_exposure": false
+    "ready_for_operator_exposure": false,
+    "inherited_paths_verified_accessible_without_auth": [
+      "/admin/providers",
+      "/admin/circuits",
+      "/admin/agent-workers"
+    ]
   }
 }
