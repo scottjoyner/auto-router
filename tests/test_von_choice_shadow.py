@@ -1,0 +1,227 @@
+"""Isolated Von HTTP adapter tests; fake loopback server does NOT load models."""
+import contextlib
+import importlib.util
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "experiments"))
+SPEC = importlib.util.spec_from_file_location("von_choice_shadow", ROOT / "experiments" / "von_choice_shadow.py")
+V = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(V)
+
+
+def sample(**kw):
+    row = {
+        "case_id": "test_1", "variant": "original", "task_type": "choice",
+        "state": "Node A is healthy and Node B is unreachable.",
+        "instructions": "Select the healthy admitted node.",
+        "criteria": {"node_a": "Node A", "node_b": "Node B"},
+        "gold": "node_a", "evidence_complete": True,
+    }
+    row.update(kw)
+    return row
+
+
+def answer(**kw):
+    data = {"model": "von-1.3.0", "truncation": None,
+            "answers": {"shadow_0": {"type": "choice", "choice": "node_a",
+                                     "probabilities": {"node_a": .9, "node_b": .1},
+                                     "confidence": .9}}}
+    data.update(kw)
+    return json.dumps(data).encode()
+
+
+def write_case(path, *cases):
+    path.write_text("".join(json.dumps(case) + "\n" for case in cases), encoding="utf-8")
+
+
+class StubVon(BaseHTTPRequestHandler):
+    requested = []
+    truncated = False
+    bad_status = False
+
+    def do_POST(self):
+        self.__class__.requested.append((self.path, json.loads(self.rfile.read(
+            int(self.headers["Content-Length"])))))
+        code = 503 if self.bad_status else 200
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        if self.truncated:
+            self.send_header("X-Von-Truncated", "state")
+        self.end_headers()
+        self.wfile.write(answer())
+
+    def log_message(self, *args):
+        pass
+
+
+@contextlib.contextmanager
+def server():
+    StubVon.requested = []
+    StubVon.truncated = StubVon.bad_status = False
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), StubVon)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_port}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        t.join(timeout=3)
+
+
+class TestVonAdapter(unittest.TestCase):
+    def test_fixture_validation(self):
+        self.assertEqual(V.validate_case(sample())["case_id"], "test_1")
+
+    def test_rejects_unexpected_raw_data(self):
+        with self.assertRaisesRegex(ValueError, "approved case fields"):
+            V.validate_case(sample(raw_prompt="do not record"))
+
+    def test_rejects_sensitive_email(self):
+        with self.assertRaisesRegex(ValueError, "sensitive"):
+            V.validate_case(sample(state="Contact dev@example.com"))
+
+    def test_rejects_sensitive_ip(self):
+        with self.assertRaisesRegex(ValueError, "sensitive"):
+            V.validate_case(sample(state="Endpoint 192.168.1.1"))
+
+    def test_rejects_secret_token(self):
+        with self.assertRaisesRegex(ValueError, "sensitive"):
+            V.validate_case(sample(state="Authorization: Bearer private-value"))
+
+    def test_rejects_invalid_gold(self):
+        with self.assertRaisesRegex(ValueError, "gold"):
+            V.validate_case(sample(gold="node_c"))
+
+    def test_incomplete_can_have_null_label(self):
+        V.validate_case(sample(gold=None, evidence_complete=False, variant="missing_evidence"))
+
+    def test_permutation_must_reorder(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "cases.jsonl"
+            write_case(p, sample(), sample(variant="permuted"))
+            with self.assertRaisesRegex(ValueError, "reorder"):
+                V.fixture(p)
+
+    def test_permutation_with_real_reorder(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "cases.jsonl"
+            write_case(p, sample(), sample(variant="permuted", criteria={
+                "node_b": "Node B", "node_a": "Node A"}))
+            self.assertEqual(len(V.fixture(p)[0]), 2)
+
+    def test_reject_url_escape(self):
+        for url in ("http://localhost:8000", "http://192.168.1.2:8000",
+                    "https://127.0.0.1:8000", "http://127.0.0.1:8000/redirect",
+                    "http://evil.example:8000", "http://127.0.0.1:8000?token=abc",
+                    "http://name@127.0.0.1:8000"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                V.loopback_endpoint(url)
+
+    def test_explicit_loopback_only(self):
+        self.assertEqual(V.loopback_endpoint("http://127.0.0.1:8327"),
+                         "http://127.0.0.1:8327/v1/systemone")
+
+    def test_response_ok(self):
+        x = V.decode_response(answer(), {}, sample(), "von-1.3.0")
+        self.assertEqual(x, ("node_a", .9))
+
+    def test_wrong_model_refused(self):
+        with self.assertRaisesRegex(ValueError, "model mismatch"):
+            V.decode_response(answer(model="von-other"), {}, sample(), "von-1.3.0")
+
+    def test_truncation_refused(self):
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            V.decode_response(answer(), {"X-Von-Truncated": "state"}, sample(), "von-1.3.0")
+
+    def test_incorrect_probabilities_refused(self):
+        malformed = json.loads(answer())
+        malformed["answers"]["shadow_0"]["probabilities"]["node_a"] = 7
+        with self.assertRaisesRegex(ValueError, "probability"):
+            V.decode_response(json.dumps(malformed).encode(), {}, sample(), "von-1.3.0")
+
+    def test_local_stub_http_decision(self):
+        with server() as url:
+            result = V.request_von(sample(), V.loopback_endpoint(url), timeout=2,
+                                   expected_model="von-1.3.0")
+            self.assertEqual(result[:3], ("ok", "node_a", .9))
+            self.assertEqual(len(StubVon.requested), 1)
+            self.assertEqual(StubVon.requested[0][0], "/v1/systemone")
+            self.assertEqual(StubVon.requested[0][1]["model"], "von-1.3.0")
+
+    def test_http_truncation_not_counted_as_valid(self):
+        with server() as url:
+            StubVon.truncated = True
+            result = V.request_von(sample(), V.loopback_endpoint(url), timeout=2,
+                                   expected_model="von-1.3.0")
+            self.assertEqual(result, ("error", None, None, None))
+
+    def test_http_non_200_not_counted(self):
+        with server() as url:
+            StubVon.bad_status = True
+            result = V.request_von(sample(), V.loopback_endpoint(url), timeout=2,
+                                   expected_model="von-1.3.0")
+            self.assertEqual(result, ("error", None, None, None))
+
+    def test_dry_run_does_not_send_http(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "cases.jsonl"
+            write_case(p, sample())
+            with patch.object(V, "request_von", side_effect=AssertionError("should not call")), \
+                    patch.object(sys, "argv", ["prog", str(p)]):
+                self.assertEqual(V.main(), 0)
+
+    def test_execute_requires_all_acknowledgements(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "cases.jsonl"
+            write_case(p, sample())
+            with patch.object(V, "request_von", side_effect=AssertionError("should not call")), \
+                    patch.object(sys, "argv", ["prog", str(p), "--execute"]):
+                self.assertEqual(V.main(), 2)
+
+    def test_end_to_end_stub_writes_allowlisted_rows(self):
+        with server() as url, tempfile.TemporaryDirectory(dir="/tmp") as d:
+            p = Path(d) / "cases.jsonl"
+            out = Path(d) / "observations.jsonl"
+            write_case(p, sample())
+            with patch.object(sys, "argv", ["prog", str(p), "--execute",
+                                            "--ack-sanitized", "--ack-preloaded",
+                                            "--url", url, "--out", str(out)]):
+                self.assertEqual(V.main(), 0)
+            item = json.loads(out.read_text().strip())
+            self.assertEqual(item["source_kind"], "model_observation")
+            self.assertEqual(item["prediction"], "node_a")
+            self.assertNotIn("state", item)
+            self.assertNotIn("instructions", item)
+            self.assertNotIn("criteria", item)
+            self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+
+    def test_no_overwrite_of_evidence(self):
+        with server() as url, tempfile.TemporaryDirectory(dir="/tmp") as d:
+            p = Path(d) / "cases.jsonl"
+            out = Path(d) / "observations.jsonl"
+            write_case(p, sample())
+            out.write_text("sentinel")
+            with patch.object(sys, "argv", ["prog", str(p), "--execute",
+                                            "--ack-sanitized", "--ack-preloaded",
+                                            "--url", url, "--out", str(out)]):
+                self.assertEqual(V.main(), 2)
+            self.assertEqual(out.read_text(), "sentinel")
+            self.assertEqual(len(StubVon.requested), 0)
+
+    def test_output_must_be_tmp(self):
+        with self.assertRaisesRegex(ValueError, "under /tmp"):
+            V.output_path(Path("/nas/somewhere/observations.jsonl"))
+
+
+if __name__ == "__main__":
+    unittest.main()
