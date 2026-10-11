@@ -44,24 +44,22 @@ def test_not_public_host_named_or_local(bad):
         gate.validate_target(bad)
 
 
-def test_four_authenticated_denials_are_required_and_no_bodies_read():
-    fake = FakeOpen([401, 401, 401, 401])
+def test_six_anonymous_denials_are_required_and_no_bodies_read():
+    fake = FakeOpen([401] * 6)
     result = gate.check("100.101.102.103", fake)
     assert result["decision"] == "PASS_REMOTE_401"
     assert result["credentials_sent"] is False
     assert result["response_bodies_read"] is False
-    assert len(fake.calls) == 4
+    assert len(fake.calls) == 6
     assert all(method == "GET" and not headers and timeout == 4 for _, method, headers, timeout in fake.calls)
     assert all(url.startswith("http://100.101.102.103:8088/admin/") for url, *_ in fake.calls)
 
 
-@pytest.mark.parametrize("codes", [
-    [200, 401, 401, 401], [401, 200, 401, 401],
-    [401, 401, 200, 401], [401, 401, 401, 200],
-    [404, 401, 401, 401], [403, 401, 401, 401],
-    [302, 401, 401, 401], [503, 401, 401, 401],
-])
-def test_any_non_401_holds(codes):
+@pytest.mark.parametrize("route_index", range(6))
+@pytest.mark.parametrize("unexpected_status", [200, 302, 403, 404, 503])
+def test_any_remote_admin_route_with_non_401_holds(route_index, unexpected_status):
+    codes = [401] * 6
+    codes[route_index] = unexpected_status
     assert gate.check("100.101.102.103", FakeOpen(codes))["decision"] == "HOLD_REMOTE_ADMIN_AUTH"
 
 
