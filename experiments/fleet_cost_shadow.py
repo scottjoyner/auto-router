@@ -245,24 +245,26 @@ def rank(bundle: object) -> dict:
                 continue
         energy_j = latency_ms * t["watts_p95"] / 1000
         cost = latency_ms if r["objective"] == "latency_ms" else energy_j
-        scored.append({
+        scored.append((cost, runtime_id, {
             "runtime_id": runtime_id,
-            "node_id": a["node_id"], "latency_upper_ms": round(latency_ms, 3),
-            "energy_upper_j": round(energy_j, 3),
+            "node_id": a["node_id"],
+            "latency_conservative_proxy_ms": round(latency_ms, 3),
+            "energy_conservative_proxy_j": round(energy_j, 3),
             "quality_lower_bound": t["quality_lower_bound"],
             "sample_count": t["sample_count"],
             "rank_objective_cost": round(cost, 3),
-        })
+        }))
     if blockers:
         # A tempting partial ranking from remaining good candidates could
         # conceal better eligible candidates with missing evidence.
         output["status"] = "EVIDENCE_INCOMPLETE"
         output["evidence_blockers"] = sorted(blockers)
         return output
-    scored.sort(key=lambda x: (x["rank_objective_cost"], x["runtime_id"]))
+    # Sort unrounded costs; rounding is display-only and cannot reorder a close race.
+    scored.sort(key=lambda item: (item[0], item[1]))
     output["status"] = "RANKED_SYNTHETIC_ONLY"
-    output["ranked_synthetic_ids"] = [x["runtime_id"] for x in scored]
-    output["rank_costs"] = scored
+    output["ranked_synthetic_ids"] = [runtime for _, runtime, _ in scored]
+    output["rank_costs"] = [public for _, _, public in scored]
     return output
 
 
