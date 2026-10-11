@@ -325,3 +325,24 @@ def test_gateway_jti_cannot_be_reused_for_another_signed_attempt(tmp_path):
     with sqlite3.connect(ledger.path) as db:
         assert db.execute("SELECT COUNT(*) FROM p0_root_owner").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM p0_attempt_owner").fetchone()[0] == 1
+
+
+def test_independent_unreconciled_node_databases_cannot_prove_global_owner(
+    tmp_path,
+):
+    """Explicit negative control: this is why multi-node admission is NOT ready.
+
+    Two disconnected nodes using separate DBs cannot enforce one global root.
+    A deployed fleet must use one linearizable owner authority and proof that
+    all writers use it. This passing NEGATIVE test is NOT an acceptance proof.
+    """
+    signer = Ed25519PrivateKey.generate()
+    same_root = _uuid()
+    a, a_token = _claim(signer, "alice", same_root, _uuid())
+    b, b_token = _claim(signer, "bob", same_root, _uuid())
+    isolated_a = _ledger(tmp_path / "node-a.sqlite")
+    isolated_b = _ledger(tmp_path / "node-b.sqlite")
+    assert isolated_a.reserve(a, a_token) is True
+    assert isolated_b.reserve(b, b_token) is True
+    # Deliberately demonstrate split-brain admission is possible in two
+    # independent stores. Never infer cross-node uniqueness from this ledger.
