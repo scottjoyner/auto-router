@@ -152,6 +152,32 @@ own completed exact-head CI results.** The known unpatched router remains
 exposed to its Tailnet peers. Do not execute a router cutover from this
 revised acceptance script or waive P0 AssistX credential custody #156.
 
+## Browser operator action compatibility (security-preserving)
+
+A static review found **seven** HTMX `hx-post` controls in the operator
+dashboard and ops summary that would try to call protected admin actions
+without the `X-Admin-Token` header. Those include provider probing,
+service scanning, agent-CLI discovery and outbox dry-run dispatch. They
+were distinct from the ordinary `/admin/` browser navigation links
+already marked as not directly accessible.
+
+The draft templates now show those seven actions as **nonclickable,
+labeled API references**, preserving their descriptive context without
+initiating an unauthorized request or putting any shared admin token
+in browser JavaScript, a header set by untrusted JS, URL query strings,
+HTMX, or unreviewed telemetry. A repository-wide HTML regression test
+rejects literal privileged `hx-get`/`hx-post` and other HTMX admin
+actions and retains the seven known controls as inert references.
+
+**Operator tradeoff:** browser-triggered provider discovery, CLI scan,
+service scan, and outbox dry-run buttons are unavailable after this change.
+The router's separately authenticated API clients can still perform
+approved operations. A replacement interactive operator UI would require
+a distinct security-reviewed server-side session/authentication design.
+This UI change is not a router authorization bypass, does not resolve
+shared-token transport or credential custody, and does not authorize
+deploying the candidate.
+
 ## Six-route remote denial parity
 
 Draft remote verification now requires anonymous HTTP 401 on the **same six
