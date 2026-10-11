@@ -28,7 +28,8 @@ _DDL = (
     f"""CREATE TABLE {_SCHEMA}.root_owner (
             root_hash TEXT PRIMARY KEY,
             owner_hash TEXT NOT NULL,
-            model_hash TEXT NOT NULL
+            model_hash TEXT NOT NULL,
+            request_scope_hash TEXT NOT NULL
         )""",
     f"""CREATE TABLE {_SCHEMA}.attempt_owner (
             attempt_hash TEXT PRIMARY KEY,
@@ -158,6 +159,15 @@ class PostgresRootOwnerAuthority:
             "owner", claims["issuer"], claims["tenant"], claims["subject"]
         )
         model_hash = self._hash("model", claims["model_handle"])
+        # A logical root is not reusable for a different prompt or route,
+        # even if the same owner signs a fresh attempt after interruption.
+        # Legacy v1 fixture claims have no signed request digest and remain
+        # explicitly unbound research-only state.
+        scope_hash = self._hash(
+            "request-scope",
+            claims.get("request_path", "legacy-v1-unbound"),
+            claims.get("request_sha256", "legacy-v1-unbound"),
+        )
         attempt_hash = self._hash("attempt", claims["attempt_id"])
         jti_hash = self._hash("jti", claims["jti"])
         token_hash = self._hash("signed-jwt", token)
@@ -169,16 +179,20 @@ class PostgresRootOwnerAuthority:
                     # separate processes/hosts wait for the winning transaction.
                     cur.execute(
                         f"INSERT INTO {_SCHEMA}.root_owner "
-                        "(root_hash, owner_hash, model_hash) VALUES (%s,%s,%s) "
+                        "(root_hash, owner_hash, model_hash, request_scope_hash) "
+                        "VALUES (%s,%s,%s,%s) "
                         "ON CONFLICT (root_hash) DO NOTHING",
-                        (root_hash, owner_hash, model_hash),
+                        (root_hash, owner_hash, model_hash, scope_hash),
                     )
                     owner = cur.execute(
-                        f"SELECT owner_hash, model_hash FROM {_SCHEMA}.root_owner "
-                        "WHERE root_hash=%s", (root_hash,)
+                        f"SELECT owner_hash, model_hash, request_scope_hash "
+                        f"FROM {_SCHEMA}.root_owner WHERE root_hash=%s",
+                        (root_hash,),
                     ).fetchone()
-                    if owner != (owner_hash, model_hash):
-                        raise RootOwnerConflict("delegated root owner or model conflict")
+                    if owner != (owner_hash, model_hash, scope_hash):
+                        raise RootOwnerConflict(
+                            "delegated root owner, model or request scope conflict"
+                        )
 
                     # Same JTI cannot authorize a *different* attempt.
                     jti = cur.execute(
