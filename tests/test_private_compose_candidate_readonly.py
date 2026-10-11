@@ -159,3 +159,25 @@ def test_synthetic_overlay_rejects_unsafe_service_name_before_running(monkeypatc
     monkeypatch.setattr(gate.subprocess, "run", forbidden)
     result = gate.run_synthetic_overlay_check([str(filename)], service="foo:\n  privileged: true")
     assert result["decision"] == "HOLD_PRIVATE_COMPOSE"
+
+
+@pytest.mark.parametrize("top_level_mutation", [
+    {"name": "different-project"},
+    {"secrets": {"unreviewed-secret": {"external": True}}},
+    {"configs": {"unexpected-config": {"external": True}}},
+])
+def test_synthetic_override_rejects_unrelated_top_level_changes(monkeypatch, tmp_path, top_level_mutation):
+    filename = tmp_path / "operator.yml"
+    filename.write_text("services: {}\n")
+    before = {"services": {"llm-router": {"image": "old-tag", "pull_policy": "missing"}}}
+    after = json.loads(json.dumps(before))
+    after["services"]["llm-router"].update({"image": "sha256:" + "c" * 64, "pull_policy": "never"})
+    after.update(top_level_mutation)
+    snapshots = iter((before, after))
+    monkeypatch.setattr(gate.subprocess, "run", lambda *_a, **_kw: SimpleNamespace(
+        returncode=0, stdout=json.dumps(next(snapshots)).encode(),
+    ))
+    report = gate.run_synthetic_overlay_check([str(filename)], service="llm-router")
+    assert report["decision"] == "HOLD_PRIVATE_COMPOSE"
+    assert "ALL_OTHER_COMPOSE_FIELDS_UNCHANGED" in report["reason_codes"]
+    assert "PRIVATE" not in json.dumps(report)
