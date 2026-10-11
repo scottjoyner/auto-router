@@ -8,6 +8,7 @@ This preflight is necessary but insufficient for supervised deployment.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import re
 import subprocess
@@ -114,7 +115,16 @@ def run_synthetic_overlay_check(compose_files: list[str], *, service: str) -> di
         updated_other = {k: v for k, v in updated.items() if k not in {"image", "pull_policy"}}
         others_before = {k: v for k, v in before["services"].items() if k != service}
         others_after = {k: v for k, v in after["services"].items() if k != service}
+        # Compare the whole resolved document as well: changes to project name,
+        # top-level secrets/configs or extensions must not slip through narrower
+        # per-service checks. Keep all actual values private in memory.
+        original_full = deepcopy(before)
+        updated_full = deepcopy(after)
+        for obj in (original_full, updated_full):
+            obj["services"][service].pop("image", None)
+            obj["services"][service].pop("pull_policy", None)
         tests = {
+            "all_other_compose_fields_unchanged": original_full == updated_full,
             "synthetic_image_selected": updated.get("image") == dummy_id,
             "no_pull_requested": updated.get("pull_policy") == "never",
             "no_build_in_resolved_service": updated.get("build") is None,
