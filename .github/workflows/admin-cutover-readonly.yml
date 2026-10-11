@@ -1,0 +1,32 @@
+name: Admin Cutover Read-Only Contract
+
+on:
+  pull_request:
+    paths:
+      - "scripts/verify_admin_cutover_readonly.py"
+      - "tests/test_admin_cutover_readonly.py"
+      - ".github/workflows/admin-cutover-readonly.yml"
+  push:
+    paths:
+      - "scripts/verify_admin_cutover_readonly.py"
+      - "tests/test_admin_cutover_readonly.py"
+      - ".github/workflows/admin-cutover-readonly.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-client-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install portable standalone test runner
+        run: python -m pip install "pytest>=8,<10"
+      - name: Compile read-only operator probe
+        run: python -m py_compile scripts/verify_admin_cutover_readonly.py
+      - name: Test fail-closed anonymous and sanitized authenticated acceptance
+        run: python -m pytest -q --noconftest tests/test_admin_cutover_readonly.py
