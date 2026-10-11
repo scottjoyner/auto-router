@@ -236,3 +236,74 @@ This is an inter-repository software boundary experiment, **not** a
 live multi-host deployment, real human authentication, physical-device test,
 or encrypted trace-custody acceptance. The user-facing gateway route and
 any production model provider have not been exercised end-to-end.
+
+
+## Signed request provenance v2 and immutable retry scope (latest)
+
+A security review of the complete AssistX-to-router path found that the
+original v1 gateway delegation bound a subject/root/attempt/model but **not
+the prompt bytes or destination endpoint**. This is addressed in the
+new versioned `p0-user-shadow-v2` delegation:
+
+- Gateway (draft AssistX PR #298) signs `request_path` and
+  `request_sha256`, calculated over a domain-separated canonical JSON
+  request. For the experimental gateway, only
+  `/v1/chat/completions` is permitted.
+- Actual strict-live Auto-router installation now **requires v2**; v1
+  remains accepted only in deliberately legacy fixture contexts where
+  `require_body_digest=False`. Do not enable a production v1 issuer.
+- The **outer** `ExecutorInferenceAuthMiddleware` checks bounded
+  delegated request JSON and captures the original canonical digest in
+  an ASGI-only trusted scope **before** inserting authenticated service
+  metadata. The downstream verifier uses this original digest; stripping
+  middleware-added fields from a mutated prompt would be unsafe.
+- Duplicate JSON field names and over-256-KiB delegated requests now fail
+  closed at the outer executor-auth boundary, before root reservations.
+- The PostgreSQL primary **and** local disposable SQLite ledger now retain
+  a keyed `request_scope_hash` for each immutable root. A fresh signed
+  attempt under an existing owner/model/root is allowed only for the same
+  signed prompt and endpoint; changing either yields a **409**. No raw
+  prompt or plaintext digest is stored in ownership records. Existing
+  SQLite schema without that column is refused rather than silently
+  migrated/recreated.
+- A fixed SHA-256 golden-vector test appears in **both** repositories,
+  so their separate CI suites catch incompatible delimiter/canonicalization
+  changes. One cross-repo test simulates an intermediary changing the prompt
+  **after** legitimate gateway signing: the router responds **401 before
+  idempotency or handler execution**.
+
+The integrated test originally detected a real serialization issue:
+AssistX's gateway escaped the byte-domain separator differently from
+Auto-router. The fixed golden vector and cross-repository test now pass;
+this failed intermediate experiment must **not** be represented as a
+passing protocol before the correction.
+
+### Latest x1-370 evidence (2026-10-11)
+
+- Tested router code SHA:
+  `d7080d9906e17a55e270da28131a27e85d6b7be8` (before this
+  documentation-only update).
+- Ruff on edited router modules and regression modules: **PASS**.
+- Full isolated suite with disposable PostgreSQL and AssistX gateway
+  test module: **554 passed, 11 skipped, 1 deselected** in 6.07 s.
+- AssistX gateway SHA
+  `0e99c6e301f6839bcf5cb2548e3874b2558cc46d`:
+  **21 focused tests passed**, Ruff passed, and hosted isolated identity
+  workflow [passed](https://github.com/scottjoyner/auto-assist/actions/runs/38181519239).
+  General AssistX CI remains red.
+- The sole Auto-router deselected test was checked **separately**, read-only
+  and reproduced a real mismatch: configured
+  `lmstudio-x1-370` advertised
+  `qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled` but
+  the runtime's twice-checked model inventory did not serve it. That
+  **test failed**, rather than becoming an approval to autoload a model,
+  edit the registry, or waive the drift gate.
+- The protocol tests used disposable IdP signatures, a disposable
+  loopback-only PostgreSQL primary and stub completion handlers.
+  **No real human IdP login, physical inference process, client delivery,
+  encrypted trace sink, NAS custody or multi-primary fencing was proven.**
+  All previously documented STOP conditions remain binding.
+
+This signature binds the **authorized request input**, not a guarantee
+that a model executed that input. Provider process/instance attestation,
+terminal disposition and external client delivery must remain separate.
