@@ -77,6 +77,7 @@ def test_valid_request_digest_authenticates_exact_prompt_before_reservation(
         **value, "messages": [{"role": "user", "content": "altered prompt"}]
     },
     lambda value: {**value, "max_tokens": 9},
+    lambda value: {**value, "model": "auto/review"},
     lambda value: {**value, "user": "alice"},
     lambda value: {**value, "metadata": {"subject": "alice"}},
 ])
@@ -187,3 +188,36 @@ def test_distinct_signed_retry_attempt_cannot_change_prompt_on_same_root(
         assert db.execute(
             "SELECT COUNT(*) FROM inference_request_idempotency"
         ).fetchone()[0] == 2
+
+
+
+def test_duplicate_raw_json_fields_rejected_before_signature_or_owner_ledger(
+    tmp_path, monkeypatch,
+):
+    signer = Ed25519PrivateKey.generate()
+    app, observed, ledger = _app(
+        tmp_path, monkeypatch, signer, require_body_digest=True
+    )
+    token = _delegation(signer, _payload())
+    raw = (
+        b'{"model":"auto/code","model":"auto/review",'
+        b'"messages":[{"role":"user","content":"The private synthetic request"}],'
+        b'"max_tokens":8}'
+    )
+    with TestClient(app) as client:
+        result = client.post(
+            _PATH,
+            headers={
+                "Authorization": "Bearer " + _SERVICE,
+                "X-Auto-Router-User-Delegation": token,
+                "Idempotency-Key": "duplicate-json-keys",
+                "Content-Type": "application/json",
+            },
+            content=raw,
+        )
+    assert result.status_code == 401
+    assert observed == []
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM inference_request_idempotency"
+        ).fetchone()[0] == 0
