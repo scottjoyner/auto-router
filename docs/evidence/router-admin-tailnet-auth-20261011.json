@@ -1,0 +1,76 @@
+{
+  "schema": "auto-router-admin-remote-auth-witness.v1",
+  "observation_date_utc": "2026-10-11",
+  "target": "running git-router-1 via x1-370 private Tailnet interface, port 8088",
+  "current_deployment": "UNPATCHED",
+  "clients": [
+    {
+      "node": "destroyer",
+      "route": "GET /admin/providers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "destroyer",
+      "route": "GET /admin/runtime-projection",
+      "credentials_sent": false,
+      "http_status": 401,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/providers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/runtime-projection",
+      "credentials_sent": false,
+      "http_status": 401,
+      "body_read": false
+    },
+    {
+      "node": "assistx-api container",
+      "route": "GET /admin/runtime-projection",
+      "credentials_sent": true,
+      "credential_source": "existing AUTO_ROUTER_ADMIN_TOKEN environment",
+      "http_status": 200,
+      "body_read": false
+    }
+  ],
+  "separate_lan_probe": {
+    "via": "Destroyer and Lenovo to x1 LAN address",
+    "outcome": "TCP_UNREACHABLE_OR_TIMEOUT",
+    "interpretable_as_safe": false
+  },
+  "effective_router_snapshot": {
+    "via": "read-only GET /admin/providers within x1",
+    "provider_count": 1,
+    "provider_name": "assistx-x1-370-x1-lmstudio-1234",
+    "node_id": "x1-370",
+    "target_port": 1234,
+    "models_declared": [
+      "ornith-1.5-35b-a3b-apex-mtp"
+    ],
+    "signing_authority_fresh": false,
+    "actual_model_loaded": false
+  },
+  "safety": {
+    "claims_public_internet_reachability": false,
+    "claims_secret_disclosure": false,
+    "actual_inference_executed": false,
+    "admin_post_performed": false,
+    "credentials_logged": false,
+    "production_route_changed": false
+  },
+  "rollout_gate": {
+    "expected_anonymous_admin_status": 401,
+    "expected_authorized_assistx_admin_status": 200,
+    "require_production_client_inventory": true,
+    "require_deployment_rollback": true,
+    "ready_for_operator_exposure": false
+  }
+}
