@@ -4,7 +4,6 @@ import importlib.util
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import threading
@@ -47,6 +46,15 @@ class StubVon(BaseHTTPRequestHandler):
     requested = []
     truncated = False
     bad_status = False
+    service_id = "von-decision-server"
+
+    def do_GET(self):
+        content = json.dumps({"status": "ok", "service": self.service_id,
+                              "engine": "von-1.3", "version": "1.3.7"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(content)
 
     def do_POST(self):
         self.__class__.requested.append((self.path, json.loads(self.rfile.read(
@@ -67,6 +75,7 @@ class StubVon(BaseHTTPRequestHandler):
 def server():
     StubVon.requested = []
     StubVon.truncated = StubVon.bad_status = False
+    StubVon.service_id = "von-decision-server"
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), StubVon)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
@@ -157,6 +166,36 @@ class TestVonAdapter(unittest.TestCase):
             self.assertEqual(len(StubVon.requested), 1)
             self.assertEqual(StubVon.requested[0][0], "/v1/systemone")
             self.assertEqual(StubVon.requested[0][1]["model"], "von-1.3.0")
+
+    def test_service_identity_preflight_passes(self):
+        with server() as url:
+            V.verify_von_service(V.loopback_endpoint(url), timeout=2)
+            self.assertEqual(StubVon.requested, [])
+
+    def test_unrelated_listener_refused_before_post(self):
+        with server() as url, tempfile.TemporaryDirectory(dir="/tmp") as d:
+            StubVon.service_id = "assistx-api"
+            p = Path(d) / "cases.jsonl"
+            out = Path(d) / "observations.jsonl"
+            write_case(p, sample())
+            with patch.object(sys, "argv", ["prog", str(p), "--execute",
+                                            "--ack-sanitized", "--ack-preloaded",
+                                            "--url", url, "--out", str(out)]):
+                self.assertEqual(V.main(), 2)
+            self.assertFalse(out.exists())
+            self.assertEqual(StubVon.requested, [])
+
+    def test_execute_requires_explicit_url(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as d:
+            p = Path(d) / "cases.jsonl"
+            out = Path(d) / "observations.jsonl"
+            write_case(p, sample())
+            with patch.object(V, "verify_von_service", side_effect=AssertionError("should not call")), \
+                    patch.object(sys, "argv", ["prog", str(p), "--execute",
+                                              "--ack-sanitized", "--ack-preloaded",
+                                              "--out", str(out)]):
+                self.assertEqual(V.main(), 2)
+            self.assertFalse(out.exists())
 
     def test_http_truncation_not_counted_as_valid(self):
         with server() as url:
