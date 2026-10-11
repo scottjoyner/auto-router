@@ -9,6 +9,9 @@ on:
       - "src/auto_router/main.py"
       - "tests/test_legacy_admin_emergency_auth.py"
       - "tests/test_private_compose_candidate_readonly.py"
+      - "tests/test_admin_ui_link_safety.py"
+      - "src/auto_router/ui_pages.py"
+      - "src/auto_router/templates/**"
       - "scripts/verify_private_compose_candidate_readonly.py"
       - ".github/workflows/emergency-legacy-admin-auth.yml"
   push:
@@ -37,4 +40,4 @@ jobs:
       - name: Compile minimal fix and negative tests
         run: python -m py_compile src/auto_router/main.py tests/test_legacy_admin_emergency_auth.py scripts/verify_private_compose_candidate_readonly.py tests/test_private_compose_candidate_readonly.py
       - name: All legacy GET/POST denial and no-side-effect regressions
-        run: python -m pytest -q --noconftest tests/test_legacy_admin_emergency_auth.py tests/test_private_compose_candidate_readonly.py
+        run: python -m pytest -q --noconftest tests/test_legacy_admin_emergency_auth.py tests/test_private_compose_candidate_readonly.py tests/test_admin_ui_link_safety.py
