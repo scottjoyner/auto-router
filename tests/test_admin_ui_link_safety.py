@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -62,3 +63,84 @@ def test_privileged_path_visibility_grants_no_authority():
     html = _render_section_loop("fragments/dashboard_summary.html")
     for forbidden in ("Bearer ", "?token=", "?api_key=", "?admin_token=", 'href="/admin/'):
         assert forbidden not in html
+
+
+def test_no_browser_htmx_actions_target_any_admin_route():
+    """A browser cannot safely attach the shared router administrator header.
+
+    Keep operator HTTP actions in a separately authenticated service/client,
+    not in HTMX, inline JavaScript, query parameters or unreviewed browser JS.
+    """
+    admin_htmx = re.compile(
+        r'\bhx-(?:get|post|put|patch|delete|trigger)\s*=\s*["\']\s*/admin/',
+        flags=re.I,
+    )
+    assert admin_htmx.search('hx-post="/admin/circuits/reset"')
+    for template in TPL_ROOT.rglob("*.html"):
+        source = template.read_text(encoding="utf-8")
+        assert not admin_htmx.search(source), template
+
+
+def test_previously_live_admin_actions_remain_visible_as_nonclickable_references():
+    expected = {
+        "dashboard.html": [
+            "/admin/providers/probe",
+            "/admin/services/scan",
+            "/admin/agent-clis/discover",
+            "/admin/outbox/dispatch?dry_run=true&limit=10",
+        ],
+        "fragments/ops_summary.html": [
+            "/admin/providers/probe",
+            "/admin/agent-clis/discover",
+            "/admin/outbox/dispatch?dry_run=true&limit=10",
+        ],
+    }
+    for template, paths in expected.items():
+        source = (TPL_ROOT / template).read_text(encoding="utf-8")
+        for path in paths:
+            assert f'data-admin-api-path="{path}"' in source
+        assert "API auth required" in source
+        assert 'X-Admin-Token' in source
+        assert not re.search(r'<button\b[^>]*hx-(?:post|get)="/admin/', source, flags=re.I | re.S)
+
+
+def test_public_dashboard_templates_redact_raw_runtime_service_destinations():
+    """Keep private URL values out of public HTML, even if a future URL adds
+    embedded user-info or secret-looking query/path components.
+    """
+    secret_url = "http://private-host.example:8088/api?SYNTHETIC_BROWSER_SECRET=never"
+    context = {
+        "assistx_tasks_url": secret_url,
+        "assistx_event_sink_url": secret_url,
+        "assistx_tasks_configured": True,
+        "assistx_event_sink_configured": True,
+        "gateway": SimpleNamespace(base_url=secret_url, openai_base_url=secret_url),
+    }
+    target_files = (
+        "fragments/dashboard_summary.html",
+        "fragments/ops_summary.html",
+    )
+    counts = 0
+    for template in target_files:
+        source = (TPL_ROOT / template).read_text(encoding="utf-8")
+        for expression in re.findall(r"\{\{([\s\S]*?)\}\}", source):
+            if "destination hidden" not in expression and "address hidden" not in expression:
+                continue
+            counts += 1
+            output = ENV.from_string("{{" + expression + "}}").render(**context)
+            assert "SYNTHETIC_BROWSER_SECRET" not in output, template
+            assert "private-host.example" not in output, template
+            assert "configured" in output, (template, output)
+    assert counts == 6, "Expected exactly six redacted public runtime destination displays"
+
+
+def test_no_direct_jinja_output_of_sensitive_runtime_origin_values():
+    sensitive_output = re.compile(
+        r"\{\{\s*(?:assistx_tasks_url|assistx_event_sink_url"
+        r"|gateway\.(?:base_url|openai_base_url))\b",
+    )
+    assert sensitive_output.search("{{ assistx_tasks_url }}")
+    for template in TPL_ROOT.rglob("*.html"):
+        source = template.read_text(encoding="utf-8")
+        assert not sensitive_output.search(source), template
+

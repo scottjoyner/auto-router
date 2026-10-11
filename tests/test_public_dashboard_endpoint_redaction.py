@@ -31,7 +31,7 @@ def test_public_template_never_imports_endpoint_variable(filename):
     )
     assert set(URL_NAMES).isdisjoint(variables)
     assert all(name not in content for name in URL_NAMES)
-    assert "Configured (endpoint hidden)" in content
+    assert "configured · destination hidden" in content
 
 
 @pytest.mark.parametrize("url", URL_MARKERS)
@@ -41,7 +41,7 @@ def test_public_status_placeholder_ignores_synthetic_secret_url(url, filename):
     # Full dashboard data is not needed and no real origin/secret is supplied.
     content = (ROOT / filename).read_text()
     expressions = re.findall(
-        r"\{\{\s*'Configured \(endpoint hidden\)'.*?\}\}", content
+        r"\{\{\s*'configured · destination hidden'.*?\}\}", content
     )
     assert len(expressions) == 2
     env = jinja2.Environment(autoescape=True)
@@ -54,7 +54,7 @@ def test_public_status_placeholder_ignores_synthetic_secret_url(url, filename):
     for expression in expressions:
         assert not any(name in expression for name in URL_NAMES)
         rendered = env.from_string(expression).render(**values)
-        assert rendered == "Configured (endpoint hidden)"
+        assert rendered == "configured · destination hidden"
         assert url not in rendered
 
 

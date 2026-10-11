@@ -152,6 +152,32 @@ own completed exact-head CI results.** The known unpatched router remains
 exposed to its Tailnet peers. Do not execute a router cutover from this
 revised acceptance script or waive P0 AssistX credential custody #156.
 
+## Browser operator action compatibility (security-preserving)
+
+A static review found **seven** HTMX `hx-post` controls in the operator
+dashboard and ops summary that would try to call protected admin actions
+without the `X-Admin-Token` header. Those include provider probing,
+service scanning, agent-CLI discovery and outbox dry-run dispatch. They
+were distinct from the ordinary `/admin/` browser navigation links
+already marked as not directly accessible.
+
+The draft templates now show those seven actions as **nonclickable,
+labeled API references**, preserving their descriptive context without
+initiating an unauthorized request or putting any shared admin token
+in browser JavaScript, a header set by untrusted JS, URL query strings,
+HTMX, or unreviewed telemetry. A repository-wide HTML regression test
+rejects literal privileged `hx-get`/`hx-post` and other HTMX admin
+actions and retains the seven known controls as inert references.
+
+**Operator tradeoff:** browser-triggered provider discovery, CLI scan,
+service scan, and outbox dry-run buttons are unavailable after this change.
+The router's separately authenticated API clients can still perform
+approved operations. A replacement interactive operator UI would require
+a distinct security-reviewed server-side session/authentication design.
+This UI change is not a router authorization bypass, does not resolve
+shared-token transport or credential custody, and does not authorize
+deploying the candidate.
+
 ## Six-route remote denial parity
 
 Draft remote verification now requires anonymous HTTP 401 on the **same six
@@ -386,3 +412,20 @@ candidate source/image provenance, authenticated client-first acceptance,
 and *postcutover* independent six-route anonymous-401 receipts from
 x1-370, Destroyer and Lenovo. All production changes remain forbidden
 by this runbook without an operator-approved cutover.
+
+### Public dashboard configuration URL redaction
+
+The existing public dashboard and ops-summary fragments previously displayed
+raw configured **AssistX task/event-sink URLs**, plus gateway base/OpenAI
+URLs. Even without URL userinfo or query parameters today, future paths
+could contain credentials and the raw private origin exposes internal
+topology. The draft presentation now shows only **configured / not
+configured** and hides destination values. The back-end authorized
+administrative APIs have **not** changed shape or been given new
+permissions. Synthetic Jinja regression tests inject URL values with a
+credential-looking path/query marker and fail if that marker or private
+hostname appears in any of the six affected rendered expressions.
+This is **public HTML output hygiene**, not transport encryption or an
+authorization fix for the dashboard itself. Separately audit other public
+routes before claiming complete information-disclosure coverage.
+
