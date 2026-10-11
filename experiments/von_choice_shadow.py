@@ -186,7 +186,7 @@ def verify_von_service(endpoint: str, *, timeout: float) -> None:
                     data.get("service") != "von-decision-server" or
                     data.get("engine") != "von-1.3"):
                 raise ValueError("loopback listener is not a verified Von 1.3 service")
-    except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError) as err:
+    except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError):
         raise ValueError("Von identity preflight failed; no inference request sent") from None
 
 
