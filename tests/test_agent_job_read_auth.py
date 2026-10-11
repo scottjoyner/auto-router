@@ -36,7 +36,7 @@ class FakeJobs:
 @pytest.fixture()
 def restricted(monkeypatch):
     fake = FakeJobs()
-    monkeypatch.setattr(state, "agent_jobs", fake)
+    monkeypatch.setattr(state, "agent_jobs", fake, raising=False)
     monkeypatch.setattr(security, "get_settings", lambda: SimpleNamespace(admin_token=TOKEN))
     # No lifespan: synthetic handler/router check only.
     with TestClient(app, raise_server_exceptions=False) as client:
