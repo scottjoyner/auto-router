@@ -6,9 +6,9 @@
             <p class="mt-1 text-sm text-router-muted">Live-only operator controls for model inventory, provenance dispatch, agent CLI discovery, and AssistX backlog candidate intake.</p>
         </div>
         <div class="flex flex-wrap gap-2 text-xs">
-            <a href="/admin/live-models" class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40">models JSON</a>
-            <a href="/admin/outbox" class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40">outbox JSON</a>
-            <a href="/admin/agent-clis" class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40">CLI JSON</a>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40" data-admin-api-path="/admin/live-models" title="Admin API only: X-Admin-Token required; do not put credentials in URLs">models JSON <span class="text-[10px] text-router-muted">· API · requires admin header</span></span>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40" data-admin-api-path="/admin/outbox" title="Admin API only: X-Admin-Token required; do not put credentials in URLs">outbox JSON <span class="text-[10px] text-router-muted">· API · requires admin header</span></span>
+            <span class="rounded-full border border-router-line bg-router-panel2 px-3 py-1 font-bold text-router-text hover:border-cyan-300/40" data-admin-api-path="/admin/agent-clis" title="Admin API only: X-Admin-Token required; do not put credentials in URLs">CLI JSON <span class="text-[10px] text-router-muted">· API · requires admin header</span></span>
         </div>
     </div>
 
@@ -34,7 +34,11 @@
         <div class="mt-3 flex flex-wrap gap-2 text-xs">
             {% for section in page_sections %}
                 {% for link in section.links[:2] %}
+                {% if link.requires_admin_header %}
+                <span data-admin-api-path="{{ link.href }}" title="Admin API: X-Admin-Token required" class="rounded-full border border-router-line bg-black/20 px-3 py-1.5 font-bold text-router-muted">{{ link.label }} · API auth required</span>
+                {% else %}
                 <a href="{{ link.href }}" class="rounded-full border border-router-line bg-black/20 px-3 py-1.5 font-bold text-router-text hover:border-cyan-300/40">{{ link.label }}</a>
+                {% endif %}
                 {% endfor %}
             {% endfor %}
         </div>
@@ -93,7 +97,7 @@
         <div class="rounded-3xl border {% if assistx_tasks_configured %}border-emerald-300/20 bg-emerald-300/10{% else %}border-rose-300/20 bg-rose-300/10{% endif %} p-5">
             <div class="text-xs font-semibold uppercase tracking-wider {% if assistx_tasks_configured %}text-emerald-200{% else %}text-rose-200{% endif %}">AssistX backlog</div>
             <div class="mt-2 text-3xl font-black text-white">{{ 'on' if assistx_tasks_configured else 'off' }}</div>
-            <div class="mt-1 truncate text-xs {% if assistx_tasks_configured %}text-emerald-100/70{% else %}text-rose-100/70{% endif %}">{{ assistx_tasks_url or 'task intake not configured' }}</div>
+            <div class="mt-1 truncate text-xs {% if assistx_tasks_configured %}text-emerald-100/70{% else %}text-rose-100/70{% endif %}">{{ 'configured · destination hidden' if assistx_tasks_configured else 'task intake not configured' }}</div>
         </div>
     </div>
 
@@ -351,12 +355,7 @@
                     <h3 class="font-black text-white">Provider tap test</h3>
                     <p class="text-xs text-router-muted">Latest durable `/models` snapshots and live tap status</p>
                 </div>
-                <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100 hover:bg-cyan-300/20"
-                        hx-post="/admin/providers/probe"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    probe all providers
-                </button>
+                <span class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs font-bold text-cyan-100 hover:bg-cyan-300/20" data-admin-api-path="/admin/providers/probe" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">probe all providers <span class="text-[10px] text-router-muted">· API auth required</span></span>
             </div>
             <div class="space-y-2">
                 {% for snapshot in live_models[:6] %}
@@ -380,12 +379,7 @@
                     <h3 class="font-black text-white">Agent CLI discovery</h3>
                     <p class="text-xs text-router-muted">Codex, Gemini CLI, and OpenCode on this node</p>
                 </div>
-                <button class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-100 hover:bg-emerald-300/20"
-                        hx-post="/admin/agent-clis/discover"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    discover
-                </button>
+                <span class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-100 hover:bg-emerald-300/20" data-admin-api-path="/admin/agent-clis/discover" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">discover <span class="text-[10px] text-router-muted">· API auth required</span></span>
             </div>
             <div class="space-y-2">
                 {% for cli in cli_discovery %}
@@ -408,19 +402,14 @@
                     <h3 class="font-black text-white">Outbox and AssistX</h3>
                     <p class="text-xs text-router-muted">Pending graph/provenance events</p>
                 </div>
-                <button class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-bold text-amber-100 hover:bg-amber-300/20"
-                        hx-post="/admin/outbox/dispatch?dry_run=true&limit=10"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    dispatch dry-run
-                </button>
+                <span class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-bold text-amber-100 hover:bg-amber-300/20" data-admin-api-path="/admin/outbox/dispatch?dry_run=true&limit=10" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">dispatch dry-run <span class="text-[10px] text-router-muted">· API auth required</span></span>
             </div>
             <div class="space-y-2 text-sm">
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.pending or 0 }}</span> pending events</div>
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.retry or 0 }}</span> retry events</div>
                 <div class="rounded-2xl border border-router-line bg-black/20 p-3 text-router-muted"><span class="font-bold text-white">{{ outbox_summary.delivered or 0 }}</span> delivered events</div>
                 <div class="rounded-2xl border {% if assistx_event_sink_configured %}border-emerald-300/20 bg-emerald-300/10 text-emerald-100/80{% else %}border-rose-300/20 bg-rose-300/10 text-rose-100/80{% endif %} p-3 text-xs truncate">
-                    {{ assistx_event_sink_url or 'AssistX event sink not configured' }}
+                    {{ 'configured · destination hidden' if assistx_event_sink_configured else 'AssistX event sink not configured' }}
                 </div>
             </div>
         </div>

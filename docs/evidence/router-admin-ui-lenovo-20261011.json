@@ -1,0 +1,19 @@
+{
+  "captured_at_utc": "2026-10-11T06:47:30.391196+00:00",
+  "kind": "ROUTER_ADMIN_BROWSER_UI_PORTABLE_ACCEPTANCE",
+  "live_credential_used": false,
+  "live_router_request_sent": false,
+  "model_backend_request_sent": false,
+  "no_browser_auth_bypass_implemented": true,
+  "python_version": "3.12.3",
+  "schema_version": 1,
+  "service_restarted": false,
+  "source_sha256": {
+    "src/auto_router/ui_pages.py": "e7cf0d4a57e63c7337536d6cc18491a9c96099424a3cc892a8493c4d771434be",
+    "tests/test_admin_ui_link_safety.py": "329b280adfb69d795dd6655838789aef81fa18c5f3a22d6ff59538e6e48a862d"
+  },
+  "synthetic_tests_passed": 5,
+  "templates_compiled": 7,
+  "templates_sha256": "df5d66455c7396f1df59c619dfd67fb262dd9cc159fadc6e394b65e3362f2a78",
+  "worker_node": "lenovo"
+}
