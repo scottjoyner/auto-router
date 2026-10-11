@@ -1,0 +1,83 @@
+{
+  "schema": "fleet-cost-shadow-v1",
+  "kind": "fictional-only",
+  "snapshot_id": "fictional1",
+  "as_of_ms": 1800000000000,
+  "authority_observed_ms": 1799999995000,
+  "authority_expires_ms": 1800000020000,
+  "request": {
+    "request_id": "request1",
+    "owner_id": "owner1",
+    "model_id": "model1",
+    "task_class": "chat",
+    "p90_output_tokens": 1000,
+    "objective": "latency_ms",
+    "max_latency_ms": 20000,
+    "min_quality": 0.9,
+    "required_offline_s": 0
+  },
+  "runtimes": [
+    {
+      "runtime_id": "runtime_a",
+      "node_id": "node_a",
+      "owner_id": "owner1",
+      "request_id": "request1",
+      "model_id": "model1",
+      "capabilities": [
+        "chat"
+      ],
+      "health": "HEALTHY",
+      "loaded_state": "LOADED",
+      "free_slots": 1,
+      "lease_not_before_ms": 1799999980000,
+      "lease_until_ms": 1800000010000,
+      "observed_at_ms": 1799999995000,
+      "process_id": "proc_a",
+      "reservation_id": "res_a"
+    },
+    {
+      "runtime_id": "runtime_b",
+      "node_id": "node_b",
+      "owner_id": "owner1",
+      "request_id": "request1",
+      "model_id": "model1",
+      "capabilities": [
+        "chat"
+      ],
+      "health": "HEALTHY",
+      "loaded_state": "LOADED",
+      "free_slots": 1,
+      "lease_not_before_ms": 1799999980000,
+      "lease_until_ms": 1800000010000,
+      "observed_at_ms": 1799999995000,
+      "process_id": "proc_b",
+      "reservation_id": "res_b"
+    }
+  ],
+  "telemetry": [
+    {
+      "runtime_id": "runtime_a",
+      "sampled_at_ms": 1799999970000,
+      "sample_count": 12,
+      "ttft_p95_ms": 100,
+      "token_rate_p10": 100,
+      "watts_p95": 150,
+      "quality_lower_bound": 0.96,
+      "battery_remaining_wh": 100,
+      "dependency_watts": 100,
+      "battery_sampled_at_ms": 1799999990000
+    },
+    {
+      "runtime_id": "runtime_b",
+      "sampled_at_ms": 1799999970000,
+      "sample_count": 18,
+      "ttft_p95_ms": 250,
+      "token_rate_p10": 80,
+      "watts_p95": 60,
+      "quality_lower_bound": 0.93,
+      "battery_remaining_wh": 85,
+      "dependency_watts": 80,
+      "battery_sampled_at_ms": 1799999990000
+    }
+  ]
+}
