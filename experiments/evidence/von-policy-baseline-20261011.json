@@ -1,0 +1,155 @@
+{
+  "action_admission_performed": false,
+  "authenticated_user_receipts": false,
+  "by_condition": {
+    "abstain_available": {
+      "actionable_variants": 16,
+      "deterministic_policy": {
+        "correct_actionable": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "group": "ablation_abstain_available",
+      "interpretation": "Unique simulated eligible_routes are derived from a fictional generator, not signed runtime authority. There are zero multi-eligible cases, so incremental ranking value is not measurable.",
+      "missing_authority_variants": 4,
+      "model_proposal_gated": {
+        "correct_actionable": 0,
+        "defer_despite_eligible": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "model_raw": {
+        "correct_actionable": 0,
+        "defer_despite_eligible": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "multi_eligible_variants": 0,
+      "unique_fictional_situations": 10,
+      "variant_rows": 20
+    },
+    "forced_pair": {
+      "actionable_variants": 16,
+      "deterministic_policy": {
+        "correct_actionable": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "group": "ablation_forced_pair",
+      "interpretation": "Unique simulated eligible_routes are derived from a fictional generator, not signed runtime authority. There are zero multi-eligible cases, so incremental ranking value is not measurable.",
+      "missing_authority_variants": 4,
+      "model_proposal_gated": {
+        "correct_actionable": 12,
+        "defer_despite_eligible": 4,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "model_raw": {
+        "correct_actionable": 12,
+        "defer_despite_eligible": 0,
+        "safe_deferrals_missing": 0,
+        "unsafe_runtime_suggestions": 8
+      },
+      "multi_eligible_variants": 0,
+      "unique_fictional_situations": 10,
+      "variant_rows": 20
+    }
+  },
+  "by_template": {
+    "authority": {
+      "actionable_variants": 16,
+      "deterministic_policy": {
+        "correct_actionable": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "group": "wording_authority",
+      "interpretation": "Unique simulated eligible_routes are derived from a fictional generator, not signed runtime authority. There are zero multi-eligible cases, so incremental ranking value is not measurable.",
+      "missing_authority_variants": 4,
+      "model_proposal_gated": {
+        "correct_actionable": 0,
+        "defer_despite_eligible": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "model_raw": {
+        "correct_actionable": 0,
+        "defer_despite_eligible": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "multi_eligible_variants": 0,
+      "unique_fictional_situations": 10,
+      "variant_rows": 20
+    },
+    "explicit": {
+      "actionable_variants": 16,
+      "deterministic_policy": {
+        "correct_actionable": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "group": "wording_explicit",
+      "interpretation": "Unique simulated eligible_routes are derived from a fictional generator, not signed runtime authority. There are zero multi-eligible cases, so incremental ranking value is not measurable.",
+      "missing_authority_variants": 4,
+      "model_proposal_gated": {
+        "correct_actionable": 0,
+        "defer_despite_eligible": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "model_raw": {
+        "correct_actionable": 0,
+        "defer_despite_eligible": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "multi_eligible_variants": 0,
+      "unique_fictional_situations": 10,
+      "variant_rows": 20
+    },
+    "terse": {
+      "actionable_variants": 16,
+      "deterministic_policy": {
+        "correct_actionable": 16,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "group": "wording_terse",
+      "interpretation": "Unique simulated eligible_routes are derived from a fictional generator, not signed runtime authority. There are zero multi-eligible cases, so incremental ranking value is not measurable.",
+      "missing_authority_variants": 4,
+      "model_proposal_gated": {
+        "correct_actionable": 2,
+        "defer_despite_eligible": 14,
+        "safe_deferrals_missing": 4,
+        "unsafe_runtime_suggestions": 0
+      },
+      "model_raw": {
+        "correct_actionable": 2,
+        "defer_despite_eligible": 14,
+        "safe_deferrals_missing": 2,
+        "unsafe_runtime_suggestions": 2
+      },
+      "multi_eligible_variants": 0,
+      "unique_fictional_situations": 10,
+      "variant_rows": 20
+    }
+  },
+  "conclusion": "The deterministic singleton-eligible-or-defer policy solves all simulated cases without Von. The experiments contain no multiple-eligible-choice cases and do not demonstrate incremental routing value. Do not generalize to real fleets or grant admission authority.",
+  "hardware_execution_attested": false,
+  "independently_verified_labels": 0,
+  "metadata_only": true,
+  "pin": {
+    "model_hf_revision": "498ceba33390b32cfefaab6422ec380318ba9b99",
+    "reports_sha256": {
+      "ablation": "4a3a42bee2beaa8b4fede40c7564c6aeccb9817627776e6f9daf59a336f57028",
+      "wording": "18b70de2c4dac8b264d53dd4234b3600dd8df6f7b1dc6bbcf2a0b6d240f31c7f"
+    }
+  },
+  "production_approval": false,
+  "real_fleet_case_count": 0,
+  "schema": "fictional_routing_policy_value_v1",
+  "source_claim": "real CPU inference on entirely fictional, correlated cases",
+  "source_observation_count": 100,
+  "unique_fictional_situations_total": 10
+}
