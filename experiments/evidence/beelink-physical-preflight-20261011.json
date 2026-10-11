@@ -1,0 +1,46 @@
+{
+  "schema": "beelink-physical-canary-summary-v1",
+  "evidence_kind": "unsigned_operator_observed_physical_preflight",
+  "pinned_repo_commit": "8aba5d053c3575bc6229130215f34076b3fe9207",
+  "physical_observed_at_utc": "2026-10-11T17:23:33Z",
+  "canary_checks_completed_by_utc": "2026-10-11T17:29:21Z",
+  "canary_timestamps_exact": false,
+  "model_id": "liquid/lfm2.5-1.2b",
+  "model_sha256": "c40c8a9239dbc2d8874c5508110b9b1f3d325376eecffdba7bce2dcb49a0207c",
+  "model_bytes": 1246255456,
+  "matching_process_count": 1,
+  "matching_pid": 4783,
+  "unrelated_server_processes": 1,
+  "process_context": 8192,
+  "process_parallel_config": 4,
+  "approved_capacity_from_expired_approval_only": 1,
+  "inventory_visible_count": 11,
+  "inventory_loaded_count": 1,
+  "inventory_matching_expected_count": 1,
+  "direct_canaries": [
+    {
+      "transport": "lan",
+      "http": 200,
+      "exact_expected_marker": true,
+      "max_tokens": 24,
+      "observed_elapsed_ms": 1268
+    },
+    {
+      "transport": "tailscale",
+      "http": 200,
+      "exact_expected_marker": true,
+      "max_tokens": 24,
+      "observed_elapsed_ms": 284
+    }
+  ],
+  "producer": "Fleet Commander authorized read-only direct-host/limited-completion observations",
+  "endpoint_urls_included": false,
+  "secrets_or_raw_prompts_included": false,
+  "independent_host_signature": false,
+  "trusted_owner_receipt": false,
+  "current_canonical_approval": false,
+  "can_auto_renew": false,
+  "can_admit": false,
+  "can_dispatch": false,
+  "must_obtain_operator_reapproval": true
+}
