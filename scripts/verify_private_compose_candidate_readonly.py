@@ -73,18 +73,81 @@ def run_private_preflight(compose_files: list[str], *, service: str, expected_im
     return assess_merged_service(data, service=service, expected_image_id=expected_image_id)
 
 
+
+def run_synthetic_overlay_check(compose_files: list[str], *, service: str) -> dict[str, object]:
+    """Compare private Compose before/after an in-memory, never-deployed override."""
+    if (not compose_files or len(compose_files) > 12
+            or any(not Path(x).is_file() for x in compose_files)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", service)):
+        return _hold("INVALID_INPUT_OR_COMPOSE_FILE")
+
+    base = ["docker", "compose"]
+    for filename in compose_files:
+        base.extend(["-f", filename])
+    dummy_id = "sha256:" + "c" * 64
+    # The synthetic ID is never loaded or made a candidate for deployment.
+    payload = (
+        "services:\n  " + service + ":\n    image: " + dummy_id
+        + "\n    pull_policy: never\n"
+    ).encode()
+    try:
+        original = subprocess.run(
+            base + ["config", "--no-env-resolution", "--format", "json"],
+            capture_output=True, timeout=25, check=False,
+        )
+        candidate = subprocess.run(
+            base + ["-f", "-", "config", "--no-env-resolution", "--format", "json"],
+            input=payload, capture_output=True, timeout=25, check=False,
+        )
+        if (original.returncode or candidate.returncode
+                or len(original.stdout) > _MAX_CONFIG_BYTES
+                or len(candidate.stdout) > _MAX_CONFIG_BYTES):
+            return _hold("PRIVATE_COMPOSE_CONFIG_UNAVAILABLE")
+        before, after = json.loads(original.stdout), json.loads(candidate.stdout)
+        baseline = before["services"][service]
+        updated = after["services"][service]
+        if not isinstance(baseline, dict) or not isinstance(updated, dict):
+            return _hold("PRIVATE_COMPOSE_SCHEMA_INVALID")
+        # Private interpolation values remain in memory. Only boolean checks
+        # appear in the report. Ignore precisely two intended override fields.
+        original_other = {k: v for k, v in baseline.items() if k not in {"image", "pull_policy"}}
+        updated_other = {k: v for k, v in updated.items() if k not in {"image", "pull_policy"}}
+        others_before = {k: v for k, v in before["services"].items() if k != service}
+        others_after = {k: v for k, v in after["services"].items() if k != service}
+        tests = {
+            "synthetic_image_selected": updated.get("image") == dummy_id,
+            "no_pull_requested": updated.get("pull_policy") == "never",
+            "no_build_in_resolved_service": updated.get("build") is None,
+            "router_other_fields_unchanged": original_other == updated_other,
+            "other_services_unchanged": others_before == others_after,
+            "network_config_unchanged": before.get("networks") == after.get("networks"),
+            "volume_config_unchanged": before.get("volumes") == after.get("volumes"),
+        }
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
+        return _hold("PRIVATE_COMPOSE_CONFIG_UNAVAILABLE")
+    report = _hold("SYNTHETIC_OVERLAY_INVARIANT_FAILED")
+    report["decision"] = "PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY" if all(tests.values()) else "HOLD_PRIVATE_COMPOSE"
+    report["reason_codes"] = [] if all(tests.values()) else [key.upper() for key, ok in tests.items() if not ok]
+    report["checks"] = tests
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compose-file", action="append", required=True,
                         help="Actual operator Compose files in exact deployment order")
     parser.add_argument("--service", default="llm-router")
-    parser.add_argument("--expected-image-id", required=True)
+    parser.add_argument("--expected-image-id")
+    parser.add_argument("--synthetic-overlay", action="store_true",
+                        help="Check in-memory image override against the real Compose stack")
     args = parser.parse_args()
-    report = run_private_preflight(
-        args.compose_file, service=args.service, expected_image_id=args.expected_image_id
-    )
+    report = (run_synthetic_overlay_check(args.compose_file, service=args.service)
+              if args.synthetic_overlay else
+              run_private_preflight(args.compose_file, service=args.service,
+                                   expected_image_id=args.expected_image_id or ""))
     print(json.dumps(report, sort_keys=True))
-    return 0 if report["decision"] == "PASS_PRIVATE_COMPOSE_STRUCTURE_ONLY" else 1
+    return 0 if report["decision"] in ("PASS_PRIVATE_COMPOSE_STRUCTURE_ONLY",
+                                        "PASS_SYNTHETIC_OVERLAY_STRUCTURE_ONLY") else 1
 
 
 if __name__ == "__main__":
