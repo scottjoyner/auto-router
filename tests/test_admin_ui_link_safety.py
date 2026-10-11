@@ -62,3 +62,40 @@ def test_privileged_path_visibility_grants_no_authority():
     html = _render_section_loop("fragments/dashboard_summary.html")
     for forbidden in ("Bearer ", "?token=", "?api_key=", "?admin_token=", 'href="/admin/'):
         assert forbidden not in html
+
+
+def test_no_browser_htmx_actions_target_any_admin_route():
+    """A browser cannot safely attach the shared router administrator header.
+
+    Keep operator HTTP actions in a separately authenticated service/client,
+    not in HTMX, inline JavaScript, query parameters or unreviewed browser JS.
+    """
+    for template in TPL_ROOT.rglob("*.html"):
+        source = template.read_text(encoding="utf-8")
+        assert not re.search(
+            r'\\bhx-(?:get|post|put|patch|delete|trigger)\\s*=\\s*["\\\']\\s*/admin/',
+            source, flags=re.I,
+        ), template
+
+
+def test_previously_live_admin_actions_remain_visible_as_nonclickable_references():
+    expected = {
+        "dashboard.html": [
+            "/admin/providers/probe",
+            "/admin/services/scan",
+            "/admin/agent-clis/discover",
+            "/admin/outbox/dispatch?dry_run=true&limit=10",
+        ],
+        "fragments/ops_summary.html": [
+            "/admin/providers/probe",
+            "/admin/agent-clis/discover",
+            "/admin/outbox/dispatch?dry_run=true&limit=10",
+        ],
+    }
+    for template, paths in expected.items():
+        source = (TPL_ROOT / template).read_text(encoding="utf-8")
+        for path in paths:
+            assert f'data-admin-api-path="{path}"' in source
+        assert "API auth required" in source
+        assert 'X-Admin-Token' in source
+        assert not re.search(r'<button\\b[^>]*hx-(?:post|get)="/admin/', source, flags=re.I | re.S)
