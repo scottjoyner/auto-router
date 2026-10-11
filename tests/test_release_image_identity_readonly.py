@@ -71,6 +71,50 @@ def test_immutable_digest_syntax_does_not_establish_candidate_mapping():
     assert "COMPOSE_DIGEST_DOES_NOT_RESOLVE_TO_CANDIDATE" in report["reason_codes"]
 
 
+@pytest.mark.parametrize("resolved_compose_id, expected_exit", [(C, 0), (R, 1), ("", 1)])
+def test_cli_inspects_selected_compose_digest_not_just_candidate_id(
+    monkeypatch, tmp_path, capsys, resolved_compose_id, expected_exit
+):
+    import json
+    import sys
+
+    ref = "git-router@sha256:" + "d" * 64
+    manifest = tmp_path / "compose.yml"
+    manifest.write_text("services:\\n  llm-router:\\n    image: " + ref + "\\n", encoding="utf-8")
+    requested = []
+
+    def fake_docker_field(args):
+        requested.append(tuple(args))
+        if args[:2] == ["inspect", "--type"]:
+            return R
+        if args[-1] == ref:
+            return resolved_compose_id
+        if args[-1] == R:
+            return R
+        if args[-1] == C:
+            if "org.opencontainers.image.revision" in args[3]:
+                return S
+            return C
+        raise AssertionError("unexpected Docker metadata lookup")
+
+    monkeypatch.setattr(app, "docker_field", fake_docker_field)
+    monkeypatch.setattr(sys, "argv", [
+        "verify_release_image_identity_readonly.py",
+        "--compose", str(manifest), "--candidate-image-id", C,
+        "--rollback-image-id", R, "--reviewed-source-sha", S,
+    ])
+    assert app.main() == expected_exit
+    report = json.loads(capsys.readouterr().out)
+    assert any(args[-1] == ref for args in requested)
+    assert all(args[0] in ("image", "inspect") for args in requested)
+    if expected_exit:
+        assert "COMPOSE_DIGEST_DOES_NOT_RESOLVE_TO_CANDIDATE" in report["reason_codes"]
+    else:
+        assert report["decision"] == "PASS_IDENTITY_PREFLIGHT_ONLY"
+    assert report["deployment_authorized"] is False
+    assert ref not in json.dumps(report)
+
+
 def test_missing_or_buildable_service_never_certifies_image():
     assert "SERVICE_NOT_PRESENT" in inspect({"services": {}})["reason_codes"]
     assert "COMPOSE_HAS_BUILD_STEP" in inspect(
