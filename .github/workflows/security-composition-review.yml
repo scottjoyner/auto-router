@@ -52,6 +52,7 @@ jobs:
           python -m pytest -q \
             tests/test_agent_job_read_auth.py \
             tests/test_public_dashboard_endpoint_redaction.py \
+            tests/test_admin_ui_link_safety.py \
             tests/test_effective_provider_security.py \
             tests/test_ops_admin_auth_cutover.py \
             tests/test_admin_cutover_readonly.py \
