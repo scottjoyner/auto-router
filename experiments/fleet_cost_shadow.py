@@ -107,9 +107,10 @@ def validate(bundle: object) -> dict:
         if a["runtime_id"] in runtime_ids:
             raise ValueError("duplicated or contradictory runtime authority")
         runtime_ids.add(a["runtime_id"])
-        if a["process_id"] in process_ids or a["reservation_id"] in reservation_ids:
+        physical_process = (a["node_id"], a["process_id"])
+        if physical_process in process_ids or a["reservation_id"] in reservation_ids:
             raise ValueError("duplicated physical process or reservation identity")
-        process_ids.add(a["process_id"])
+        process_ids.add(physical_process)
         reservation_ids.add(a["reservation_id"])
         if not isinstance(a["capabilities"], list) or not a["capabilities"] or (
                 len(a["capabilities"]) != len(set(a["capabilities"]))):
