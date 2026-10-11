@@ -80,3 +80,34 @@ insecure WAN/LAN exposure; security owner must review the containment tradeoff.
 
 No production container, network, credential, NAS data, model routing or device is
 changed by this runbook.
+
+
+## Independent remote negative acceptance (Destroyer AND Lenovo)
+
+The localhost script is not a network-boundary or remote-client proof.
+For each actual remote fleet node **after** the supervised cutover, copy or
+use the reviewed `scripts/verify_remote_admin_auth_readonly.py` and run it
+locally on that node, using the operator-confirmed x1-370 Tailnet IPv4:
+
+```sh
+python3 scripts/verify_remote_admin_auth_readonly.py --target-ip "$X1_TAILNET_IPV4"
+```
+
+This script accepts only an explicit literal private/Tailnet IPv4 address,
+connects directly without an HTTP proxy, refuses redirects, performs **only
+four anonymous GETs** (`/admin/providers`, `/admin/context`,
+`/admin/circuits`, `/admin/agent-workers`), reads no response body, and
+prints only anonymous HTTP status codes and an aggregate decision. It never
+sends or accepts a credential. Source/tests are in draft PR #41.
+
+Require both distinct physical-node receipts to report
+`decision=PASS_REMOTE_401` and exit 0, with exact candidate source SHA
+and capture time recorded without endpoint/body/token values. A 200,
+403, 404, timeout, redirect or proxy path is **HOLD**, not a pass.
+Treat a pre-cutover failure as expected evidence of the old router exposure.
+
+This remote denial check is **independent** of authenticated internal AssistX
+client acceptance. Do not interpret a 401 result as proof of provider
+residency, model admission, legitimate caller functionality, WAN isolation,
+credential custody, or the ability to roll back safely. No production
+ingress or container configuration is changed by this runbook.
