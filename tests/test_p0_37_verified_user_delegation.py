@@ -108,7 +108,7 @@ def _app(tmp_path, monkeypatch, signer):
         public_key=signer.public_key(),
         key_id=_KID,
         owner_ledger=RootOwnerLedger(
-            tmp_path / "p0-owner-test.sqlite", b"x" * 32
+            tmp_path / "p0-owner-test.sqlite", b"x" * 32, bootstrap=True
         ),
     )
     app.add_middleware(
