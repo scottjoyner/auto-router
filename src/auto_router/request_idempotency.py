@@ -287,13 +287,28 @@ class RequestIdempotencyMiddleware:
         bearer = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
         jti = _token_jti(bearer)
         principal = hashlib.sha256(bearer.encode("utf-8")).hexdigest()[:16] if bearer else "anonymous"
-        if explicit:
-            if len(explicit) > 200:
-                await JSONResponse(
-                    status_code=400,
-                    content={"detail": "Idempotency-Key exceeds 200 characters"},
-                )(scope, replay, send)
-                return
+        if explicit and len(explicit) > 200:
+            await JSONResponse(
+                status_code=400,
+                content={"detail": "Idempotency-Key exceeds 200 characters"},
+            )(scope, replay, send)
+            return
+        # The outer trusted-gateway verifier (if opt-in enabled) writes this
+        # ASGI-only scope value after verifying its separate Ed25519 signature.
+        # Caller metadata/user/traceparent and a shared service bearer are
+        # NEVER human identity. No raw tenant/subject is persisted to the DB.
+        bound = scope.get("auto_router.p0_verified_user_delegation")
+        if isinstance(bound, dict):
+            key_material = "p0-bound:" + json.dumps(
+                [
+                    bound["issuer"], bound["tenant"], bound["subject"],
+                    bound["root_request_id"], bound["attempt_id"],
+                    path, explicit,
+                ],
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        elif explicit:
             key_material = f"explicit:{principal}:{explicit}"
         elif jti:
             key_material = f"claim:{jti}:{path}:{fingerprint}"
