@@ -289,11 +289,11 @@ def test_installer_disabled_unless_opted_in_and_fails_missing_key(
     monkeypatch, tmp_path,
 ):
     app = FastAPI()
-    monkeypatch.delenv("AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED", raising=False)
+    monkeypatch.delenv("AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED", raising=False)
     install_user_delegation_shadow(app)
     assert not getattr(app.state, "p0_user_delegation_shadow_installed", False)
 
-    monkeypatch.setenv("AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED", "true")
     monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
     monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", _SERVICE)
     monkeypatch.delenv("AUTO_ROUTER_P0_USER_DELEGATION_VERIFY_KEY_FILE", raising=False)
@@ -490,3 +490,14 @@ def test_restart_with_lost_owner_ledger_refuses_app_construction(
     (tmp_path / "p0-owner-test.sqlite").unlink()  # Disposable fixture only.
     with pytest.raises(Exception, match="explicit provisioning"):
         _app(tmp_path, monkeypatch, signer, restart=True)
+
+
+def test_legacy_shadow_flag_is_rejected_not_silently_interpreted_as_admission(
+    monkeypatch,
+):
+    app = FastAPI()
+    monkeypatch.delenv("AUTO_ROUTER_P0_VERIFIED_USER_ADMISSION_ENABLED", raising=False)
+    monkeypatch.setenv("AUTO_ROUTER_P0_USER_DELEGATION_SHADOW_ENABLED", "true")
+    with pytest.raises(RuntimeError, match="legacy shadow flag"):
+        install_user_delegation_shadow(app)
+    assert not getattr(app.state, "p0_user_delegation_shadow_installed", False)
