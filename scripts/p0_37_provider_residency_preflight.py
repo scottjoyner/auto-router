@@ -138,6 +138,14 @@ def summarize(
                         and info.loaded_models
                     ),
                 })
+    # Legacy canary_candidate is inventory-only. Physical admission is always
+    # denied here: host pressure, operator authorization and real process
+    # execution evidence are checked independently, never by model inventory.
+    for row in results:
+        row["inventory_candidate"] = row["canary_candidate"]
+        row["host_pressure_checked"] = False
+        row["physical_inference_permitted"] = False
+        row["candidate_evidence_scope"] = "resident_inventory_only"
     results.sort(key=lambda row: (row["physical_node_id"], row["provider_service"]))
     duplicate_nodes = {
         node: sorted(names) for node, names in sorted(services_by_node.items())
@@ -152,6 +160,10 @@ def summarize(
         "multi_service_nodes": duplicate_nodes,
         "inventory_states": dict(sorted(counts.items())),
         "canary_candidate_services": sum(row["canary_candidate"] for row in results),
+        "inventory_candidate_services": sum(row["inventory_candidate"] for row in results),
+        "host_pressure_checked": False,
+        "physical_inference_permitted": False,
+        "operator_approved": False,
         "provider_observer_attestation": False,
         "two_user_execution_proven": False,
         "services": results,
@@ -192,7 +204,8 @@ def main(argv=None) -> int:
             f"STATE {'GET_PROBED' if args.probe else 'CONFIG_ONLY'}"
             f" services={result['provider_services']}"
             f" physical_nodes={result['physical_nodes']}"
-            f" canary_candidate_services={result['canary_candidate_services']}"
+            f" inventory_candidate_services={result['inventory_candidate_services']}"
+            " physical_inference_permitted=false"
         )
         for item in result["services"]:
             count = item["resident_model_count"]
@@ -201,7 +214,8 @@ def main(argv=None) -> int:
                 f"{item['physical_node_id']}/{item['provider_service']}"
                 f" inventory={item['inventory_state']}"
                 f" resident={count_text}"
-                f" candidate={str(item['canary_candidate']).lower()}"
+                f" inventory_candidate={str(item['inventory_candidate']).lower()}"
+                " physical_inference_permitted=false"
             )
     return 0
 
