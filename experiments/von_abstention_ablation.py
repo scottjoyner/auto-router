@@ -15,11 +15,14 @@ import time
 from hashlib import sha256
 from pathlib import Path
 
+from von_choice_shadow import decode_response, question_digest
 from von_cpu_pilot import (
-    HF_REV, admissible_workspace, check_snapshot, physical_preflight,
+    HF_REV,
+    admissible_workspace,
+    check_snapshot,
+    physical_preflight,
     require_resource_scope,
 )
-from von_choice_shadow import decode_response, question_digest
 from von_matched_wording import ABSTAIN, MODEL_ID, cases
 
 CALL_LIMIT = 40
