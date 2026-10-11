@@ -4,9 +4,11 @@ No router lifespan, network, API credentials, real URLs or user data are used.
 """
 from __future__ import annotations
 import ast
+import re
 from pathlib import Path
 
 import jinja2
+from jinja2 import meta
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1] / "src" / "auto_router"
@@ -24,7 +26,7 @@ URL_MARKERS = (
 @pytest.mark.parametrize("filename", FRAGMENTS)
 def test_public_template_never_imports_endpoint_variable(filename):
     content = (ROOT / filename).read_text()
-    variables = jinja2.meta.find_undeclared_variables(
+    variables = meta.find_undeclared_variables(
         jinja2.Environment(autoescape=True).parse(content)
     )
     assert set(URL_NAMES).isdisjoint(variables)
@@ -35,18 +37,25 @@ def test_public_template_never_imports_endpoint_variable(filename):
 @pytest.mark.parametrize("url", URL_MARKERS)
 @pytest.mark.parametrize("filename", FRAGMENTS)
 def test_public_status_placeholder_ignores_synthetic_secret_url(url, filename):
-    # Render precisely the template's configured/missing indicator expressions
-    # in isolation; unrelated dashboard data is never accessed.
+    # Render the two *real* status expressions from each HTML fragment.
+    # Full dashboard data is not needed and no real origin/secret is supplied.
     content = (ROOT / filename).read_text()
-    for flag in ("assistx_tasks_configured", "assistx_event_sink_configured"):
-        assert flag in content
-    # No user-supplied or configured URL is an input to the rendered template.
+    expressions = re.findall(
+        r"\{\{\s*'Configured \(endpoint hidden\)'.*?\}\}", content
+    )
+    assert len(expressions) == 2
     env = jinja2.Environment(autoescape=True)
-    rendered = env.from_string(content.split("Configured (endpoint hidden)")[0][-0:] + 
-        "{{ 'Configured (endpoint hidden)' if configured else 'Not configured' }}"
-    ).render(configured=True, assistx_tasks_url=url, assistx_event_sink_url=url)
-    assert rendered == "Configured (endpoint hidden)"
-    assert url not in rendered
+    values = {
+        "assistx_tasks_configured": True,
+        "assistx_event_sink_configured": True,
+        "assistx_tasks_url": url,
+        "assistx_event_sink_url": url,
+    }
+    for expression in expressions:
+        assert not any(name in expression for name in URL_NAMES)
+        rendered = env.from_string(expression).render(**values)
+        assert rendered == "Configured (endpoint hidden)"
+        assert url not in rendered
 
 
 def test_main_dashboard_context_explicitly_replaces_both_url_values_with_none():
