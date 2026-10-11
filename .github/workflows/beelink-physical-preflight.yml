@@ -1,0 +1,40 @@
+name: Beelink physical model preflight source-only
+
+on:
+  push:
+    branches:
+      - experiment/beelink-host-reattest-preflight-20261011
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  physical-preflight-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install lint tool only
+        run: python -m pip install 'ruff>=0.6,<1'
+      - name: Test physical evidence only with synthetic processes
+        run: |
+          python -m unittest discover -s tests -p 'test_physical_gguf_preflight.py' -v
+          ruff check experiments/physical_gguf_preflight.py tests/test_physical_gguf_preflight.py
+      - name: Refuse any implicit full-system or admission authority
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          code = Path("experiments/physical_gguf_preflight.py").read_text()
+          assert '"can_dispatch": False' in code
+          assert '"can_auto_renew": False' in code
+          assert '"canonical_approval_created": False' in code
+          assert '"host_signed_execution_witness": False' in code
+          assert '"fresh_request_ownership_proven": False' in code
+          assert 'http://127.0.0.1:1234/api/v0/models' in code
+          assert 'Neo4j' in code and 'Never' in code
+          print("Source-only host observation; no production approval or deployment.")
+          PY
