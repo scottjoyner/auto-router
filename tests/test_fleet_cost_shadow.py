@@ -318,11 +318,20 @@ class TestCostShadowAuthority(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "telemetry evidence"):
             scored(doc)
 
-    def test_physical_process_alias_is_not_double_counted(self):
+    def test_physical_process_alias_on_same_node_is_not_double_counted(self):
         doc = sample()
+        doc["runtimes"][1]["node_id"] = doc["runtimes"][0]["node_id"]
         doc["runtimes"][1]["process_id"] = doc["runtimes"][0]["process_id"]
         with self.assertRaisesRegex(ValueError, "duplicated physical process"):
             scored(doc)
+
+    def test_identical_local_pid_on_different_nodes_is_not_alias_identity(self):
+        doc = sample()
+        doc["runtimes"][1]["process_id"] = doc["runtimes"][0]["process_id"]
+        doc["telemetry"][1]["process_id"] = doc["runtimes"][0]["process_id"]
+        result = scored(doc)
+        self.assertEqual(result["status"], "RANKED_SYNTHETIC_ONLY")
+        self.assertEqual(result["eligible_count"], 2)
 
     def test_duplicate_reservation_identity_is_not_double_counted(self):
         doc = sample()
