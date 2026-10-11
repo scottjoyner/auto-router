@@ -117,7 +117,10 @@ class TestDecisionShadow(unittest.TestCase):
             load_data([row(), row(variant="permuted", state_sha256="f" * 64)])
 
     def test_permutation_stability_count(self):
-        rows, _ = load_data([row(), row(variant="permuted", prediction="node_b", question_sha256="c" * 64)])
+        rows, _ = load_data([
+            row(),
+            row(variant="permuted", prediction="node_b", question_sha256="c" * 64),
+        ])
         outcome = E.score(rows, "baseline")
         self.assertEqual(outcome["models"]["baseline"]["permutation_changed"], 1)
         self.assertEqual(outcome["models"]["baseline"]["answered"], 1)
