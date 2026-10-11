@@ -133,7 +133,9 @@ def test_two_signed_test_idp_subjects_cross_actual_router_middleware_and_shared_
         )
 
     outcomes = asyncio.run(experiment())
-    assert [code for code, _ in outcomes] == [200, 200]
+    assert [code for code, _ in outcomes] == [200, 200], [
+        {"status": code, "detail": body.get("detail")} for code, body in outcomes
+    ]
     assert all(body["id"] == "fixture-completion" for _, body in outcomes)
     assert [row["actor"]["subject"] for row in observed_a] == ["alice"]
     assert [row["actor"]["subject"] for row in observed_b] == ["bob"]
