@@ -505,7 +505,7 @@ def test_no_sensitive_proc_cmdline_read_even_with_api_key_present(
 
     def guarded_read(path, limit):
         inspected.append(str(path))
-        if "cmdline" in str(path):
+        if path.name == "cmdline":
             raise AssertionError("process command line contains API keys")
         return original(path, limit)
 
@@ -517,7 +517,7 @@ def test_no_sensitive_proc_cmdline_read_even_with_api_key_present(
     assert meta["state"] == "process_model_inode_mmap_correlated"
     assert meta["model_filename"] == model.name
     assert meta["process_cmdline_read"] is False
-    assert all("cmdline" not in item for item in inspected)
+    assert all(Path(item).name != "cmdline" for item in inspected)
     assert "SHOULD_NEVER_BE_DISCLOSED" not in str(result)
 
 
