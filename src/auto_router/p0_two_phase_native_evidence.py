@@ -46,7 +46,8 @@ _ALLOC_KEYS = frozenset({
     "schema", "issuer", "audience", "key_id", "gateway_issuer",
     "tenant", "subject", "root_request_id", "attempt_id",
     "request_path", "original_request_sha256", "wire_request_sha256",
-    "wire_request_bytes", "wire_method", "wire_request_path", "model_handle", "node_id", "runtime_instance_id",
+    "wire_request_bytes", "wire_method", "wire_request_path",
+    "model_handle", "node_id", "runtime_instance_id",
     "boot_id", "pid", "process_start_ticks", "model_artifact_sha256",
     "admission_nonce", "observed_at_ms", "allocated_tasks",
 })
