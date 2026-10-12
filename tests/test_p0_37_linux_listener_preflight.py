@@ -243,6 +243,10 @@ def test_native_probe_one_loopback_get_only(monkeypatch):
 @pytest.mark.parametrize("bad_body", [
     b"{", b'{"models":{}}', b'{"models":[{"key":"loaded?"}]}',
     b"x" * 262145,
+    b'{"models":[],"models":[{"loaded_instances":[{"id":"fake"}]}]}',
+    b'{"models":[{"loaded_instances":[{}]}]}',
+    b'{"models":[{"loaded_instances":[{"id":123}]}]}',
+    b'{"models":[{"loaded_instances":[{"id":""}]}]}',
 ])
 def test_bad_native_inventory_never_becomes_authoritative(monkeypatch, bad_body):
     class Fake(_FakeConn):
@@ -268,3 +272,37 @@ def test_invalid_probe_budget_denied(port,max_pids,max_fds,duration,tmp_path):
             proc_root=tmp_path, port=port, max_pids=max_pids,
             max_fds_per_pid=max_fds, max_duration_seconds=duration,
         )
+
+
+
+def test_bounded_observation_no_ambient_credential_or_network_by_default(
+    tmp_path, monkeypatch,
+):
+    proc = _proc(tmp_path)
+    network_attempts = []
+
+    def fail_network(_port):
+        network_attempts.append(_port)
+        raise AssertionError("no GET request authorized by default")
+
+    # Even with an inventory transport override present, the default is
+    # local procfs only and cannot issue any provider HTTP request.
+    result = preflight.collect(
+        proc_root=proc,
+        inventory_fetch=fail_network,
+        probe_native_inventory=False,
+    )
+    assert network_attempts == []
+    assert result["native_inventory"]["inventory_state"] == "not_requested"
+    assert result["operator_approved"] is False
+
+
+def test_procfs_tcp_row_malformed_is_unknown_not_empty(tmp_path):
+    proc = _proc(tmp_path)
+    (proc / "net/tcp").write_text(
+        "header\n0: BAD:HELLO 00000000:0000 0A x x x x x x\n"
+    )
+    r = preflight.collect(proc_root=proc)
+    assert r["listener_state"] == "unknown"
+    assert r["scan_state"] == "unknown"
+    assert r["provider_execution_attested"] is False
