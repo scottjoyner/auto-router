@@ -141,3 +141,37 @@ repeated event identities, duplicate signed JSON and wrong signing
 domain. No physical LM Studio process is attested.
 
 This is a safe **component contract**, not P0 release acceptance.
+
+
+## Independent hosted proof and physical-inventory checkpoint
+
+**Observed:** 2026-10-12 00:47 UTC (October 11, EDT).
+
+- GitHub [focused node-witness CI run 38189260557](https://github.com/scottjoyner/auto-router/actions/runs/38189260557): **SUCCESS**, Ruff PASS, **31 signed-observer adversarial tests PASS**.
+- The inherited [PostgreSQL-owner hosted gate 38189260499](https://github.com/scottjoyner/auto-router/actions/runs/38189260499): **SUCCESS**, Ruff PASS, **81 tests PASS**.
+- Isolated x1-370 local suite at tested source SHA
+  `3597132bcf2aece2220f417ddb54666b7c59414f`: **569 passed,
+  27 skipped, 1 existing live-provider-registry-drift check deselected**,
+  Ruff PASS. Extra skips reflect no disposable PG/AssistX cross-repo
+  environment on this test run; they are not evidence of new regressions.
+  The separately run live registry test still FAILS, as described above.
+- Bounded x1-370 **read-only** `GET /api/v1/models` returned 26 listed
+  models and **0 native loaded instances**. `GET /v1/models` and
+  `GET /api/v0/models` returned zero models. This is a point-in-time
+  inventory observation, not a proof that execution cannot occur later.
+- Bounded read-only fleet residency discovery (14 configured LM Studio
+  services, 10 node IDs, 2 workers, <=1.5s/GET) reported **one**
+  native resident-inventory candidate — Beelink with 1 resident model.
+  Every entry, including Beelink, reported
+  `physical_inference_permitted=false`. Beelink host pressure is still
+  an independent NO-GO; no inference occurred.
+- Native `lms ps` refused when invoked through Fleet Commander's
+  isolated HOME because the corresponding isolated `lms-key-2` did not
+  exist. No credentials were copied, no HOME override attempted and no
+  authentication bypass performed.
+
+See [physical native-process and two-user canary issue #61](https://github.com/scottjoyner/auto-router/issues/61)
+for the concrete, separately gated instrumentation/host-capacity path.
+The source verifier's only proven behavior here is correct
+**signature-and-request correlation** with explicit refusal to promote
+fixture signatures to physical execution.
