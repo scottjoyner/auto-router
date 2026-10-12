@@ -165,7 +165,10 @@ def _native_inventory(port: int) -> dict[str, Any]:
                 len(row["loaded_instances"]) for row in rows
             ),
         }
-    except (OSError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError, http.client.HTTPException) as exc:
+    except (
+        OSError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError,
+        http.client.HTTPException,
+    ) as exc:
         raise PreflightUnavailable("native inventory request unavailable") from exc
     finally:
         conn.close()
