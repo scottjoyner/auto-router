@@ -1,0 +1,39 @@
+name: Experimental Admin Overlap Contract (Unwired)
+
+on:
+  pull_request:
+    paths:
+      - "src/auto_router/research_admin_overlap.py"
+      - "tests/test_research_admin_overlap.py"
+      - "tests/test_research_admin_transition_model.py"
+      - "docs/ADMIN_CREDENTIAL_OVERLAP_RESEARCH_20261011.md"
+      - ".github/workflows/research-admin-overlap-contract.yml"
+  push:
+    paths:
+      - "src/auto_router/research_admin_overlap.py"
+      - "tests/test_research_admin_overlap.py"
+      - "tests/test_research_admin_transition_model.py"
+      - ".github/workflows/research-admin-overlap-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pure-synthetic-overlap-no-live-activation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install no-runtime-dependency test runner
+        run: python -m pip install "pytest>=8,<10"
+      - name: Check exact research-only source and syntax
+        run: |
+          python -m py_compile src/auto_router/research_admin_overlap.py
+          test -f docs/ADMIN_CREDENTIAL_OVERLAP_RESEARCH_20261011.md
+      - name: Run purely synthetic overlap cases
+        run: python -m pytest -q --noconftest tests/test_research_admin_overlap.py tests/test_research_admin_transition_model.py

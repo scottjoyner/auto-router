@@ -1,0 +1,290 @@
+"""Synthetic, value-free proof for an UNWIRED admin-key migration helper."""
+from __future__ import annotations
+import importlib.util
+import base64
+from pathlib import Path
+
+import pytest
+
+SOURCE = Path(__file__).resolve().parents[1] / "src" / "auto_router" / "research_admin_overlap.py"
+spec = importlib.util.spec_from_file_location("research_admin_overlap", SOURCE)
+policy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(policy)
+
+PRIMARY = "P" * 48
+PREVIOUS = "Q" * 48
+WRONG = "R" * 48
+
+
+def check(presented=PREVIOUS, **changes):
+    args = dict(
+        primary_token=PRIMARY,
+        previous_token=PREVIOUS,
+        feature_explicitly_enabled=True,
+        owner_window_approved=True,
+        starts_at_utc=1_800_000_000,
+        expires_at_utc=1_800_000_600,
+        activated_at_utc=1_800_000_100,
+        observed_at_utc=1_800_000_130,
+        activated_monotonic_seconds=1000,
+        observed_monotonic_seconds=1030,
+    )
+    args.update(changes)
+    return policy.evaluate_experimental_overlap(presented, **args)
+
+
+def test_never_enabled_by_default_even_when_old_token_present():
+    assert policy.evaluate_experimental_overlap(
+        PREVIOUS, primary_token=PRIMARY, previous_token=PREVIOUS
+    ) == policy.AuthenticationDecision.DENY
+
+
+def test_valid_bounded_explicitly_approved_old_credential():
+    assert check() == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
+
+
+def test_primary_still_works_when_overlap_disabled_or_malformed():
+    for overrides in (
+        dict(feature_explicitly_enabled=False),
+        dict(expires_at_utc="broken"),
+        dict(owner_window_approved=False),
+        dict(previous_token=None),
+    ):
+        assert check(PRIMARY, **overrides) == policy.AuthenticationDecision.PRIMARY_ACCEPTED
+
+
+@pytest.mark.parametrize("bad", [False, None, "true", 1, "", [], {}])
+def test_enabled_requires_boolean_true(bad):
+    assert check(feature_explicitly_enabled=bad) == policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("bad", [False, None, "yes", 1, "", [], {}])
+def test_owner_approval_requires_boolean_true(bad):
+    assert check(owner_window_approved=bad) == policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("presented", [WRONG, "", None, 123, object(), " Q"*25])
+def test_wrong_or_nonstring_credential_denied(presented):
+    assert check(presented) == policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("candidate", ["short", "", None, " Z"*28, "X"*48+" ", "🦊"*48, "X\n"*24])
+def test_previous_key_must_be_strong_ascii_no_whitespace(candidate):
+    assert check(previous_token=candidate) == policy.AuthenticationDecision.DENY
+
+
+def test_duplicate_old_and_new_keys_never_prove_overlap():
+    assert check(primary_token=PREVIOUS) == policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    assert check(WRONG, primary_token=PREVIOUS) == policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("changes", [
+    dict(starts_at_utc=1_800_000_000, expires_at_utc=1_800_001_000),
+    dict(starts_at_utc=1_800_000_600, expires_at_utc=1_800_000_600),
+    dict(starts_at_utc=1_800_000_700),
+    dict(expires_at_utc=1_800_000_100),
+    dict(observed_at_utc=1_800_000_600),
+    dict(observed_at_utc=1_800_000_099),
+    dict(activated_at_utc=1_799_999_999),
+    dict(activated_at_utc=1_800_000_600),
+    dict(observed_monotonic_seconds=999),
+    dict(observed_monotonic_seconds=1500),
+    dict(observed_monotonic_seconds=1501),
+    dict(observed_at_utc=1_800_000_100, observed_monotonic_seconds=1100),
+    dict(expires_at_utc="600"),
+    dict(starts_at_utc=True),
+    dict(activated_at_utc=1_800_000_100.1),
+    dict(observed_monotonic_seconds=1000.0),
+])
+def test_invalid_timing_is_fail_closed(changes):
+    assert check(**changes) == policy.AuthenticationDecision.DENY
+
+
+def test_last_allowed_second_then_expiry():
+    assert check(
+        observed_at_utc=1_800_000_599,
+        observed_monotonic_seconds=1499,
+    ) == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
+    assert check(
+        observed_at_utc=1_800_000_600,
+        observed_monotonic_seconds=1499,
+    ) == policy.AuthenticationDecision.DENY
+
+
+def test_monotonic_expiry_remains_a_separate_guard():
+    assert check(
+        observed_at_utc=1_800_000_599,
+        observed_monotonic_seconds=1499,
+    ) == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
+    assert check(
+        observed_at_utc=1_800_000_599,
+        observed_monotonic_seconds=1500,
+    ) == policy.AuthenticationDecision.DENY
+
+
+def test_backwards_wall_clock_is_denied_even_if_not_utc_expired():
+    assert check(
+        observed_at_utc=1_800_000_105, observed_monotonic_seconds=1040
+    ) == policy.AuthenticationDecision.DENY
+
+
+def test_never_echoes_credentials(capsys):
+    assert check() == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
+    output=capsys.readouterr()
+    assert PRIMARY not in output.out+output.err
+    assert PREVIOUS not in output.out+output.err
+    assert repr(policy.AuthenticationDecision.PREVIOUS_ACCEPTED).find(PREVIOUS) == -1
+
+
+def test_research_helper_is_not_imported_from_production_auth():
+    auth_source=(SOURCE.parent / "security.py").read_text()
+    live_source=(SOURCE.parent / "secure_live.py").read_text()
+    settings_source=(SOURCE.parent / "settings.py").read_text()
+    assert "research_admin_overlap" not in auth_source+live_source+settings_source
+    assert "admin_token: str" in settings_source
+
+
+def test_no_environment_network_or_service_actions():
+    content=SOURCE.read_text()
+    for forbidden in ("os.environ", "getenv(", "subprocess", "socket", "urllib", "logging.", "print(", "docker ", "httpx"):
+        assert forbidden not in content
+
+
+def header_check(headers, **overrides):
+    kwargs = dict(
+        primary_token=PRIMARY,
+        previous_token=PREVIOUS,
+        feature_explicitly_enabled=True,
+        owner_window_approved=True,
+        starts_at_utc=1_800_000_000,
+        expires_at_utc=1_800_000_600,
+        activated_at_utc=1_800_000_100,
+        observed_at_utc=1_800_000_130,
+        activated_monotonic_seconds=1000,
+        observed_monotonic_seconds=1030,
+    )
+    kwargs.update(overrides)
+    return policy.evaluate_experimental_header_set(headers, **kwargs)
+
+
+def test_single_header_channel_primary_and_previous():
+    for key, body in (
+        ("X-Admin-Token", PRIMARY),
+        ("x-admin-token", PRIMARY),
+        ("Authorization", "Bearer " + PRIMARY),
+        ("authorization", "bearer " + PRIMARY),
+        ("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode()),
+    ):
+        assert header_check([(key, body)]) == policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    for key, body in (
+        ("X-Admin-Token", PREVIOUS),
+        ("Authorization", "Bearer " + PREVIOUS),
+        ("Authorization", "Basic " + base64.b64encode(("admin:" + PREVIOUS).encode()).decode()),
+    ):
+        assert header_check([(key, body)]) == policy.AuthenticationDecision.PREVIOUS_ACCEPTED
+
+
+def test_unknown_benign_headers_are_ignored_but_not_authenticators():
+    headers=[("Accept","application/json"),("User-Agent","synthetic-ci"),
+             ("X-Admin-Token",PRIMARY),("Content-Type","text/plain")]
+    assert header_check(headers)==policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    assert header_check(headers[:2])==policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("headers", [
+    [("X-Admin-Token", PRIMARY), ("Authorization", "Bearer " + PREVIOUS)],
+    [("Authorization", "Bearer " + PRIMARY), ("X-Admin-Token", PREVIOUS)],
+    [("X-Admin-Token", PRIMARY), ("x-admin-token", PRIMARY)],
+    [("Authorization", "Bearer " + PRIMARY), ("AUTHORIZATION", "Bearer " + PRIMARY)],
+    [("Authorization", "Basic " + base64.b64encode(("admin:" + PREVIOUS).encode()).decode()),
+     ("X-Admin-Token", PRIMARY)],
+    [("Authorization", "Bearer " + PRIMARY + "," + PREVIOUS)],
+    [("Authorization", "Bearer " + PRIMARY + " " + PREVIOUS)],
+    [("Authorization", "Digest opaque-credential")],
+    [("Authorization", "Basic ")],
+    [("Authorization", "Bearer ")],
+    [("Authorization", "Bearer  " + PRIMARY)],
+    [("Authorization", "Bearer\t" + PRIMARY)],
+    [("X-Admin-Token", PRIMARY + "\n")],
+    [("X-Admin-Token", PRIMARY + "\r")],
+    [("X-Admin-Token", " " + PRIMARY)],
+    [("X-Admin-Token", PRIMARY + " ")],
+    [("X-Admin-Token ", PRIMARY)],
+    [("X-Admin-Token", "synthetic-short")],
+    [("Authorization", "basic " + base64.b64encode(("nonadmin:" + PRIMARY).encode()).decode())],
+    [("Authorization", "Basic not_base64")],
+    [("Authorization", "Basic " + base64.b64encode(("admin:" + PRIMARY).encode()).decode() + "=")],
+    [("Authorization", "Bearer " + PRIMARY), ("Authorization", "Basic " +
+        base64.b64encode(("admin:" + PRIMARY).encode()).decode())],
+    [],
+    None,
+    (),
+    22,
+    "headers-not-pairs",
+    [("x-admin-token",)],
+    [("x-admin-token", PRIMARY, "extra")],
+    [(None, PRIMARY)],
+    [("x-admin-token", None)],
+    [("x-admin-token", "🦊")],
+    [("Unknown", "nonascii-🦊"),("X-Admin-Token", PRIMARY)],
+    [("Unknown", "break\nline"),("X-Admin-Token", PRIMARY)],
+    [("x-admin-token", PRIMARY)]*65,
+])
+def test_ambiguous_header_sets_never_authenticate(headers):
+    assert header_check(headers)==policy.AuthenticationDecision.DENY
+
+
+def test_single_header_wrong_or_expired_remains_denied():
+    assert header_check([("Authorization","Bearer "+WRONG)])==policy.AuthenticationDecision.DENY
+    assert header_check([("X-Admin-Token",PREVIOUS)],observed_at_utc=1_800_000_600)==policy.AuthenticationDecision.DENY
+    assert header_check([("X-Admin-Token",PREVIOUS)],owner_window_approved=False)==policy.AuthenticationDecision.DENY
+
+
+def test_header_parser_does_not_accept_env_cookie_or_other_authority():
+    assert header_check([
+        ("Cookie", "admin=" + PRIMARY),
+        ("X-API-Key", PRIMARY),
+    ])==policy.AuthenticationDecision.DENY
+
+
+def test_header_decision_never_returns_header_or_secret_bytes(capsys):
+    result=header_check([("X-Admin-Token",PRIMARY)])
+    assert result==policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    output=capsys.readouterr()
+    assert PRIMARY not in output.out+output.err
+    assert PREVIOUS not in output.out+output.err
+    assert PRIMARY not in repr(result)
+
+
+def test_basic64_padding_rejects_altered_canonical_encoding():
+    padded_primary = "P" * 49
+    encoded = base64.b64encode(("admin:" + padded_primary).encode("ascii")).decode()
+    assert encoded.endswith("==")
+    assert header_check(
+        [("Authorization", "Basic " + encoded)],
+        primary_token=padded_primary,
+    ) == policy.AuthenticationDecision.PRIMARY_ACCEPTED
+    assert header_check(
+        [("Authorization", "Basic " + encoded.rstrip("="))],
+        primary_token=padded_primary,
+    ) == policy.AuthenticationDecision.DENY
+    assert header_check(
+        [("Authorization", "Basic " + encoded.replace("=", " "))],
+        primary_token=padded_primary,
+    ) == policy.AuthenticationDecision.DENY
+
+
+@pytest.mark.parametrize("lookalike", [
+    "X_Admin_Token",
+    "x_admin_token",
+    "X-Admin-Token ",
+    " X-Admin-Token",
+    "X-Admin-Token:",
+    "X-Admin-Token\\r",
+    "X-Admin-Token\\n",
+])
+def test_shadow_header_names_are_denied(lookalike):
+    assert header_check([(lookalike, PRIMARY)]) == policy.AuthenticationDecision.DENY
+    assert header_check(
+        [(lookalike, PREVIOUS), ("X-Admin-Token", PRIMARY)]
+    ) == policy.AuthenticationDecision.DENY
