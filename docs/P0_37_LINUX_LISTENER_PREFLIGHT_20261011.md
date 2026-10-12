@@ -51,7 +51,18 @@ At **2026-10-12 01:10:03 UTC** (October 11 EDT), on an exact fresh read-only rer
 - Independently, the existing *read-only* `p0_37_host_pressure_preflight.py --local --expect-host x1-370` assessed **`HEADROOM_ONLY`**, with approximately **198.26 GiB** root space available, **77.41%** root use, `io.full.avg10` approximately **0.07%**. This checks host headroom only; its own result still contains `physical_inference_permitted=false`, `operator_approved=false`.
 - Therefore x1-370 has capacity headroom under that diagnostic, **but no resident-model or independently attributable per-request process** in these snapshots. No inference canary is approved.
 
-**Beelink remains physical NO-GO** based on separate storage-capacity and I/O constraints, despite one native resident-model instance in the prior bounded inventory. Do not switch to Beelink simply to obtain a positive loaded-model count.
+**Beelink remains a newly reconfirmed physical NO-GO.** A fresh
+read-only SSH preflight used strict host-key verification and the exact
+remote hostname `BEELINK-RYZEN-7-MINI-PC`. It measured **99.31% root
+filesystem use**, **3.21 GiB root available**, and
+**18.82% 10-second full I/O pressure** (a prior adjacent read yielded
+14.18%). All are outside the existing safety thresholds; the result
+was `host_pressure_status=NO_GO`, `uncertainties=[]`,
+`operator_approved=false`, `physical_inference_permitted=false`.
+One model appearing resident in a previous API inventory cannot
+override these independent physical resource constraints. No bulk
+storage transfer, cleanup, mount, NAS workload or model process was
+changed by this verification.
 
 ## Tests and remaining physical gates
 
@@ -72,3 +83,12 @@ left code/tests unchanged. Broader isolated regression at docs SHA
 PostgreSQL/AssistX cross-repository fixtures were not enabled in this run;
 therefore do not claim unfiltered full CI or a physical execution test passed.
 The separate focused hosted gate is tracked on [draft PR #62](https://github.com/scottjoyner/auto-router/pull/62).
+
+
+### Latest exact-head hosted tests
+
+At PR code/docs head `a4940e9ea8a5298cfbae1338cfcf39e67425fb1a`:
+
+- [Read-only Linux preflight GitHub Actions](https://github.com/scottjoyner/auto-router/actions/runs/38190863793) **SUCCESS**, Ruff PASS, **31 tests PASS**. All tests use fake procfs and mocked loopback native inventory; no physical model was tested.
+- [Inherited PostgreSQL owner gate](https://github.com/scottjoyner/auto-router/actions/runs/38190863750) **SUCCESS**, Ruff PASS, **81 tests PASS** against isolated CI PostgreSQL. Deliberate restricted-role and repeat-bootstrap negative tests can log database permission/schema errors while the assertions pass.
+- Broad earlier local fixture-mode regression: **600 passed, 27 skipped, 1 known live-registry-drift test deselected**. Do not claim unfiltered full-suite CI is green.
