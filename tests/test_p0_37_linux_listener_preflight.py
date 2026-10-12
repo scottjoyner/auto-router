@@ -57,6 +57,7 @@ def test_exact_listener_socket_pid_and_starttime_candidate_never_attests(
     assert r["matching_processes"] == [{
         "pid": 1212, "process_start_ticks": 678901,
         "boot_id": r["boot_id"],
+        "socket_inode": "424242",
         "socket_inode_correlated": True,
         "fd_scan_complete": True,
         "native_provider_attempt_witness": False,
@@ -327,7 +328,7 @@ def test_listener_socket_disappears_during_repeat_snapshot(tmp_path, monkeypatch
 
 def test_fd_disappears_on_second_ownership_read(tmp_path, monkeypatch):
     proc = _proc(tmp_path)
-    seen = iter([(True, "complete"), (False, "complete")])
+    seen = iter([({"424242"}, "complete"), (set(), "complete")])
     monkeypatch.setattr(
         preflight, "_visible_fd_socket", lambda *_args: next(seen)
     )
@@ -557,3 +558,49 @@ def test_model_file_change_during_observation_fails_closed(tmp_path, monkeypatch
         "reason": "model process or file changed during observation",
     }
     assert num_model_stats[0] == 2
+
+
+
+def test_socket_inode_substitution_rejected_even_if_both_sockets_listen(
+    tmp_path, monkeypatch,
+):
+    proc = _proc(tmp_path)
+    socket_sets = iter([{"424242"}, {"999999"}])
+    monkeypatch.setattr(
+        preflight, "_visible_fd_socket", lambda *_args: (
+            next(socket_sets), "complete"
+        )
+    )
+    # Both socket inodes still listen on the same port, but ownership of
+    # the *specific* inode shifted between the two snapshots.
+    monkeypatch.setattr(
+        preflight, "_listener_inodes",
+        lambda _root, _port: {"424242", "999999"},
+    )
+    observed = preflight.collect(proc_root=proc, target_pid=1212)
+    assert observed["matching_processes"] == []
+    assert observed["scan_state"] == "partial_unattributed"
+    assert "process_or_listener_changed_during_snapshot" in observed[
+        "observation_unknown_reasons"
+    ]
+
+
+def test_partial_target_fd_proof_cannot_read_model_mmap(tmp_path, monkeypatch):
+    proc, _model = _model_mmap_proc(tmp_path)
+    seen = iter([({"424242"}, "fd_budget_exceeded"), ({"424242"}, "complete")])
+    monkeypatch.setattr(
+        preflight, "_visible_fd_socket", lambda *_args: next(seen)
+    )
+    def reject_model_read(*_args):
+        raise AssertionError("mmap inspection must not follow partial FD proof")
+    monkeypatch.setattr(preflight, "_model_mmap_metadata", reject_model_read)
+    observed = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+    )
+    assert observed["scan_state"] == "partial_unattributed"
+    assert observed["process_model_mapping"] == {
+        "state": "unknown",
+        "reason": "stable_target_pid_socket_attribution_required",
+    }
+    assert observed["model_artifact_sha256_measured"] is False
+    assert observed["provider_execution_attested"] is False
