@@ -475,3 +475,125 @@ def test_actual_signed_actor_missing_human_subject_never_produces_join(fixture):
 def test_header_value_control_characters_rejected_before_narrowing(value):
     with pytest.raises(NativeTaskJoinRejected, match="unsafe raw HTTP"):
         verify_raw_native_auth_header_shape([("X-P0-Signature", value)])
+
+
+
+def test_real_signed_v2_asgi_alice_bob_into_synthetic_two_phase_join(
+    tmp_path, monkeypatch, fixture,
+):
+    """Actual middleware admits Alice/Bob; only native receipts are mock."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from fastapi.testclient import TestClient
+    from test_p0_37_request_digest import _delegation, _post
+    from test_p0_37_verified_user_delegation import _app, _token
+    from auto_router.user_delegation import delegated_body_digest
+
+    body, _actor_unused, wire, ak, sk, allocate, slot, _evaluate = fixture
+    human_key = Ed25519PrivateKey.generate()
+    app, observed, _ledger = _app(
+        tmp_path, monkeypatch, human_key, require_body_digest=True,
+    )
+    alice_token = _delegation(human_key, body)
+    bob_token = _token(
+        human_key, "bob", claims_changes={
+            "schema": "p0-user-shadow-v2",
+            "request_path": "/v1/chat/completions",
+            "request_sha256": delegated_body_digest(
+                "/v1/chat/completions", body,
+            ),
+        },
+    )
+    with TestClient(app) as client:
+        responses = [
+            _post(client, alice_token, body),
+            _post(client, bob_token, body),
+        ]
+    assert [r.status_code for r in responses] == [200, 200]
+    assert len(observed) == 2
+    alice, bob = [x["actor"] for x in observed]
+    assert alice["subject"] == "alice"
+    assert bob["subject"] == "bob"
+    assert alice["root_request_id"] != bob["root_request_id"]
+    assert alice["request_sha256"] == bob["request_sha256"]
+
+    allocation_raw, _original_sig = allocate()
+    from auto_router.p0_two_phase_native_evidence import _ALLOC_KEYS
+    rec = json.loads(allocation_raw)
+    for key, actor_key in (
+        ("gateway_issuer", "issuer"),
+        ("tenant", "tenant"),
+        ("subject", "subject"),
+        ("root_request_id", "root_request_id"),
+        ("attempt_id", "attempt_id"),
+        ("request_path", "request_path"),
+        ("original_request_sha256", "request_sha256"),
+        ("model_handle", "model_handle"),
+    ):
+        rec[key] = alice[actor_key]
+    assert rec.keys() == _ALLOC_KEYS
+    signed_alloc = _sign(rec, ak, ALLOC_DOMAIN)
+    signed_slot = slot(allocation=signed_alloc)
+
+    def evaluate_asgi(actor):
+        return verify_two_phase_single_task_fixture(
+            verified_actor=actor,
+            original_request_body=body,
+            forwarded_wire_body=wire,
+            forwarded_method="POST",
+            forwarded_path="/v1/chat/completions",
+            signed_allocation=signed_alloc,
+            signed_slots=[signed_slot],
+            allocation_public_key=ak.public_key(),
+            allocation_key_id=_AKID,
+            slot_public_key=sk.public_key(),
+            slot_key_id=_SKID,
+            expected_node_id=_NODE,
+            now_ms=_NOW,
+        )
+
+    result = evaluate_asgi(alice)
+    assert result["all_signed_allocations_have_slot_claims"] is True
+    assert result["operational_ingress_signer_proven"] is False
+    assert result["native_allocation_complete"] is False
+    assert result["provider_execution_attested"] is False
+    with pytest.raises(NativeTaskJoinRejected, match="identity/body"):
+        evaluate_asgi(bob)
+
+
+def test_actual_signed_v2_asgi_can_accept_batch_but_p0_two_phase_rejects(
+    tmp_path, monkeypatch, fixture,
+):
+    """An authenticated generic request does not automatically qualify for P0."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from fastapi.testclient import TestClient
+    from test_p0_37_request_digest import _delegation, _post
+    from test_p0_37_verified_user_delegation import _app
+    from auto_router.p0_single_task_shape import SingleTaskShapeRejected
+
+    body, _actor_unused, wire, ak, sk, allocate, slot, _evaluate = fixture
+    enlarged = {**body, "n": 2}
+    key = Ed25519PrivateKey.generate()
+    app, observed, _ledger = _app(
+        tmp_path, monkeypatch, key, require_body_digest=True,
+    )
+    with TestClient(app) as client:
+        response = _post(client, _delegation(key, enlarged), enlarged)
+    assert response.status_code == 200
+    assert len(observed) == 1
+    allocation = allocate()
+    with pytest.raises(SingleTaskShapeRejected):
+        verify_two_phase_single_task_fixture(
+            verified_actor=observed[0]["actor"],
+            original_request_body=enlarged,
+            forwarded_wire_body=wire,
+            forwarded_method="POST",
+            forwarded_path="/v1/chat/completions",
+            signed_allocation=allocation,
+            signed_slots=[slot(allocation=allocation)],
+            allocation_public_key=ak.public_key(),
+            allocation_key_id=_AKID,
+            slot_public_key=sk.public_key(),
+            slot_key_id=_SKID,
+            expected_node_id=_NODE,
+            now_ms=_NOW,
+        )
