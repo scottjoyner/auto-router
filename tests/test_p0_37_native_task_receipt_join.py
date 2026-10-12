@@ -12,7 +12,7 @@ import uuid
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from test_p0_37_request_digest import _delegation, _payload
-from test_p0_37_verified_user_delegation import _KID
+from test_p0_37_verified_user_delegation import _KID, _token
 
 from auto_router.native_task_receipt_join import (
     _INGRESS_DOMAIN,
@@ -21,7 +21,7 @@ from auto_router.native_task_receipt_join import (
     NativeTaskJoinRejected,
     correlate_native_task_join,
 )
-from auto_router.user_delegation import verify_user_delegation
+from auto_router.user_delegation import delegated_body_digest, verify_user_delegation
 
 _NOW_MS = 1791762000000
 _NODE = "xwing-test-only"
@@ -475,3 +475,88 @@ def test_ingress_nonce_not_binding_to_node_runtime_from_user_labels(bundle):
     r = verify([], ingress=ingress, actor_override=forged)
     assert r["provider_execution_attested"] is False
     assert r["operational_signer_provenance_verified"] is False
+
+
+
+def _actual_signed_fixture_actor(signer, *, subject, root=None, attempt=None):
+    """Independently validate each synthetic subject's genuine EdDSA JWT."""
+    body = _payload()
+    path = "/v1/chat/completions"
+    token = _token(
+        signer, subject, root=root, attempt=attempt,
+        claims_changes={
+            "schema": "p0-user-shadow-v2",
+            "request_path": path,
+            "request_sha256": delegated_body_digest(path, body),
+        },
+    )
+    return verify_user_delegation(
+        token, public_key=signer.public_key(), key_id=_KID,
+        model="auto/code", request_path=path, request_body=body,
+    )
+
+
+def test_distinct_signed_humans_cannot_reuse_other_native_task_bundle(bundle):
+    alice, _admission_key, _observer, ingress_fn, event, verify = bundle
+    signer = Ed25519PrivateKey.generate()
+    bob = _actual_signed_fixture_actor(signer, subject="bob")
+    assert bob["subject"] != alice["subject"]
+    assert bob["tenant"] == alice["tenant"]
+    assert bob["request_sha256"] == alice["request_sha256"]
+    admission = ingress_fn()
+    events = _sequence(event, ingress=admission)
+    with pytest.raises(NativeTaskJoinRejected, match="signed actor"):
+        verify(events, ingress=admission, actor_override=bob)
+    assert verify(events, ingress=admission)["provider_execution_attested"] is False
+
+
+def test_same_user_same_root_distinct_signed_retry_attempt_cannot_reuse_native_id(
+    bundle,
+):
+    alice, _admission_key, _observer, ingress_fn, event, verify = bundle
+    signer = Ed25519PrivateKey.generate()
+    retry = _actual_signed_fixture_actor(
+        signer,
+        subject="alice",
+        root=alice["root_request_id"],
+        attempt=str(uuid.uuid4()),
+    )
+    assert retry["root_request_id"] == alice["root_request_id"]
+    assert retry["attempt_id"] != alice["attempt_id"]
+    assert retry["request_sha256"] == alice["request_sha256"]
+    admission = ingress_fn()
+    with pytest.raises(NativeTaskJoinRejected, match="signed actor"):
+        verify(
+            _sequence(event, ingress=admission),
+            ingress=admission, actor_override=retry,
+        )
+
+
+def test_client_supplied_legacy_unsigned_user_label_is_not_ingress_authority(
+    bundle,
+):
+    actor, _ingress_key, _observer, ingress_fn, _event, verify = bundle
+    admission = ingress_fn()
+    metadata = {**actor, "issuer": "X-User-from-client", "subject": "alice"}
+    with pytest.raises(NativeTaskJoinRejected, match="v2 request-scoped actor"):
+        verify([], ingress=admission, actor_override=metadata)
+
+
+def test_multiple_native_sample_events_allow_monotonic_bounded_counts(bundle):
+    _actor, _ingress_key, _observer, ingress_fn, event, verify = bundle
+    admission = ingress_fn()
+    events = [event("slot_assigned", 0, ingress=admission)]
+    for seq, value in enumerate([1, 3, 5], start=1):
+        events.append(
+            event("sampled_token", seq, ingress=admission,
+                  changes={"generated_tokens": value})
+        )
+    events.append(
+        event("final_result_enqueued", 4, ingress=admission,
+              changes={"generated_tokens": 5})
+    )
+    result = verify(events, ingress=admission)
+    assert result["signed_native_event_count"] == 5
+    assert result["native_terminal_claim_correlated"] is True
+    assert result["provider_execution_attested"] is False
+    assert result["first_token_proven"] is False
