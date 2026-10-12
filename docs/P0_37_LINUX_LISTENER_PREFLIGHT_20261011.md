@@ -256,3 +256,32 @@ provider-native request arrival/terminal telemetry joined to signed
 `root_request_id` and `attempt_id`. Only after proven independently,
 and after sustained host-pressure and real two-person IdP acceptance,
 should an explicitly bounded physical canary be considered.
+
+## Bounded xwing pressure follow-up (read-only, no canary)
+
+An additional **six-sample** check on xwing read only
+`statvfs("/")` and `/proc/pressure/io` every two seconds, from
+**2026-10-12 01:42:36Z through 01:42:46Z** (10-second span). No
+model endpoint, inference, disk hashes, writes or service controls
+were touched.
+
+All six samples reported approximately:
+
+- Root unprivileged available space **83.61 GiB**;
+- Root unprivileged used fraction **70.90%**;
+- Linux I/O PSI **full avg10 0.00%**;
+- Basic local host-pressure headroom criteria **true**.
+
+These six short samples suggest xwing was lightly loaded during that
+brief window, but prior independent snapshots measured
+`io.full.avg10=5.32%` (above the safety veto). Hence **host pressure is
+not yet approved for production or physical A/B inference**, and the
+admission output still explicitly states
+`physical_inference_permitted=false`. A future canary would require a
+sustained and independently reviewed capacity window, proof of actual
+native model residency and protected native request instrumentation,
+plus the previously documented real identity and trace-custody gates.
+
+The tool/source result remains read-only **process→file mmap evidence**,
+not a signed provider attempt witness. No GGUF contents or authentication
+keys were read or changed.
