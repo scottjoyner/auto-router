@@ -43,11 +43,11 @@ It matches the Linux TCP LISTEN socket inode against FD symlink targets `socket:
 
 ## Fresh Fleet Commander x1-370 observations
 
-At approximately 2026-10-12 01:10 UTC (October 11 EDT):
+At **2026-10-12 01:10:03 UTC** (October 11 EDT), on an exact fresh read-only rerun:
 
 - LM Studio **TCP port 1234 has one LISTEN socket** from kernel procfs.
 - **26 models in native /api/v1/models, 0 native resident models and 0 loaded instances**. A catalog entry or listening API is not a running model.
-- In Fleet Commander's isolated process namespace/security context, **1,017 PIDs scanned; 956 inaccessible FD directories; one process exceeded the FD scan budget**. The tool returned **`scan_state=partial_unattributed`**, **zero attributable socket-owning PIDs**, with explicit permission/budget unknown reasons. This is not proof the socket has no owner. The earlier ad-hoc scan likewise had substantial `/proc/<pid>/fd` access limits.
+- In Fleet Commander's isolated process namespace/security context, **1,045 PIDs scanned; 987 inaccessible FD directories; one process exceeded the FD scan budget**. The tool returned **`scan_state=partial_unattributed`**, **zero attributable socket-owning PIDs**, with explicit permission/budget unknown reasons. This is not proof the socket has no owner. The earlier ad-hoc scan likewise had substantial `/proc/<pid>/fd` access limits.
 - Independently, the existing *read-only* `p0_37_host_pressure_preflight.py --local --expect-host x1-370` assessed **`HEADROOM_ONLY`**, with approximately **198.26 GiB** root space available, **77.41%** root use, `io.full.avg10` approximately **0.07%**. This checks host headroom only; its own result still contains `physical_inference_permitted=false`, `operator_approved=false`.
 - Therefore x1-370 has capacity headroom under that diagnostic, **but no resident-model or independently attributable per-request process** in these snapshots. No inference canary is approved.
 
@@ -60,3 +60,15 @@ At approximately 2026-10-12 01:10 UTC (October 11 EDT):
 Reaching genuine provider execution attestation still requires *separately approved* least-privilege node observation with kernel/process visibility, independent pinned signing-key custody, exact model artifact and native resident-instance verification, independently correlated real provider **attempt arrival and terminal evidence**, external authority/failover fencing, encrypted owner-scoped trace custody, real independently authenticated humans and physical-client readback. A read-only preflight result, even `scan_state=complete`, never opens those gates.
 
 No production configuration, gateway signer, model, NAS data, port, permissions or identities were modified. This branch and its ancestors remain **DRAFT, unmerged, disabled/uninstalled**.
+
+
+## Test verification and branch custody
+
+Focused fixture gate at tested source SHA `a7748d91e09f1dcd3440832d839cc69b043d21fa`:
+**31 passed** on x1-370, Ruff PASS; subsequent docs/workflow additions
+left code/tests unchanged. Broader isolated regression at docs SHA
+`53d463b2f95d6182a643f805fcb82da7a3051162`: **600 passed,
+27 skipped, 1 known live-provider-registry drift test deselected**; Ruff PASS.
+PostgreSQL/AssistX cross-repository fixtures were not enabled in this run;
+therefore do not claim unfiltered full CI or a physical execution test passed.
+The separate focused hosted gate is tracked on [draft PR #62](https://github.com/scottjoyner/auto-router/pull/62).
