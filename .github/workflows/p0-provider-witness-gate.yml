@@ -1,0 +1,33 @@
+name: P0 signed node observer boundary
+
+on:
+  pull_request:
+    paths:
+      - "src/auto_router/provider_attempt_witness.py"
+      - "tests/test_p0_37_provider_attempt_witness.py"
+      - ".github/workflows/p0-provider-witness-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-observer:
+    name: Provider witness anti-spoofing contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated verifier dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Lint and compile verifier
+        run: |
+          ruff check src/auto_router/provider_attempt_witness.py tests/test_p0_37_provider_attempt_witness.py
+          python -m py_compile src/auto_router/provider_attempt_witness.py
+      - name: Deny forged and incomplete node evidence
+        run: |
+          python -m pytest -q --disable-warnings tests/test_p0_37_provider_attempt_witness.py
