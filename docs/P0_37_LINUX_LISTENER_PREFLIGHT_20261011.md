@@ -120,3 +120,80 @@ checking without touching Beelink or attempting to load a model:
 authorized read-only *authenticated* inventory and time-bounded host
 pressure sample might establish its native residency, but even those
 would not provide independently observed per-attempt process execution.
+
+
+## Follow-on: xwing targeted process and GGUF inode-to-mmap proof
+
+**Read-only observation, October 11, 2026 EDT:** xwing had a
+Tailscale-bound protected `llama-server` on TCP 18270. An
+unauthenticated `GET /v1/models` returned 401; no credentials were
+borrowed or bypassed, and native model inventory remains UNKNOWN.
+
+Rather than scanning thousands of unrelated process FD directories,
+the preflight now supports a **targeted PID**. This checks only the
+target PID's socket FD, process-start ticks and the listener socket inode,
+each across repeated observations. Optional `--model-mmap` requires
+`--target-pid` and uses **read-only bounded** `/proc/<pid>/cmdline`,
+`/proc/<pid>/maps` and `stat` for the single explicit `--model` GGUF
+path. It never prints the complete command line, flags containing
+credentials, or the full model path. It never opens or hashes GGUF
+content. Any ambiguous/unavailable model flag, malformed mapping, missing
+inode, changed file metadata or process restart stays UNKNOWN.
+
+Reproduce without installing anything on xwing (authorized SSH with
+strict host-key checking), from the development checkout:
+
+```sh
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  -o ConnectTimeout=5 xwing \
+  'python3 - --port 18270 --target-pid 931526 --model-mmap --json' \
+  < scripts/p0_37_linux_listener_preflight.py
+```
+
+**Last confirmed exact physical read-only tuple:**
+
+| Field | Value |
+| --- | --- |
+| Node | xwing |
+| Linux boot UUID | `92ba916a-6301-4a80-b234-f3a9f995a54e` |
+| Listener | Tailnet address / TCP `18270` |
+| Same listening socket inode observed twice | `71286212` |
+| Process PID / Linux stat start ticks | `931526` / `8211850` |
+| Targeted FD visibility | `targeted_attributed`; 1 PID inspected; 0 inaccessible; 0 overruns |
+| Model flag filename | `Ternary-Bonsai-2-27B-PTQ1_0.gguf` |
+| GGUF stat size | `5946648928` bytes |
+| GGUF device/inode | `103:3` / `79954950` |
+| Matching process `/proc/<pid>/maps` regions | **1** |
+| Model contents read or SHA256 measured | **NO** |
+| Native authenticated resident-instance attested | **NO** |
+| Independently observed native request/terminal | **NO** |
+| Inference permission / operator approval | **FALSE / FALSE** |
+
+This demonstrates **the specific OS process has the identified GGUF
+file mapped in its address space at the time of the observation**. It
+does **not** prove the complete GGUF bytes, native server model-handle
+identity, ability to generate, particular request execution, first token,
+terminal result, client delivery or trace custody.
+
+The process command line can contain other sensitive arguments. The
+bounded parser extracts only model-path flags and returns solely a
+sanitized model **filename** and inode/size metadata, never the full
+raw `argv` or service bearer. The file itself was not read. This
+does not establish process security attestation or a trusted independent
+observer signer.
+
+**New fixture evidence:** 55 focused tests PASS (up from 31), including
+targeted-only PID isolation, PID/socket reuse, process-mapped GGUF inode
+validation, missing or malformed model flag, stale/changing artifact,
+negative mmap results, redaction and fail-closed partial FD evidence.
+Ruff PASS. The latest hosted gate and wider regression are tracked on
+[draft PR #62](https://github.com/scottjoyner/auto-router/pull/62).
+
+**Next independently controlled physical gate:** an operator-authorized,
+authenticated native provider inventory (not a 401 or `/v1/models`
+catalog-only alias) and a provider-side request/terminal hook tied to
+the exact signed root+attempt, process boot/start and mapped artifact.
+Do **not** issue a canary, copy the Bonsai auth token, grant elevated
+procfs privileges, or hash the multi-GiB model merely to make
+this research fixture pass. The host-pressure screen must also remain
+consistently healthy before physical execution.
