@@ -343,3 +343,77 @@ def test_procfs_listener_table_bounded_even_with_repeated_records(tmp_path):
     assert outcome["observation_unknown_reasons"] == [
         "procfs record exceeds bounded read"
     ]
+
+
+
+def test_target_pid_attributed_without_scanning_unrelated_processes(tmp_path, monkeypatch):
+    proc = _proc(tmp_path)
+    other = proc / "1357"
+    other.mkdir()
+    # An unrelated inaccessible process must not affect targeted mode.
+    visited = []
+    real_scandir = preflight.os.scandir
+
+    def audit_scandir(path):
+        visited.append(str(path))
+        if str(path) == str(proc):
+            raise AssertionError("target PID must not enumerate unrelated processes")
+        return real_scandir(path)
+
+    monkeypatch.setattr(preflight.os, "scandir", audit_scandir)
+    result = preflight.collect(proc_root=proc, target_pid=1212)
+    assert result["scan_mode"] == "targeted_pid"
+    assert result["target_pid"] == 1212
+    assert result["scan_state"] == "targeted_attributed"
+    assert result["scanned_pid_count"] == 1
+    assert len(result["matching_processes"]) == 1
+    assert result["inaccessible_fd_directory_count"] == 0
+    assert str(proc / "1212" / "fd") in visited
+    assert str(proc) not in visited
+    assert result["physical_inference_permitted"] is False
+    assert result["provider_execution_attested"] is False
+
+
+def test_target_pid_not_socket_owner_is_not_global_no_owner(tmp_path):
+    proc = _proc(tmp_path)
+    other = proc / "1357"
+    other.mkdir()
+    (other / "fd").mkdir()
+    result = preflight.collect(proc_root=proc, target_pid=1357)
+    assert result["scan_mode"] == "targeted_pid"
+    assert result["scan_state"] == "target_not_attributed"
+    assert result["scanned_pid_count"] == 1
+    assert result["listener_socket_count"] == 1
+    assert result["matching_processes"] == []
+
+
+def test_target_missing_pid_is_unknown_not_no_owner(tmp_path):
+    proc = _proc(tmp_path)
+    result = preflight.collect(proc_root=proc, target_pid=445566)
+    assert result["scan_state"] == "partial_unattributed"
+    assert result["inaccessible_fd_directory_count"] == 1
+    assert "some_process_fd_directories_inaccessible" in result[
+        "observation_unknown_reasons"
+    ]
+
+
+@pytest.mark.parametrize("target", [0, -1, 2**31, True, "1234"])
+def test_unsafe_target_pid_rejected_without_procfs_io(tmp_path, target):
+    with pytest.raises(ValueError, match="target PID"):
+        preflight.collect(proc_root=tmp_path, target_pid=target)
+
+
+def test_targeted_pid_still_requires_same_process_start_and_live_socket(
+    tmp_path, monkeypatch,
+):
+    proc = _proc(tmp_path)
+    samples = iter([100, 101])
+    monkeypatch.setattr(
+        preflight, "_start_ticks", lambda _proc, _pid: next(samples)
+    )
+    result = preflight.collect(proc_root=proc, target_pid=1212)
+    assert result["scan_state"] == "partial_unattributed"
+    assert result["matching_processes"] == []
+    assert "process_or_listener_changed_during_snapshot" in result[
+        "observation_unknown_reasons"
+    ]
