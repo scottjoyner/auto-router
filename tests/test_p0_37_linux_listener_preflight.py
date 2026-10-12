@@ -2,12 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
-import io
-import json
-import os
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -23,7 +19,10 @@ def _proc(tmp_path: Path, *, listener=True, fd=True):
     (proc / "net").mkdir(parents=True)
     (proc / "sys/kernel/random").mkdir(parents=True)
     (proc / "sys/kernel/random/boot_id").write_text(str(uuid.uuid4()) + "\n")
-    header = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode"
+    header = (
+        "sl local_address rem_address st tx_queue rx_queue "
+        "tr tm->when retrnsmt uid timeout inode"
+    )
     rows = [header]
     if listener:
         rows.append(
@@ -155,7 +154,8 @@ def test_fd_budget_marks_scan_incomplete_even_if_socket_was_seen(tmp_path):
     (proc / "1212/fd/4").symlink_to("socket:[424242]")
     r = preflight.collect(proc_root=proc, max_fds_per_pid=1)
     assert r["scan_state"] == "partial_unattributed"
-    assert r["inaccessible_fd_directory_count"] == 1
+    assert r["fd_budget_incomplete_count"] == 1
+    assert r["inaccessible_fd_directory_count"] == 0
     assert r["provider_execution_attested"] is False
 
 
