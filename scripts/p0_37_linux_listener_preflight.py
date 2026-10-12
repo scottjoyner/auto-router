@@ -130,6 +130,7 @@ def _visible_fd_socket(
 
 def _model_mmap_metadata(
     proc_root: Path, pid: int, expected_start_ticks: int,
+    expected_boot_id: str,
 ) -> dict[str, Any]:
     """Bounded process-address-space inode evidence; NEVER read GGUF bytes.
 
@@ -137,7 +138,10 @@ def _model_mmap_metadata(
     model-file flags; never return raw argv, sensitive flags, or full paths.
     A mmap is process/file association, NOT native per-attempt execution.
     """
-    if _start_ticks(proc_root, pid) != expected_start_ticks:
+    if (
+        _start_ticks(proc_root, pid) != expected_start_ticks
+        or _boot_id(proc_root) != expected_boot_id
+    ):
         raise PreflightUnavailable("model process identity changed")
     raw = _bounded_read(proc_root / str(pid) / "cmdline", 32768)
     try:
@@ -193,6 +197,7 @@ def _model_mmap_metadata(
         raise PreflightUnavailable("model file changed during observation") from exc
     if (
         _start_ticks(proc_root, pid) != expected_start_ticks
+        or _boot_id(proc_root) != expected_boot_id
         or any(
             getattr(before, field) != getattr(after, field)
             for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
@@ -442,7 +447,8 @@ def collect(
         else:
             try:
                 result["process_model_mapping"] = _model_mmap_metadata(
-                    proc_root, target_pid, candidates[0]["process_start_ticks"]
+                    proc_root, target_pid, candidates[0]["process_start_ticks"],
+                    candidates[0]["boot_id"],
                 )
             except PreflightUnavailable as exc:
                 result["process_model_mapping"] = {
