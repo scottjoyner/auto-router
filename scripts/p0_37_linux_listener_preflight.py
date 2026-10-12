@@ -127,6 +127,15 @@ def _visible_fd_socket(
     return matched, "complete"
 
 
+def _no_duplicate_json_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise PreflightUnavailable("ambiguous native inventory JSON fields")
+        result[key] = value
+    return result
+
+
 def _native_inventory(port: int) -> dict[str, Any]:
     """One GET to 127.0.0.1 only. No redirects, POST, auth, or process mutation."""
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2.0)
@@ -141,7 +150,7 @@ def _native_inventory(port: int) -> dict[str, Any]:
         raw = reply.read(_MAX_HTTP_BODY + 1)
         if len(raw) > _MAX_HTTP_BODY:
             raise PreflightUnavailable("native provider inventory too large")
-        parsed = json.loads(raw)
+        parsed = json.loads(raw, object_pairs_hook=_no_duplicate_json_fields)
         if not isinstance(parsed, dict) or not isinstance(
             parsed.get("models"), list
         ):
@@ -152,6 +161,12 @@ def _native_inventory(port: int) -> dict[str, Any]:
         if not all(
             isinstance(row, dict)
             and isinstance(row.get("loaded_instances"), list)
+            and all(
+                isinstance(instance, dict)
+                and isinstance(instance.get("id"), str)
+                and 0 < len(instance["id"]) <= 256
+                for instance in row["loaded_instances"]
+            )
             for row in rows
         ):
             raise PreflightUnavailable("native loaded instance state unknown")
