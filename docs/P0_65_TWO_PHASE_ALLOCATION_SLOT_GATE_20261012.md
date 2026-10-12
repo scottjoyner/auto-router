@@ -142,20 +142,28 @@ python -m pytest -q --disable-warnings \
   -k 'not test_registry_matches_live_hosts'
 ```
 
-At implementation SHA `ae1e104f8ec32efff5efc9384929fc0ebc3f1c6f`
-on x1-370, focused tests **91 PASS** and Ruff **PASS**
-following the actual signed-v2 ASGI Alice/Bob and signed
-generic-batch-then-P0-rejection tests. The previously tested
-wider isolated suite at prior SHA `d73ccada96402f26c3aadb0e81867946ce1fa08e`
-was **849 PASS, 27 SKIP, 1 existing live-registry-drift test
-deselected**; the two new ASGI tests still require an updated wider
-exact-head run. New focused hosted CI is defined under
-`.github/workflows/p0-two-phase-native-evidence.yml` and its
-exact-head status must be confirmed before citing it as passed.
+At tested code/docs SHA `913d1200132a4e512ff00d2b74aa74c54b24caf2`
+on x1-370, Ruff **PASS**, **91 focused adversarial tests PASS**,
+and the wider isolated suite **851 PASS, 27 SKIP, one known
+live-registry-drift test deliberately deselected**. The focused
+fixture suite includes **actual signed-v2 ASGI middleware**
+Alice/Bob tests and signed-generic-batch-then-strict-P0-denial.
+This does not run full unfiltered PostgreSQL/AssistX integrations.
 
-C++ branch (header guards and native allocation lineage) remains
-branch-only; strict standalone C++17 raw header tests passed at
+Hosted exact-head evidence at the tested code SHA:
+- [P0 two-phase native allocation and slot contract — run 38233503361](https://github.com/scottjoyner/auto-router/actions/runs/38233503361):
+  **SUCCESS**, Ruff **PASS**, **91 tests PASS** with ephemeral keys.
+- [P0 shared-owner disposable PostgreSQL — run 38233503167](https://github.com/scottjoyner/auto-router/actions/runs/38233503167):
+  **SUCCESS**, Ruff **PASS**, **81 tests PASS**.
+
+C++ branch (header guard and native allocation lineage) remains
+**branch-only**, at
 `8b264bb02d1ef0e1bcc8cabc51b658c332680bee`.
+The three standalone strict C++17 fixture executables (raw-header
+negative guard, normal native instrumentation OFF and native
+fixture ON) all **PASS**; the normal CMake build does NOT define
+the native hook macro, and `server-http.cpp` does NOT include
+or activate the raw-header guard. It is **NOT a full server build**.
 There has been **NO** full server CMake build, runtime deployment,
 model inference, API credential extraction, xwing restart, or
 Beelink/NAS modification.
