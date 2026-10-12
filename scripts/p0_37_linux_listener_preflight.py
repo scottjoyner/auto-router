@@ -194,6 +194,7 @@ def collect(
     proc_root: Path = Path("/proc"),
     port: int = 1234,
     max_pids: int = 2500,
+    target_pid: int | None = None,
     max_fds_per_pid: int = 256,
     max_duration_seconds: float = 4.0,
     probe_native_inventory: bool = False,
@@ -210,6 +211,10 @@ def collect(
         raise ValueError("procfs observation budget invalid")
     if not 0.1 <= max_duration_seconds <= 10:
         raise ValueError("procfs scan duration outside bounds")
+    if target_pid is not None and (
+        type(target_pid) is not int or not 1 <= target_pid < 2**31
+    ):
+        raise ValueError("explicit target PID must be a positive Linux process ID")
 
     result = {
         "schema": "p0-37-linux-listener-readonly-preflight-v1",
@@ -219,6 +224,8 @@ def collect(
         "listener_state": "unknown",
         "boot_id": None,
         "scan_state": "unknown",
+        "scan_mode": "targeted_pid" if target_pid is not None else "all_visible_pids",
+        "target_pid": target_pid,
         "scanned_pid_count": 0,
         "inaccessible_fd_directory_count": 0,
         "fd_budget_incomplete_count": 0,
@@ -249,14 +256,19 @@ def collect(
     result["listener_state"] = "listening" if inodes else "not_listening"
     if inodes:
         try:
-            with os.scandir(proc_root) as entries:
-                pids = []
-                for entry in entries:
-                    if entry.name.isascii() and entry.name.isdecimal():
-                        pids.append(int(entry.name))
-                        if len(pids) > max_pids:
-                            unknown.append("procfs_pid_scan_budget_exceeded")
-                            break
+            if target_pid is not None:
+                # Least-privilege mode: inspect one PID and no unrelated FD
+                # directories. Never describe this as a complete fleet scan.
+                pids = [target_pid]
+            else:
+                with os.scandir(proc_root) as entries:
+                    pids = []
+                    for entry in entries:
+                        if entry.name.isascii() and entry.name.isdecimal():
+                            pids.append(int(entry.name))
+                            if len(pids) > max_pids:
+                                unknown.append("procfs_pid_scan_budget_exceeded")
+                                break
             for pid in sorted(pids[:max_pids]):
                 if time.monotonic() - started > max_duration_seconds:
                     unknown.append("procfs_scan_deadline_exceeded")
@@ -311,7 +323,10 @@ def collect(
         if result["fd_budget_incomplete_count"]:
             unknown.append("some_process_fd_lists_exceeded_budget")
     else:
-        result["scan_state"] = "complete"
+        result["scan_state"] = (
+            ("targeted_attributed" if result["matching_processes"] else "target_not_attributed")
+            if target_pid is not None else "complete"
+        )
     if probe_native_inventory:
         try:
             result["native_inventory"] = (
@@ -331,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Read-only local listener identity check; never authorizes inference"
     )
     parser.add_argument("--port", type=int, default=1234)
+    parser.add_argument("--target-pid", type=int, default=None)
     parser.add_argument("--max-pids", type=int, default=2500)
     parser.add_argument("--max-fds-per-pid", type=int, default=256)
     parser.add_argument("--max-duration", type=float, default=4.0)
@@ -343,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         outcome = collect(
             port=args.port, max_pids=args.max_pids,
+            target_pid=args.target_pid,
             max_fds_per_pid=args.max_fds_per_pid,
             max_duration_seconds=args.max_duration,
             probe_native_inventory=args.native_inventory,
