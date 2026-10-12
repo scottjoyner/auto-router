@@ -221,3 +221,67 @@ def test_same_root_signed_retry_still_only_potentially_one_native_task():
     assert result["expected_native_task_count"] == 1
     assert result["actual_native_task_count_observed"] is None
     assert result["native_execution_attested"] is False
+
+
+
+@pytest.mark.parametrize("extra", [
+    {"n": 2},
+    {"prompt": ["a", "b"]},
+    {"parallel_tool_calls": True},
+])
+def test_real_asgi_signed_request_can_pass_transport_but_fail_canary_shape(
+    tmp_path, monkeypatch, extra,
+):
+    """Signing authenticates exact request bytes; it cannot approve fanout."""
+    key = Ed25519PrivateKey.generate()
+    app, observed, _ledger = _app(
+        tmp_path, monkeypatch, key, require_body_digest=True,
+    )
+    body = {**_payload(), **extra}
+    signed = _delegation(key, body)
+    with TestClient(app) as client:
+        response = _post(client, signed, body)
+    # The ASGI fixture intentionally accepts generic chat payloads;
+    # the independent P0 canary gate must still refuse fanout.
+    assert response.status_code == 200
+    assert len(observed) == 1
+    with pytest.raises(SingleTaskShapeRejected):
+        qualify_strict_single_native_task_shape(
+            verified_actor=observed[0]["actor"],
+            original_request_body=body,
+        )
+
+
+def test_two_distinct_signed_asgi_fixture_users_only_qualify_shape(
+    tmp_path, monkeypatch,
+):
+    key = Ed25519PrivateKey.generate()
+    app, observed, _ledger = _app(
+        tmp_path, monkeypatch, key, require_body_digest=True,
+    )
+    body = _payload()
+    alice_signed = _delegation(key, body)
+    from test_p0_37_verified_user_delegation import _token
+    bob_signed = _token(
+        key, "bob", claims_changes={
+            "schema": "p0-user-shadow-v2",
+            "request_path": "/v1/chat/completions",
+            "request_sha256": delegated_body_digest(
+                "/v1/chat/completions", body,
+            ),
+        },
+    )
+    with TestClient(app) as client:
+        a = _post(client, alice_signed, body)
+        b = _post(client, bob_signed, body)
+    assert (a.status_code, b.status_code) == (200, 200)
+    alice, bob = (row["actor"] for row in observed)
+    assert alice["subject"] == "alice"
+    assert bob["subject"] == "bob"
+    assert alice["root_request_id"] != bob["root_request_id"]
+    for actor in (alice, bob):
+        verdict = qualify_strict_single_native_task_shape(
+            verified_actor=actor, original_request_body=body
+        )
+        assert verdict["actual_native_task_count_observed"] is None
+        assert verdict["physical_inference_permitted"] is False
