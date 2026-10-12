@@ -35,7 +35,7 @@ def _proc(tmp_path: Path, *, listener=True, fd=True):
     # stat field 22 = index 19 in array AFTER the closing ')'.
     (worker / "stat").write_text(
         "1212 (sample process (name)) S " + " ".join(
-            ["1"] * 19 + ["678901"] + ["1"] * 3
+            ["1"] * 18 + ["678901"] + ["1"] * 3
         ) + "\n"
     )
     if fd:
@@ -107,7 +107,7 @@ def test_multiple_matching_pids_stay_candidate_not_execution_proof(tmp_path):
     other = proc / "1313"
     other.mkdir()
     (other / "stat").write_text(
-        "1313 (other) S " + " ".join(["1"] * 19 + ["55555"] + ["1"] * 3)
+        "1313 (other) S " + " ".join(["1"] * 18 + ["55555"] + ["1"] * 3)
     )
     (other / "fd").mkdir()
     (other / "fd/1").symlink_to("socket:[424242]")
