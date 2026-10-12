@@ -15,8 +15,9 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 _MAX_NET_TABLE = 262144
 _MAX_STAT = 16384
@@ -103,8 +104,8 @@ def _start_ticks(proc_root: Path, pid: int) -> int:
 
 def _visible_fd_socket(
     proc_root: Path, pid: int, inodes: set[str], max_fds: int,
-) -> tuple[bool, bool]:
-    """Return (matched, complete_scan); no fd contents are ever read."""
+) -> tuple[bool, str]:
+    """Return (matched, completeness); no fd contents are ever read."""
     matched = False
     count = 0
     try:
@@ -112,18 +113,18 @@ def _visible_fd_socket(
             for entry in handles:
                 count += 1
                 if count > max_fds:
-                    return matched, False
+                    return matched, "fd_budget_exceeded"
                 try:
                     value = os.readlink(entry.path)
                 except OSError:
                     # A fd may close during enumeration. Never infer no match.
-                    return matched, False
+                    return matched, "fd_unreadable"
                 found = _SOCK_RE.fullmatch(value)
                 if found and found.group(1) in inodes:
                     matched = True
     except OSError:
-        return False, False
-    return matched, True
+        return False, "fd_unreadable"
+    return matched, "complete"
 
 
 def _native_inventory(port: int) -> dict[str, Any]:
@@ -164,7 +165,7 @@ def _native_inventory(port: int) -> dict[str, Any]:
                 len(row["loaded_instances"]) for row in rows
             ),
         }
-    except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+    except (OSError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError, http.client.HTTPException) as exc:
         raise PreflightUnavailable("native inventory request unavailable") from exc
     finally:
         conn.close()
@@ -243,10 +244,12 @@ def collect(
                     unknown.append("procfs_scan_deadline_exceeded")
                     break
                 result["scanned_pid_count"] += 1
-                matched, complete = _visible_fd_socket(
+                matched, fd_state = _visible_fd_socket(
                     proc_root, pid, inodes, max_fds_per_pid
                 )
-                if not complete:
+                if fd_state == "fd_budget_exceeded":
+                    result["fd_budget_incomplete_count"] += 1
+                elif fd_state != "complete":
                     result["inaccessible_fd_directory_count"] += 1
                 if matched:
                     try:
@@ -260,7 +263,7 @@ def collect(
                             "process_start_ticks": first,
                             "boot_id": boot_id,
                             "socket_inode_correlated": True,
-                            "fd_scan_complete": complete,
+                            "fd_scan_complete": fd_state == "complete",
                             "native_provider_attempt_witness": False,
                         })
                     except PreflightUnavailable as exc:
@@ -269,10 +272,13 @@ def collect(
             unknown.append("procfs_process_directory_unavailable")
     # Even a matched socket cannot establish that the associated process
     # executed one model request or has the expected resident GGUF.
-    if unknown or result["inaccessible_fd_directory_count"]:
+    if (unknown or result["inaccessible_fd_directory_count"]
+            or result["fd_budget_incomplete_count"]):
         result["scan_state"] = "partial_unattributed"
         if result["inaccessible_fd_directory_count"]:
             unknown.append("some_process_fd_directories_inaccessible")
+        if result["fd_budget_incomplete_count"]:
+            unknown.append("some_process_fd_lists_exceeded_budget")
     else:
         result["scan_state"] = "complete"
     if probe_native_inventory:
