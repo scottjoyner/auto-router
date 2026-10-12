@@ -98,7 +98,7 @@ def test_process_starttime_change_never_gives_stable_owner(tmp_path, monkeypatch
     monkeypatch.setattr(preflight, "_start_ticks", lambda _root, _pid: next(values))
     r = preflight.collect(proc_root=proc)
     assert not r["matching_processes"]
-    assert "process_changed_during_snapshot" in r["observation_unknown_reasons"]
+    assert "process_or_listener_changed_during_snapshot" in r["observation_unknown_reasons"]
     assert r["scan_state"] == "partial_unattributed"
 
 
@@ -306,3 +306,40 @@ def test_procfs_tcp_row_malformed_is_unknown_not_empty(tmp_path):
     assert r["listener_state"] == "unknown"
     assert r["scan_state"] == "unknown"
     assert r["provider_execution_attested"] is False
+
+
+
+def test_listener_socket_disappears_during_repeat_snapshot(tmp_path, monkeypatch):
+    proc = _proc(tmp_path)
+    seen = iter([{"424242"}, set()])
+    monkeypatch.setattr(
+        preflight, "_listener_inodes", lambda _root, _port: next(seen)
+    )
+    result = preflight.collect(proc_root=proc)
+    assert result["listener_state"] == "listening"
+    assert result["matching_processes"] == []
+    assert "process_or_listener_changed_during_snapshot" in result[
+        "observation_unknown_reasons"
+    ]
+    assert result["provider_execution_attested"] is False
+
+
+def test_fd_disappears_on_second_ownership_read(tmp_path, monkeypatch):
+    proc = _proc(tmp_path)
+    seen = iter([(True, "complete"), (False, "complete")])
+    monkeypatch.setattr(
+        preflight, "_visible_fd_socket", lambda *_args: next(seen)
+    )
+    result = preflight.collect(proc_root=proc)
+    assert result["matching_processes"] == []
+    assert result["scan_state"] == "partial_unattributed"
+
+
+def test_procfs_listener_table_bounded_even_with_repeated_records(tmp_path):
+    proc = _proc(tmp_path)
+    (proc / "net/tcp").write_bytes(b"x" * 262145)
+    outcome = preflight.collect(proc_root=proc)
+    assert outcome["listener_state"] == "unknown"
+    assert outcome["observation_unknown_reasons"] == [
+        "procfs record exceeds bounded read"
+    ]
