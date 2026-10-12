@@ -604,3 +604,29 @@ def test_partial_target_fd_proof_cannot_read_model_mmap(tmp_path, monkeypatch):
     }
     assert observed["model_artifact_sha256_measured"] is False
     assert observed["provider_execution_attested"] is False
+
+
+
+def test_linux_boot_identity_change_during_model_mmap_is_unknown(
+    tmp_path, monkeypatch,
+):
+    proc, _model = _model_mmap_proc(tmp_path)
+    original = preflight._boot_id
+    calls = [0]
+
+    def changing_boot(root):
+        calls[0] += 1
+        # One call in the outer listener snapshot, one on entering the
+        # model-map diagnostic, another after reading the mapped artifact.
+        return original(root) if calls[0] < 3 else str(uuid.uuid4())
+
+    monkeypatch.setattr(preflight, "_boot_id", changing_boot)
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+    )
+    assert result["scan_state"] == "targeted_attributed"
+    assert result["process_model_mapping"] == {
+        "state": "unknown",
+        "reason": "model process or file changed during observation",
+    }
+    assert result["provider_execution_attested"] is False
