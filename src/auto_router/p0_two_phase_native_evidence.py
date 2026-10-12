@@ -23,6 +23,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from auto_router.native_task_receipt_join import (
     NativeTaskJoinRejected as TwoPhaseRejected,
+)
+from auto_router.native_task_receipt_join import (
     _decode,
     _identifier,
     _observe_time,
