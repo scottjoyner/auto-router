@@ -369,7 +369,7 @@ def test_repeating_identical_valid_signed_bundle_still_lacks_cross_bundle_replay
 def test_signed_allocation_must_be_canonical_duplicate_free_and_bounded(fixture):
     _body, _actor, _wire, ak, _sk, allocate, _slot, evaluate = fixture
     payload, _sig = allocate()
-    duplicate = payload[:-1] + b',"native_task_id":43}'
+    duplicate = payload[:-1] + b',"schema":"p0-native-allocation-set-v2"}'
     with pytest.raises(NativeTaskJoinRejected, match="schema"):
         evaluate(allocation=_sign(
             {**json.loads(payload), "slot_id": 3}, ak, ALLOC_DOMAIN,
