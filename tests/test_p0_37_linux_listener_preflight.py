@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import uuid
 from pathlib import Path
 
@@ -417,3 +418,142 @@ def test_targeted_pid_still_requires_same_process_start_and_live_socket(
     assert "process_or_listener_changed_during_snapshot" in result[
         "observation_unknown_reasons"
     ]
+
+
+
+def _model_mmap_proc(tmp_path):
+    proc = _proc(tmp_path)
+    path = tmp_path / "Bonsai_27B.gguf"
+    path.write_bytes(b"GGUFsynthetic-header-not-a-real-model")
+    stat = path.stat()
+    dev = f"{os.major(stat.st_dev):02x}:{os.minor(stat.st_dev):02x}"
+    (proc / "1212/cmdline").write_bytes(
+        b"llama-server\x00--api-key\x00SHOULD_NEVER_BE_DISCLOSED\x00"
+        b"-m\x00" + os.fsencode(path) + b"\x00--port\x001234\x00"
+    )
+    (proc / "1212/maps").write_text(
+        f"7f000000-7f000fff r--p 00000000 {dev} {stat.st_ino} {path}\n"
+    )
+    return proc, path
+
+
+def test_targeted_mmap_stat_correlates_process_inodes_without_hashing_gguf(tmp_path):
+    proc, model = _model_mmap_proc(tmp_path)
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+    )
+    assert result["scan_state"] == "targeted_attributed"
+    meta = result["process_model_mapping"]
+    assert meta["state"] == "process_model_inode_mmap_correlated"
+    assert meta["model_filename"] == model.name
+    assert meta["file_inode"] == model.stat().st_ino
+    assert meta["mapped_region_count"] == 1
+    assert meta["file_size_bytes"] == model.stat().st_size
+    assert meta["gguf_contents_read"] is False
+    assert meta["full_artifact_sha256_verified"] is False
+    assert meta["native_resident_instance_verified"] is False
+    assert meta["native_attempt_execution_proven"] is False
+    assert result["provider_execution_attested"] is False
+    assert result["operator_approved"] is False
+    assert "SHOULD_NEVER_BE_DISCLOSED" not in str(result)
+    assert str(model.parent) not in str(result)
+
+
+def test_cmdline_model_mmap_opt_in_never_runs_by_default(tmp_path, monkeypatch):
+    proc, _model = _model_mmap_proc(tmp_path)
+    def fail(*_args):
+        raise AssertionError("model-file/argv/map inspection was not authorized")
+    monkeypatch.setattr(preflight, "_model_mmap_metadata", fail)
+    outcome = preflight.collect(proc_root=proc, target_pid=1212)
+    assert outcome["process_model_mapping"] == {"state": "not_requested"}
+
+
+def test_model_mmap_requires_targeted_pid_before_proc_reads(tmp_path):
+    with pytest.raises(ValueError, match="explicit target PID"):
+        preflight.collect(proc_root=tmp_path, inspect_model_mmap=True)
+
+
+@pytest.mark.parametrize("cmdline", [
+    b"llama-server\x00--port\x001234\x00",
+    b"llama-server\x00--model\x00foo.txt\x00",
+    b"llama-server\x00--model\x00foo.gguf\x00",
+    b"llama-server\x00--model\x00abc.gguf\x00--model=other.gguf\x00",
+    b"llama-server\x00--model\x00",
+    b"llama-server\x00--model\x00\xff\x00",
+])
+def test_nonabsolute_or_ambiguous_model_path_is_unknown(tmp_path, cmdline):
+    proc, _model = _model_mmap_proc(tmp_path)
+    (proc / "1212/cmdline").write_bytes(cmdline)
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True
+    )
+    assert result["scan_state"] == "targeted_attributed"
+    assert result["process_model_mapping"]["state"] == "unknown"
+    assert result["provider_execution_attested"] is False
+
+
+def test_model_inode_not_in_process_mmaps_stays_unknown(tmp_path):
+    proc, model = _model_mmap_proc(tmp_path)
+    (proc / "1212/maps").write_text(
+        f"7f000000-7f000fff r--p 00000000 00:00 9999 {model}\n"
+    )
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+    )
+    assert result["process_model_mapping"] == {
+        "state": "unknown", "reason": "model file mmap not observed"
+    }
+
+
+def test_malformed_or_oversized_proc_maps_rejected_without_model_proof(tmp_path):
+    proc, _model = _model_mmap_proc(tmp_path)
+    for body in (
+        b"this is not proc maps\n", b"x" * 2097153,
+    ):
+        (proc / "1212/maps").write_bytes(body)
+        result = preflight.collect(
+            proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+        )
+        assert result["process_model_mapping"]["state"] == "unknown"
+        assert result["model_artifact_sha256_measured"] is False
+
+
+def test_target_pid_must_be_attributed_before_model_mmap_read(tmp_path, monkeypatch):
+    proc, _model = _model_mmap_proc(tmp_path)
+    def fail(*_args):
+        raise AssertionError("model maps cannot be scanned for an unrelated PID")
+    monkeypatch.setattr(preflight, "_model_mmap_metadata", fail)
+    result = preflight.collect(
+        proc_root=proc, target_pid=1213, inspect_model_mmap=True
+    )
+    assert result["process_model_mapping"] == {
+        "state": "unknown",
+        "reason": "stable_target_pid_socket_attribution_required",
+    }
+
+
+def test_model_file_change_during_observation_fails_closed(tmp_path, monkeypatch):
+    proc, model = _model_mmap_proc(tmp_path)
+    original_stat = preflight.Path.stat
+    num_model_stats = [0]
+    def changed_on_second_stat(self, *args, **kwargs):
+        metadata = original_stat(self, *args, **kwargs)
+        if self == model:
+            num_model_stats[0] += 1
+            if num_model_stats[0] == 2:
+                class DifferentStat:
+                    def __getattr__(self, attr):
+                        if attr == "st_size":
+                            return metadata.st_size + 1
+                        return getattr(metadata, attr)
+                return DifferentStat()
+        return metadata
+    monkeypatch.setattr(preflight.Path, "stat", changed_on_second_stat)
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True
+    )
+    assert result["process_model_mapping"] == {
+        "state": "unknown",
+        "reason": "model process or file changed during observation",
+    }
+    assert num_model_stats[0] == 2
