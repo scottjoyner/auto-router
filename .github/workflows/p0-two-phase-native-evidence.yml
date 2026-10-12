@@ -1,0 +1,32 @@
+name: P0 two-phase native allocation and slot contract
+
+on:
+  pull_request:
+    paths:
+      - "src/auto_router/p0_two_phase_native_evidence.py"
+      - "tests/test_p0_37_two_phase_native_evidence.py"
+      - ".github/workflows/p0-two-phase-native-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  two-phase-contract:
+    name: Signed task allocation before independent slot claim
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated router fixture dependencies
+        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Lint and syntax guard
+        run: |
+          ruff check src/auto_router/p0_two_phase_native_evidence.py tests/test_p0_37_two_phase_native_evidence.py
+          python -m py_compile src/auto_router/p0_two_phase_native_evidence.py
+      - name: Adversarial two-phase receipt and actual ASGI actor tests
+        run: |
+          python -m pytest -q --disable-warnings tests/test_p0_37_two_phase_native_evidence.py
