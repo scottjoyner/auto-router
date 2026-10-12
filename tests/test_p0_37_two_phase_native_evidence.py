@@ -66,6 +66,8 @@ def fixture():
         "original_request_sha256": actor["request_sha256"],
         "wire_request_sha256": hashlib.sha256(wire).hexdigest(),
         "wire_request_bytes": len(wire),
+        "wire_method": "POST",
+        "wire_request_path": "/v1/chat/completions",
         "model_handle": actor["model_handle"],
         **common,
         "admission_nonce": str(uuid.uuid4()),
@@ -114,6 +116,8 @@ def fixture():
         slot_events=None,
         original_body=None,
         forwarded=None,
+        method="POST",
+        path="/v1/chat/completions",
         actor_override=None,
         alloc_pub=None,
         slot_pub=None,
@@ -126,6 +130,8 @@ def fixture():
             verified_actor=actor if actor_override is None else actor_override,
             original_request_body=body if original_body is None else original_body,
             forwarded_wire_body=wire if forwarded is None else forwarded,
+            forwarded_method=method,
+            forwarded_path=path,
             signed_allocation=allocate() if allocation is None else allocation,
             signed_slots=[] if slot_events is None else slot_events,
             allocation_public_key=(
@@ -145,7 +151,9 @@ def test_no_native_evidence_is_not_witnessed(fixture):
     body, actor, wire, a, s, _allocation, _slot, _verify = fixture
     result = verify_two_phase_single_task_fixture(
         verified_actor=actor, original_request_body=body,
-        forwarded_wire_body=wire, signed_allocation=None, signed_slots=[],
+        forwarded_wire_body=wire,
+        forwarded_method="POST", forwarded_path="/v1/chat/completions",
+        signed_allocation=None, signed_slots=[],
         allocation_public_key=a.public_key(), allocation_key_id=_AKID,
         slot_public_key=s.public_key(), slot_key_id=_SKID,
         expected_node_id=_NODE, now_ms=_NOW,
@@ -213,6 +221,8 @@ def test_distinct_crypto_public_keys_required(fixture):
     ("wire_request_sha256", "0" * 64),
     ("wire_request_bytes", -1),
     ("wire_request_bytes", True),
+    ("wire_method", "GET"),
+    ("wire_request_path", "/v1/completions"),
     ("model_handle", "auto/wrong"),
     ("node_id", "another-node"),
     ("runtime_instance_id", ""),
@@ -434,3 +444,34 @@ def test_original_shape_fails_before_parsing_any_native_signed_claim(
 def test_valid_fixture_does_not_return_subject_or_prompt_and_never_authorizes():
     # No process telemetry is emitted by this fixture verifier.
     assert verify_raw_native_auth_header_shape([])["authenticated_human"] is False
+
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/v1/chat/completions"),
+    ("POST", "/v1/completions"),
+    ("post", "/v1/chat/completions"),
+    ("POST", "/v1/chat/completions/"),
+])
+def test_native_wire_method_path_must_be_operator_pinned(
+    fixture, method, path,
+):
+    *_x, evaluate = fixture
+    with pytest.raises(NativeTaskJoinRejected, match="exact forwarded request"):
+        evaluate(method=method, path=path)
+
+
+def test_actual_signed_actor_missing_human_subject_never_produces_join(fixture):
+    _body, actor, _wire, _a, _s, _allocate, _slot, evaluate = fixture
+    for missing in ("tenant", "subject"):
+        partial = {k: v for k, v in actor.items() if k != missing}
+        with pytest.raises(NativeTaskJoinRejected):
+            evaluate(actor_override=partial)
+
+
+@pytest.mark.parametrize("value", [
+    "tab\tcontrol", "del\x7fcontrol", "\r\n", "zero\x00byte",
+])
+def test_header_value_control_characters_rejected_before_narrowing(value):
+    with pytest.raises(NativeTaskJoinRejected, match="unsafe raw HTTP"):
+        verify_raw_native_auth_header_shape([("X-P0-Signature", value)])
