@@ -13,6 +13,7 @@ import http.client
 import json
 import os
 import re
+import stat
 import time
 import uuid
 from collections.abc import Callable
@@ -127,6 +128,99 @@ def _visible_fd_socket(
     return matched, "complete"
 
 
+def _model_mmap_metadata(
+    proc_root: Path, pid: int, expected_start_ticks: int,
+) -> dict[str, Any]:
+    """Bounded process-address-space inode evidence; NEVER read GGUF bytes.
+
+    /proc/PID/cmdline can contain service credentials. Parse only explicit
+    model-file flags; never return raw argv, sensitive flags, or full paths.
+    A mmap is process/file association, NOT native per-attempt execution.
+    """
+    if _start_ticks(proc_root, pid) != expected_start_ticks:
+        raise PreflightUnavailable("model process identity changed")
+    raw = _bounded_read(proc_root / str(pid) / "cmdline", 32768)
+    try:
+        args = [item.decode("utf-8", "strict") for item in raw.split(b"\x00") if item]
+    except UnicodeDecodeError as exc:
+        raise PreflightUnavailable("model commandline encoding unavailable") from exc
+    if len(args) > 256:
+        raise PreflightUnavailable("process commandline exceeds argument budget")
+    model_paths: list[str] = []
+    for idx, arg in enumerate(args):
+        if arg in {"-m", "--model", "--model-path", "--model-file"}:
+            if idx + 1 >= len(args):
+                raise PreflightUnavailable("model flag has no path")
+            model_paths.append(args[idx + 1])
+        elif arg.startswith("--model="):
+            model_paths.append(arg.split("=", 1)[1])
+    if len(model_paths) != 1:
+        raise PreflightUnavailable("unique explicit GGUF model argument unavailable")
+    model = Path(model_paths[0])
+    if not model.is_absolute() or model.suffix.lower() != ".gguf":
+        raise PreflightUnavailable("absolute GGUF model path required")
+    if len(model_paths[0]) > 4096:
+        raise PreflightUnavailable("model path exceeds diagnostic bound")
+    try:
+        before = model.stat()
+    except OSError as exc:
+        raise PreflightUnavailable("model file stat unavailable") from exc
+    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+        raise PreflightUnavailable("model file is not a regular nonempty GGUF")
+    maps = _bounded_read(proc_root / str(pid) / "maps", 2097152)
+    try:
+        lines = maps.decode("utf-8", "strict").splitlines()
+    except UnicodeDecodeError as exc:
+        raise PreflightUnavailable("process maps encoding unavailable") from exc
+    if len(lines) > 32768:
+        raise PreflightUnavailable("process memory mapping exceeds line budget")
+    target_dev = (os.major(before.st_dev), os.minor(before.st_dev))
+    matching_mmaps = 0
+    for line in lines:
+        parts = line.split(maxsplit=5)
+        if len(parts) < 5:
+            raise PreflightUnavailable("malformed process memory map entry")
+        try:
+            major_minor = tuple(int(x, 16) for x in parts[3].split(":"))
+            inode = int(parts[4])
+        except ValueError as exc:
+            raise PreflightUnavailable("invalid process memory map inode") from exc
+        if (major_minor == target_dev and inode == before.st_ino):
+            matching_mmaps += 1
+    try:
+        after = model.stat()
+    except OSError as exc:
+        raise PreflightUnavailable("model file changed during observation") from exc
+    if (
+        _start_ticks(proc_root, pid) != expected_start_ticks
+        or any(
+            getattr(before, field) != getattr(after, field)
+            for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+        )
+    ):
+        raise PreflightUnavailable("model process or file changed during observation")
+    if not matching_mmaps:
+        raise PreflightUnavailable("model file mmap not observed")
+    # Do not emit model full paths, process command-line strings or secrets.
+    safe_name = model.name
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,160}", safe_name):
+        safe_name = "name_redacted"
+    return {
+        "state": "process_model_inode_mmap_correlated",
+        "model_filename": safe_name,
+        "file_size_bytes": before.st_size,
+        "file_device_major_minor": (
+            f"{target_dev[0]:x}:{target_dev[1]:x}"
+        ),
+        "file_inode": before.st_ino,
+        "mapped_region_count": matching_mmaps,
+        "gguf_contents_read": False,
+        "full_artifact_sha256_verified": False,
+        "native_resident_instance_verified": False,
+        "native_attempt_execution_proven": False,
+    }
+
+
 def _no_duplicate_json_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -198,6 +292,7 @@ def collect(
     max_fds_per_pid: int = 256,
     max_duration_seconds: float = 4.0,
     probe_native_inventory: bool = False,
+    inspect_model_mmap: bool = False,
     inventory_fetch: Callable[[int], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Capture one local snapshot; any partial scan stays UNKNOWN.
@@ -215,6 +310,8 @@ def collect(
         type(target_pid) is not int or not 1 <= target_pid < 2**31
     ):
         raise ValueError("explicit target PID must be a positive Linux process ID")
+    if inspect_model_mmap and target_pid is None:
+        raise ValueError("model mmap inspection requires an explicit target PID")
 
     result = {
         "schema": "p0-37-linux-listener-readonly-preflight-v1",
@@ -235,6 +332,7 @@ def collect(
             "inventory_state": "not_requested",
             "resident_model_count": None,
         },
+        "process_model_mapping": {"state": "not_requested"},
         "native_per_attempt_request_observed": False,
         "model_artifact_sha256_measured": False,
         "observer_signature_verified": False,
@@ -327,6 +425,22 @@ def collect(
             ("targeted_attributed" if result["matching_processes"] else "target_not_attributed")
             if target_pid is not None else "complete"
         )
+    if inspect_model_mmap:
+        candidates = result["matching_processes"]
+        if len(candidates) != 1 or candidates[0]["pid"] != target_pid:
+            result["process_model_mapping"] = {
+                "state": "unknown",
+                "reason": "stable_target_pid_socket_attribution_required",
+            }
+        else:
+            try:
+                result["process_model_mapping"] = _model_mmap_metadata(
+                    proc_root, target_pid, candidates[0]["process_start_ticks"]
+                )
+            except PreflightUnavailable as exc:
+                result["process_model_mapping"] = {
+                    "state": "unknown", "reason": str(exc)
+                }
     if probe_native_inventory:
         try:
             result["native_inventory"] = (
@@ -347,6 +461,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--port", type=int, default=1234)
     parser.add_argument("--target-pid", type=int, default=None)
+    parser.add_argument(
+        "--model-mmap", action="store_true",
+        help="Opt-in bounded read-only target PID commandline/Maps/GGUF stat correlation",
+    )
     parser.add_argument("--max-pids", type=int, default=2500)
     parser.add_argument("--max-fds-per-pid", type=int, default=256)
     parser.add_argument("--max-duration", type=float, default=4.0)
@@ -363,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
             max_fds_per_pid=args.max_fds_per_pid,
             max_duration_seconds=args.max_duration,
             probe_native_inventory=args.native_inventory,
+            inspect_model_mmap=args.model_mmap,
         )
     except ValueError as exc:
         print("PRECHECK_FAIL", str(exc))
