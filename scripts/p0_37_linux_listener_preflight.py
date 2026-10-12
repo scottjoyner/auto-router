@@ -105,9 +105,9 @@ def _start_ticks(proc_root: Path, pid: int) -> int:
 
 def _visible_fd_socket(
     proc_root: Path, pid: int, inodes: set[str], max_fds: int,
-) -> tuple[bool, str]:
-    """Return (matched, completeness); no fd contents are ever read."""
-    matched = False
+) -> tuple[set[str], str]:
+    """Return (matching socket inodes, completeness); never read FD contents."""
+    matched: set[str] = set()
     count = 0
     try:
         with os.scandir(proc_root / str(pid) / "fd") as handles:
@@ -122,9 +122,9 @@ def _visible_fd_socket(
                     return matched, "fd_unreadable"
                 found = _SOCK_RE.fullmatch(value)
                 if found and found.group(1) in inodes:
-                    matched = True
+                    matched.add(found.group(1))
     except OSError:
-        return False, "fd_unreadable"
+        return set(), "fd_unreadable"
     return matched, "complete"
 
 
@@ -391,10 +391,10 @@ def collect(
                         )
                         second = _start_ticks(proc_root, pid)
                         current_inodes = _listener_inodes(proc_root, port)
-                        if (
-                            first != second or not again
-                            or not inodes.intersection(current_inodes)
-                        ):
+                        stable_inodes = matched.intersection(
+                            again, inodes, current_inodes
+                        )
+                        if first != second or not stable_inodes:
                             unknown.append("process_or_listener_changed_during_snapshot")
                             continue
                         if again_fd_state != "complete":
@@ -403,8 +403,11 @@ def collect(
                             "pid": pid,
                             "process_start_ticks": first,
                             "boot_id": boot_id,
+                            "socket_inode": min(stable_inodes, key=int),
                             "socket_inode_correlated": True,
-                            "fd_scan_complete": fd_state == "complete",
+                            "fd_scan_complete": (
+                                fd_state == "complete" and again_fd_state == "complete"
+                            ),
                             "native_provider_attempt_witness": False,
                         })
                     except PreflightUnavailable as exc:
@@ -427,7 +430,11 @@ def collect(
         )
     if inspect_model_mmap:
         candidates = result["matching_processes"]
-        if len(candidates) != 1 or candidates[0]["pid"] != target_pid:
+        if (
+            result["scan_state"] != "targeted_attributed"
+            or len(candidates) != 1 or candidates[0]["pid"] != target_pid
+            or not candidates[0]["fd_scan_complete"]
+        ):
             result["process_model_mapping"] = {
                 "state": "unknown",
                 "reason": "stable_target_pid_socket_attribution_required",
