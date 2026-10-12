@@ -486,6 +486,7 @@ def test_real_signed_v2_asgi_alice_bob_into_synthetic_two_phase_join(
     from fastapi.testclient import TestClient
     from test_p0_37_request_digest import _delegation, _post
     from test_p0_37_verified_user_delegation import _app, _token
+
     from auto_router.user_delegation import delegated_body_digest
 
     body, _actor_unused, wire, ak, sk, allocate, slot, _evaluate = fixture
@@ -568,6 +569,7 @@ def test_actual_signed_v2_asgi_can_accept_batch_but_p0_two_phase_rejects(
     from fastapi.testclient import TestClient
     from test_p0_37_request_digest import _delegation, _post
     from test_p0_37_verified_user_delegation import _app
+
     from auto_router.p0_single_task_shape import SingleTaskShapeRejected
 
     body, _actor_unused, wire, ak, sk, allocate, slot, _evaluate = fixture
