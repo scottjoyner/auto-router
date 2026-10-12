@@ -133,11 +133,11 @@ Rather than scanning thousands of unrelated process FD directories,
 the preflight now supports a **targeted PID**. This checks only the
 target PID's socket FD, process-start ticks and the listener socket inode,
 each across repeated observations. Optional `--model-mmap` requires
-`--target-pid` and uses **read-only bounded** `/proc/<pid>/cmdline`,
-`/proc/<pid>/maps` and `stat` for the single explicit `--model` GGUF
-path. It never prints the complete command line, flags containing
-credentials, or the full model path. It never opens or hashes GGUF
-content. Any ambiguous/unavailable model flag, malformed mapping, missing
+`--target-pid` and uses **read-only bounded** `/proc/<pid>/maps`
+plus `stat` for the one uniquely mapped GGUF inode. It does **not** open
+`/proc/<pid>/cmdline` at all, because that record can contain a live
+`--api-key` value. It never prints complete mapped paths, opens GGUF
+content or computes a full artifact hash. Ambiguous model mappings, malformed map rows, missing
 inode, changed file metadata or process restart stays UNKNOWN.
 
 Reproduce without installing anything on xwing (authorized SSH with
@@ -175,16 +175,17 @@ does **not** prove the complete GGUF bytes, native server model-handle
 identity, ability to generate, particular request execution, first token,
 terminal result, client delivery or trace custody.
 
-The process command line can contain other sensitive arguments. The
-bounded parser extracts only model-path flags and returns solely a
-sanitized model **filename** and inode/size metadata, never the full
-raw `argv` or service bearer. The file itself was not read. This
+The process command line can contain sensitive server API keys. The
+current bounded model detector **never opens `/proc/<pid>/cmdline`**;
+it finds a uniquely mapped `.gguf` file by device and inode in
+`/proc/<pid>/maps`, then returns only its sanitized filename and
+stat size/inode. Neither GGUF content nor raw service arguments are read. This
 does not establish process security attestation or a trusted independent
 observer signer.
 
 **New fixture evidence:** 55 focused tests PASS (up from 31), including
 targeted-only PID isolation, PID/socket reuse, process-mapped GGUF inode
-validation, missing or malformed model flag, stale/changing artifact,
+validation, missing or ambiguous GGUF mappings, stale/changing artifact,
 negative mmap results, redaction and fail-closed partial FD evidence.
 Ruff PASS. The latest hosted gate and wider regression are tracked on
 [draft PR #62](https://github.com/scottjoyner/auto-router/pull/62).
@@ -208,8 +209,9 @@ The model-mapping extension was additionally hardened so that:
   GGUF file metadata and mapped-address-space observation;
 - Any incomplete target FD scan blocks mapping promotion;
 - File `st_dev`, `st_ino`, size and `st_mtime_ns` must remain stable;
-- No GGUF bytes or other command-line flags/tokens are read into
-  the output. The model flag alone determines the candidate path.
+- No process command line is opened, no GGUF bytes are read, and no
+  API-key arguments can enter the diagnostic. Candidate file identity
+  comes only from the uniquely mapped GGUF device/inode.
 
 **Exact x1-370 tested code SHA:**
 `04cc8e765c9c1a9259401688707c8039dcf0ba6b`.
@@ -285,3 +287,30 @@ plus the previously documented real identity and trace-custody gates.
 The tool/source result remains read-only **process→file mmap evidence**,
 not a signed provider attempt witness. No GGUF contents or authentication
 keys were read or changed.
+
+
+## Privacy correction: do not read server command-line credentials
+
+**Code commit `48caea3297e92e1577841e4232f0a25d581a7ea3`** replaces
+the initial `--model-mmap` implementation that inspected
+`/proc/<pid>/cmdline`. This was a privacy flaw because xwing's actual
+`llama-server` launch arguments include an `--api-key` option. The
+old tool did not print the value, but did read the underlying argv
+record into memory. Do not describe that historical behavior as
+"no credential read."
+
+The corrected tool reads **NO process command-line record** and
+instead confirms one uniquely mapped GGUF through bounded
+`/proc/<pid>/maps` device/inode entries and repeat file metadata
+checks. Multiple GGUF candidates, missing/inconsistent inode or
+deleted model paths fail closed. Its tests explicitly raise if a
+`cmdline` file is opened. x1-370 Ruff and **56 focused pytest tests
+passed**, and read-only xwing SSH still found the same PID/socket/GGUF
+tuple with `process_cmdline_read=false`, no inference or credential
+access. The now-inert C++ native-task hook is tracked separately at
+[llama.cpp fork draft PR #1](https://github.com/scottjoyner/llama.cpp/pull/1);
+an exact-source branch from the observed Prism Git commit exists but
+is **not deployed**.
+
+No change to existing NO-GO, host-pressure, identity, encrypted custody
+or physical-device acceptance requirements is implied.
