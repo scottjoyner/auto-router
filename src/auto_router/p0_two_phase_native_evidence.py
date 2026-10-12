@@ -46,7 +46,7 @@ _ALLOC_KEYS = frozenset({
     "schema", "issuer", "audience", "key_id", "gateway_issuer",
     "tenant", "subject", "root_request_id", "attempt_id",
     "request_path", "original_request_sha256", "wire_request_sha256",
-    "wire_request_bytes", "model_handle", "node_id", "runtime_instance_id",
+    "wire_request_bytes", "wire_method", "wire_request_path", "model_handle", "node_id", "runtime_instance_id",
     "boot_id", "pid", "process_start_ticks", "model_artifact_sha256",
     "admission_nonce", "observed_at_ms", "allocated_tasks",
 })
@@ -130,7 +130,7 @@ def verify_raw_native_auth_header_shape(
         if (
             not name or name.strip() != name
             or not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_\x60|~-]+", name)
-            or "\r" in value or "\n" in value or "\x00" in value
+            or any(ord(c) < 0x20 or ord(c) == 0x7f for c in value)
         ):
             raise TwoPhaseRejected("unsafe raw HTTP header framing")
         folded = name.lower()
@@ -155,6 +155,8 @@ def verify_two_phase_single_task_fixture(
     verified_actor: dict[str, Any],
     original_request_body: dict[str, Any],
     forwarded_wire_body: bytes,
+    forwarded_method: str,
+    forwarded_path: str,
     signed_allocation: tuple[bytes, bytes] | None,
     signed_slots: Sequence[tuple[bytes, bytes]],
     allocation_public_key: Ed25519PublicKey,
@@ -200,8 +202,15 @@ def verify_two_phase_single_task_fixture(
     if (
         not isinstance(forwarded_wire_body, bytes)
         or not 1 <= len(forwarded_wire_body) <= _MAX_WIRE_BYTES
+        or forwarded_method != "POST"
+        or forwarded_path != "/v1/chat/completions"
     ):
-        raise TwoPhaseRejected("bounded exact forwarded wire body required")
+        raise TwoPhaseRejected("bounded exact forwarded request required")
+    if not (
+        _identifier(verified_actor.get("tenant"))
+        and _identifier(verified_actor.get("subject"))
+    ):
+        raise TwoPhaseRejected("verified human tenant and subject required")
     if not (
         isinstance(allocation_public_key, Ed25519PublicKey)
         and isinstance(slot_public_key, Ed25519PublicKey)
@@ -244,6 +253,8 @@ def verify_two_phase_single_task_fixture(
         or not _observe_time(allocation["observed_at_ms"], now)
         or not _actor_bound(allocation, verified_actor)
         or not _sha(allocation["wire_request_sha256"])
+        or allocation["wire_method"] != forwarded_method
+        or allocation["wire_request_path"] != forwarded_path
         or type(allocation["wire_request_bytes"]) is not int
         or allocation["wire_request_bytes"] != len(forwarded_wire_body)
         or not hmac.compare_digest(
