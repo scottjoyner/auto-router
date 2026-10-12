@@ -197,3 +197,62 @@ Do **not** issue a canary, copy the Bonsai auth token, grant elevated
 procfs privileges, or hash the multi-GiB model merely to make
 this research fixture pass. The host-pressure screen must also remain
 consistently healthy before physical execution.
+
+## Latest process tuple, host test and operator gate (October 11 EDT)
+
+The model-mapping extension was additionally hardened so that:
+
+- A single targeted PID is inspected instead of unrelated PIDs;
+- The **same listening TCP socket inode** is required at both FD checks;
+- Linux `boot_id` and process start ticks are checked before/after
+  GGUF file metadata and mapped-address-space observation;
+- Any incomplete target FD scan blocks mapping promotion;
+- File `st_dev`, `st_ino`, size and `st_mtime_ns` must remain stable;
+- No GGUF bytes or other command-line flags/tokens are read into
+  the output. The model flag alone determines the candidate path.
+
+**Exact x1-370 tested code SHA:**
+`04cc8e765c9c1a9259401688707c8039dcf0ba6b`.
+Ruff **PASS**; local **56 focused tests PASS** and broader suite
+**625 passed, 27 skipped, 1 known live-registry-drift test deselected**.
+[Hosted Linux-process gate](https://github.com/scottjoyner/auto-router/actions/runs/38192599630)
+**SUCCESS (56 tests, Ruff)** and
+[hosted isolated PostgreSQL ownership gate](https://github.com/scottjoyner/auto-router/actions/runs/38192599639)
+**SUCCESS (81 tests, Ruff)** at that exact commit.
+
+A subsequent read-only strict-SSH execution ran the same committed
+script on xwing using:
+
+```sh
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  -o ConnectTimeout=5 xwing \
+  'python3 - --port 18270 --target-pid 931526 --model-mmap --json' \
+  < scripts/p0_37_linux_listener_preflight.py
+```
+
+**Unchanged independently observed tuple:** xwing boot
+`92ba916a-6301-4a80-b234-f3a9f995a54e`,
+PID `931526`, Linux start ticks `8211850`,
+socket inode `71286212`, GGUF name
+`Ternary-Bonsai-2-27B-PTQ1_0.gguf`,
+device `103:3`, inode `79954950`,
+size `5946648928`, one mapped region. The targeted scan
+returned `targeted_attributed` with one PID inspected and
+**zero permission/budget gaps**.
+
+**Authority limits remain absolute:** the GGUF full SHA256 was not
+computed; the native authenticated runtime instance is still UNKNOWN
+(unauthenticated endpoint returned 401); no native request ID, terminal
+event, trusted process observer key, real per-user auth session or
+client delivery receipt was observed. The documented xwing I/O-pressure
+variability additionally requires an approved sustained-capacity
+check before the node can be used for any physical model request.
+
+**Minimal next human/operator gate:** approve a protected, read-only
+native runtime/health/loaded-model query for this exact process on xwing,
+with server-side authenticated access kept in its own approved custody
+and no credential exposed through tests or logs. Separately design
+provider-native request arrival/terminal telemetry joined to signed
+`root_request_id` and `attempt_id`. Only after proven independently,
+and after sustained host-pressure and real two-person IdP acceptance,
+should an explicitly bounded physical canary be considered.
