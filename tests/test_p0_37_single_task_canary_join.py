@@ -4,16 +4,22 @@ All signing is with ephemeral fixture keys; no llama-server is contacted.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 
 import pytest
 from test_p0_37_native_task_receipt_join import (
+    _INGRESS_DOMAIN,
     _INGRESS_KID,
+    _JOIN_DOMAIN,
+    _NATIVE_DOMAIN,
     _NATIVE_KID,
     _NODE,
     _NOW_MS,
     _sequence,
-    bundle,
+    _sign,
+    bundle as _upstream_bundle_fixture,
 )
 from test_p0_37_request_digest import _payload
 from test_p0_37_single_task_shape import _actor
@@ -23,6 +29,13 @@ from auto_router.p0_single_task_canary_join import (
     correlate_strict_single_task_canary_fixture,
 )
 from auto_router.p0_single_task_shape import SingleTaskShapeRejected
+
+
+@pytest.fixture(name="bundle")
+def _native_bundle_fixture():
+    # Reuse the existing ephemeral two-signer fixture without requiring
+    # a shared global conftest or a live service.
+    return _upstream_bundle_fixture.__wrapped__()
 
 
 def _evaluate(bundle_data, body=None, actor_override=None, *,
@@ -140,13 +153,8 @@ def test_multiple_separately_signed_bundles_cannot_establish_unique_allocation(
     # independently controlled native allocation ledger can rule out
     # unobserved extra tasks/children and task-ID reuse.
     actor, ingress_key, native_key, ingress_fn, event_fn, _verify = bundle
-    from test_p0_37_native_task_receipt_join import (
-        _INGRESS_DOMAIN,
-        _sign,
-    )
-
     first = _evaluate(bundle)
-    base = __import__("json").loads(ingress_fn()[0])
+    base = json.loads(ingress_fn()[0])
     base["native_task_id"] = 999
     base["slot_id"] = 8
     base["admission_nonce"] = str(uuid.uuid4())
@@ -156,10 +164,6 @@ def test_multiple_separately_signed_bundles_cannot_establish_unique_allocation(
     )
     # Reconstruct the observer fixture with matching second task
     # identity; otherwise cryptographic verifier correctly rejects.
-    from test_p0_37_native_task_receipt_join import _JOIN_DOMAIN, _NATIVE_DOMAIN
-    import hashlib
-    import json
-
     ref = hashlib.sha256(_JOIN_DOMAIN + second_ingress[0]).hexdigest()
     events = []
     for raw, _sig in second_events:
