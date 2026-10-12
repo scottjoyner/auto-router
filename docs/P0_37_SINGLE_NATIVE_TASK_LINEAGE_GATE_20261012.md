@@ -173,3 +173,79 @@ The toolchain did NOT build or restart xwing's physical
 protected Bonsai API keys, restart the running xwing server, send
 inference traffic or alter pressured Beelink/NAS storage on this
 basis.**
+
+
+## Composed verification boundary: shape BEFORE signed native bundle
+
+An additional, **uninstalled** helper
+`src/auto_router/p0_single_task_canary_join.py` now composes
+`qualify_strict_single_native_task_shape` with the existing
+two-independent-Ed25519-signer receipt verifier from
+[draft #63](https://github.com/scottjoyner/auto-router/pull/63).
+Its execution ordering is deliberately strict:
+
+1. Verify that the actor is already the trusted signed-v2 ASGI
+   claim, and independently recheck the **original request body's**
+   signed digest plus narrowly allowed single-message shape;
+2. Only if the shape qualifies, verify the separate post-auth
+   ingress-signed native task receipt and separately signed native
+   lifecycle events;
+3. Return only *research correlation claims* and explicitly preserve
+   `actual_native_task_count_observed=null`,
+   `native_allocation_complete=false`,
+   `native_parent_child_lineage_proven=false`,
+   `cross_bundle_replay_verified=false`,
+   `provider_execution_attested=false`,
+   `physical_inference_permitted=false`, and
+   `response_delivered=unknown`.
+
+The integration test monkeypatches the native-join function with a
+sentinel for bad **but correctly signed** multi-task shapes. The
+sentinel must never execute: the request-shape boundary rejects
+`n`, prompt arrays, multi-message prompts, tool calls and
+caller metadata **before** checking any native signature. It also
+checks that Bob or a new retry attempt cannot use Alice's signed
+native-task bundle.
+
+**Adversarial incompleteness demonstration:** two independently
+signed, *internally consistent* synthetic native-task receipts can
+refer to **two different native task IDs under the same signed
+root/attempt**. The stateless verifier can correlate *both* in
+separate calls. Thus a valid signed bundle **does not prove that no
+additional native tasks were allocated**. Until an independently
+witnessed, durable, fenced *complete allocation set* exists, neither
+proof may state that all native work was observed.
+
+This is not a deployed native ingress signer or collector; fixture
+private signing keys exist ONLY in pytest. No C++ hook receives or
+verifies real signed gateway roots or attempts.
+
+### Latest exact results (October 12 EDT)
+
+At Auto-router source and workflow SHA
+`1c5808ddaf2f22ecdb776167e6b67938e341773d`:
+- x1-370 Ruff **PASS**; **67 focused signed-shape-plus-join tests PASS**;
+  broader isolated regression **760 passed, 27 skipped, 1 existing
+  live-registry-drift test deselected**.
+- [Focused hosted canary gate run 38230011613](https://github.com/scottjoyner/auto-router/actions/runs/38230011613)
+  **SUCCESS: 67 tests + Ruff** (all hosted fixture tests; no model).
+- [Inherited hosted PostgreSQL ownership run 38230011587](https://github.com/scottjoyner/auto-router/actions/runs/38230011587)
+  **SUCCESS: 81 tests + Ruff** against disposable PostgreSQL 17.
+  Deliberate negative permissions/bootstrap subtests emit PG error
+  text into CI logs while the assertions correctly pass.
+- The exact-source Prism C++ lineage experiment on x1-370 at
+  `b0503a585ce3a65d8a3ead35255f60b9507d2a4e` had
+  **two strict C++17 builds/executables PASS** (normal-OFF and
+  fixture-only ON), and a source check verified **exactly five**
+  inert emission call sites. No full Prism server binary
+  build was claimed or triggered.
+
+**Potential false-positive boundaries deliberately held open:**
+the signed single-chat JSON request is *only a shape candidate*;
+the native C++ `task_allocated` event occurs before queue posting;
+the native process is not executing signed real-user requests under
+the experimental code; no operational ingress signer/observer exists;
+no full GGUF or running-binary cryptographic attestation; no complete
+native task allocation-set receipt; no durable cross-bundle replay
+fencing; no real IdP, encrypted subject-scoped custody, safe-canary
+approval or device delivery. **P0 #37/#61 remain NO-GO.**
