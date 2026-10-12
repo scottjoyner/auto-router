@@ -6,7 +6,6 @@ terminal is not physical execution proof and never permits promotion.
 from __future__ import annotations
 
 import json
-import time
 import uuid
 
 import pytest
