@@ -19,6 +19,8 @@ from test_p0_37_native_task_receipt_join import (
     _NOW_MS,
     _sequence,
     _sign,
+)
+from test_p0_37_native_task_receipt_join import (
     bundle as _upstream_bundle_fixture,
 )
 from test_p0_37_request_digest import _payload
