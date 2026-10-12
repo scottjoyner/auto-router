@@ -241,11 +241,3 @@ def correlate_provider_observations(
     verdict["first_token_proven"] = False
     return verdict
 
-
-def sign_test_observation(
-    event: dict[str, Any],
-    private_key: Any,
-) -> tuple[bytes, bytes]:
-    """Only a fixture helper for disposable tests; NOT a node sensor."""
-    body = _canonical(event)
-    return body, private_key.sign(DOMAIN + body)
