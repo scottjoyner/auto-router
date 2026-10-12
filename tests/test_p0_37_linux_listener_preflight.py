@@ -450,6 +450,7 @@ def test_targeted_mmap_stat_correlates_process_inodes_without_hashing_gguf(tmp_p
     assert meta["file_inode"] == model.stat().st_ino
     assert meta["mapped_region_count"] == 1
     assert meta["file_size_bytes"] == model.stat().st_size
+    assert meta["process_cmdline_read"] is False
     assert meta["gguf_contents_read"] is False
     assert meta["full_artifact_sha256_verified"] is False
     assert meta["native_resident_instance_verified"] is False
@@ -460,7 +461,7 @@ def test_targeted_mmap_stat_correlates_process_inodes_without_hashing_gguf(tmp_p
     assert str(model.parent) not in str(result)
 
 
-def test_cmdline_model_mmap_opt_in_never_runs_by_default(tmp_path, monkeypatch):
+def test_model_mmap_opt_in_never_runs_by_default(tmp_path, monkeypatch):
     proc, _model = _model_mmap_proc(tmp_path)
     def fail(*_args):
         raise AssertionError("model-file/argv/map inspection was not authorized")
@@ -474,23 +475,70 @@ def test_model_mmap_requires_targeted_pid_before_proc_reads(tmp_path):
         preflight.collect(proc_root=tmp_path, inspect_model_mmap=True)
 
 
-@pytest.mark.parametrize("cmdline", [
-    b"llama-server\x00--port\x001234\x00",
-    b"llama-server\x00--model\x00foo.txt\x00",
-    b"llama-server\x00--model\x00foo.gguf\x00",
-    b"llama-server\x00--model\x00abc.gguf\x00--model=other.gguf\x00",
-    b"llama-server\x00--model\x00",
-    b"llama-server\x00--model\x00\xff\x00",
+@pytest.mark.parametrize("map_suffix", [
+    " (deleted)", ".txt", "not-a-model", " ",
 ])
-def test_nonabsolute_or_ambiguous_model_path_is_unknown(tmp_path, cmdline):
-    proc, _model = _model_mmap_proc(tmp_path)
-    (proc / "1212/cmdline").write_bytes(cmdline)
+def test_unusable_map_paths_are_unknown_without_cmdline_access(
+    tmp_path, map_suffix,
+):
+    proc, model = _model_mmap_proc(tmp_path)
+    meta = model.stat()
+    dev = f"{os.major(meta.st_dev):02x}:{os.minor(meta.st_dev):02x}"
+    (proc / "1212/maps").write_text(
+        f"7f000000-7f000fff r--p 00000000 {dev} {meta.st_ino} "
+        f"{model}{map_suffix}\n"
+    )
     result = preflight.collect(
         proc_root=proc, target_pid=1212, inspect_model_mmap=True
     )
     assert result["scan_state"] == "targeted_attributed"
     assert result["process_model_mapping"]["state"] == "unknown"
     assert result["provider_execution_attested"] is False
+
+
+def test_no_sensitive_proc_cmdline_read_even_with_api_key_present(
+    tmp_path, monkeypatch,
+):
+    proc, model = _model_mmap_proc(tmp_path)
+    original = preflight._bounded_read
+    inspected = []
+
+    def guarded_read(path, limit):
+        inspected.append(str(path))
+        if "cmdline" in str(path):
+            raise AssertionError("process command line contains API keys")
+        return original(path, limit)
+
+    monkeypatch.setattr(preflight, "_bounded_read", guarded_read)
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+    )
+    meta = result["process_model_mapping"]
+    assert meta["state"] == "process_model_inode_mmap_correlated"
+    assert meta["model_filename"] == model.name
+    assert meta["process_cmdline_read"] is False
+    assert all("cmdline" not in item for item in inspected)
+    assert "SHOULD_NEVER_BE_DISCLOSED" not in str(result)
+
+
+def test_multiple_distinct_mapped_gguf_candidates_fail_closed(tmp_path):
+    proc, first = _model_mmap_proc(tmp_path)
+    second = tmp_path / "another-model.gguf"
+    second.write_bytes(b"second synthetic fixture")
+    original = (proc / "1212/maps").read_text()
+    meta = second.stat()
+    dev = f"{os.major(meta.st_dev):02x}:{os.minor(meta.st_dev):02x}"
+    (proc / "1212/maps").write_text(
+        original +
+        f"7f001000-7f001fff r--p 00000000 {dev} {meta.st_ino} {second}\n"
+    )
+    result = preflight.collect(
+        proc_root=proc, target_pid=1212, inspect_model_mmap=True,
+    )
+    assert result["process_model_mapping"] == {
+        "state": "unknown", "reason": "unique mapped GGUF artifact unavailable",
+    }
+    assert first.stat().st_ino != second.stat().st_ino
 
 
 def test_model_inode_not_in_process_mmaps_stays_unknown(tmp_path):
@@ -502,7 +550,7 @@ def test_model_inode_not_in_process_mmaps_stays_unknown(tmp_path):
         proc_root=proc, target_pid=1212, inspect_model_mmap=True,
     )
     assert result["process_model_mapping"] == {
-        "state": "unknown", "reason": "model file mmap not observed"
+        "state": "unknown", "reason": "mapped GGUF inode differs from file stat"
     }
 
 
