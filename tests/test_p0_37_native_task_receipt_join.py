@@ -11,8 +11,9 @@ import uuid
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from test_p0_37_request_digest import _delegation, _payload
-from test_p0_37_verified_user_delegation import _KID, _token
+from fastapi.testclient import TestClient
+from test_p0_37_request_digest import _delegation, _payload, _post
+from test_p0_37_verified_user_delegation import _KID, _app, _token
 
 from auto_router.native_task_receipt_join import (
     _INGRESS_DOMAIN,
@@ -560,3 +561,63 @@ def test_multiple_native_sample_events_allow_monotonic_bounded_counts(bundle):
     assert result["native_terminal_claim_correlated"] is True
     assert result["provider_execution_attested"] is False
     assert result["first_token_proven"] is False
+
+
+
+def test_actual_authenticating_asgi_boundary_feeds_fixture_native_task_join(
+    tmp_path, monkeypatch, bundle,
+):
+    """Real router middleware authenticates two JWT test actors first.
+
+    Only the downstream ingress/task observer receipts are synthetic.
+    No provider socket, model process or production service is touched.
+    """
+    _fixture_actor, _a, _b, ingress_fn, event_fn, verify = bundle
+    human_signer = Ed25519PrivateKey.generate()
+    app, observed, _ledger = _app(
+        tmp_path, monkeypatch, human_signer, require_body_digest=True,
+    )
+    body = _payload()
+    alice_token = _delegation(human_signer, body)
+    bob_token = _token(
+        human_signer, "bob", claims_changes={
+            "schema": "p0-user-shadow-v2",
+            "request_path": "/v1/chat/completions",
+            "request_sha256": delegated_body_digest("/v1/chat/completions", body),
+        },
+    )
+    with TestClient(app) as client:
+        alice_resp = _post(client, alice_token, body)
+        bob_resp = _post(client, bob_token, body)
+        tampered = _post(client, alice_token, {
+            **body, "messages": [{"role": "user", "content": "tampered"}],
+        })
+    assert [alice_resp.status_code, bob_resp.status_code, tampered.status_code] == [
+        200, 200, 401,
+    ]
+    assert len(observed) == 2
+    alice_actor, bob_actor = (row["actor"] for row in observed)
+    assert alice_actor["subject"] == "alice"
+    assert bob_actor["subject"] == "bob"
+    assert alice_actor["request_sha256"] == bob_actor["request_sha256"]
+    assert alice_actor["root_request_id"] != bob_actor["root_request_id"]
+
+    admitted = json.loads(ingress_fn()[0])
+    for field in (
+        "root_request_id", "attempt_id", "request_path", "request_sha256",
+        "model_handle",
+    ):
+        admitted[field] = alice_actor[field]
+    signed_ingress = _sign(admitted, _a, _INGRESS_DOMAIN)
+    native_fixture_events = _sequence(event_fn, ingress=signed_ingress)
+    result = verify(
+        native_fixture_events, ingress=signed_ingress,
+        actor_override=alice_actor,
+    )
+    assert result["native_terminal_claim_correlated"] is True
+    assert result["provider_execution_attested"] is False
+    with pytest.raises(NativeTaskJoinRejected, match="signed actor"):
+        verify(
+            native_fixture_events, ingress=signed_ingress,
+            actor_override=bob_actor,
+        )
