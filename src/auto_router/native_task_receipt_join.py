@@ -222,7 +222,10 @@ def correlate_native_task_join(
     )
     if hmac.compare_digest(ingress_pk, native_pk):
         raise NativeTaskJoinRejected("native observer and ingress keys must differ")
-    if not isinstance(signed_native_events, (tuple, list)) or len(signed_native_events) > _MAX_EVENTS:
+    if (
+        not isinstance(signed_native_events, (tuple, list))
+        or len(signed_native_events) > _MAX_EVENTS
+    ):
         raise NativeTaskJoinRejected("native event sequence budget exceeded")
     now = int(time.time() * 1000) if now_ms is None else now_ms
     if type(now) is not int or now < 0:
