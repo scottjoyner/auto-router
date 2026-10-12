@@ -271,11 +271,24 @@ def collect(
                     result["inaccessible_fd_directory_count"] += 1
                 if matched:
                     try:
+                        # The initial FD scan may race PID reuse: reread its
+                        # process identity, confirm the socket a SECOND time,
+                        # then reread process start ticks. Only an unchanged
+                        # process AND still-listening socket is a candidate.
                         first = _start_ticks(proc_root, pid)
+                        again, again_fd_state = _visible_fd_socket(
+                            proc_root, pid, inodes, max_fds_per_pid
+                        )
                         second = _start_ticks(proc_root, pid)
-                        if first != second:
-                            unknown.append("process_changed_during_snapshot")
+                        current_inodes = _listener_inodes(proc_root, port)
+                        if (
+                            first != second or not again
+                            or not inodes.intersection(current_inodes)
+                        ):
+                            unknown.append("process_or_listener_changed_during_snapshot")
                             continue
+                        if again_fd_state != "complete":
+                            unknown.append("repeated_fd_snapshot_incomplete")
                         result["matching_processes"].append({
                             "pid": pid,
                             "process_start_ticks": first,
