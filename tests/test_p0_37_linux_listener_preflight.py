@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 MODULE = Path(__file__).resolve().parents[1] / "scripts/p0_37_linux_listener_preflight.py"
 spec = importlib.util.spec_from_file_location("p037_linux_listener_preflight", MODULE)
 preflight = importlib.util.module_from_spec(spec)
