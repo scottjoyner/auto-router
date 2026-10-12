@@ -72,7 +72,7 @@ def _sha(value: Any) -> bool:
 
 
 def _positive_int(value: Any, *, allow_zero: bool = False) -> bool:
-    return type(value) is int and (0 <= value if allow_zero else 0 < value) < 2**31
+    return type(value) is int and (\n        0 <= value < 2**31 if allow_zero else 0 < value < 2**31\n    )
 
 
 def _process_ok(value: dict[str, Any]) -> bool:
