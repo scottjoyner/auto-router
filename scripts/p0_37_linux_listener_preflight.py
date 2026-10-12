@@ -132,69 +132,67 @@ def _model_mmap_metadata(
     proc_root: Path, pid: int, expected_start_ticks: int,
     expected_boot_id: str,
 ) -> dict[str, Any]:
-    """Bounded process-address-space inode evidence; NEVER read GGUF bytes.
+    """Read-only /proc/PID/maps GGUF inode association; NEVER read argv.
 
-    /proc/PID/cmdline can contain service credentials. Parse only explicit
-    model-file flags; never return raw argv, sensitive flags, or full paths.
-    A mmap is process/file association, NOT native per-attempt execution.
+    The process command line may contain an API key and must NEVER be read
+    for this diagnostic. A mapped file is only a process/file association,
+    not cryptographic model integrity or a native provider execution event.
     """
     if (
         _start_ticks(proc_root, pid) != expected_start_ticks
         or _boot_id(proc_root) != expected_boot_id
     ):
         raise PreflightUnavailable("model process identity changed")
-    raw = _bounded_read(proc_root / str(pid) / "cmdline", 32768)
+    # Maps includes potentially sensitive unrelated file paths. Parse only
+    # entries with an absolute .gguf filename, never return raw maps/paths.
+    raw = _bounded_read(proc_root / str(pid) / "maps", 2097152)
     try:
-        args = [item.decode("utf-8", "strict") for item in raw.split(b"\x00") if item]
-    except UnicodeDecodeError as exc:
-        raise PreflightUnavailable("model commandline encoding unavailable") from exc
-    if len(args) > 256:
-        raise PreflightUnavailable("process commandline exceeds argument budget")
-    model_paths: list[str] = []
-    for idx, arg in enumerate(args):
-        if arg in {"-m", "--model", "--model-path", "--model-file"}:
-            if idx + 1 >= len(args):
-                raise PreflightUnavailable("model flag has no path")
-            model_paths.append(args[idx + 1])
-        elif arg.startswith("--model="):
-            model_paths.append(arg.split("=", 1)[1])
-    if len(model_paths) != 1:
-        raise PreflightUnavailable("unique explicit GGUF model argument unavailable")
-    model = Path(model_paths[0])
-    if not model.is_absolute() or model.suffix.lower() != ".gguf":
-        raise PreflightUnavailable("absolute GGUF model path required")
-    if len(model_paths[0]) > 4096:
-        raise PreflightUnavailable("model path exceeds diagnostic bound")
-    try:
-        before = model.stat()
-    except OSError as exc:
-        raise PreflightUnavailable("model file stat unavailable") from exc
-    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
-        raise PreflightUnavailable("model file is not a regular nonempty GGUF")
-    maps = _bounded_read(proc_root / str(pid) / "maps", 2097152)
-    try:
-        lines = maps.decode("utf-8", "strict").splitlines()
+        lines = raw.decode("utf-8", "strict").splitlines()
     except UnicodeDecodeError as exc:
         raise PreflightUnavailable("process maps encoding unavailable") from exc
     if len(lines) > 32768:
         raise PreflightUnavailable("process memory mapping exceeds line budget")
-    target_dev = (os.major(before.st_dev), os.minor(before.st_dev))
-    matching_mmaps = 0
+    candidates: dict[tuple[tuple[int, int], int, str], int] = {}
     for line in lines:
         parts = line.split(maxsplit=5)
         if len(parts) < 5:
             raise PreflightUnavailable("malformed process memory map entry")
         try:
-            major_minor = tuple(int(x, 16) for x in parts[3].split(":"))
+            split_dev = parts[3].split(":")
+            if len(split_dev) != 2:
+                raise ValueError("wrong device identity")
+            dev = tuple(int(x, 16) for x in split_dev)
             inode = int(parts[4])
+            if inode < 0 or any(n < 0 for n in dev):
+                raise ValueError("negative device/inode")
         except ValueError as exc:
             raise PreflightUnavailable("invalid process memory map inode") from exc
-        if (major_minor == target_dev and inode == before.st_ino):
-            matching_mmaps += 1
+        if len(parts) < 6:
+            continue
+        filename = parts[5]
+        # Refuse deleted/moved memory-mapped files: current bytes/path can
+        # no longer be tied to the original inode's stable identity.
+        if not filename.startswith("/") or not filename.lower().endswith(".gguf"):
+            continue
+        if len(filename) > 4096:
+            raise PreflightUnavailable("mapped model path exceeds bound")
+        if inode == 0:
+            raise PreflightUnavailable("mapped GGUF file has zero inode")
+        key = (dev, inode, filename)
+        candidates[key] = candidates.get(key, 0) + 1
+    if len(candidates) != 1:
+        raise PreflightUnavailable("unique mapped GGUF artifact unavailable")
+    ((dev, inode, filename), matching_mmaps), = candidates.items()
+    model = Path(filename)
     try:
+        before = model.stat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+            raise PreflightUnavailable("mapped GGUF is not a regular nonempty file")
+        if (os.major(before.st_dev), os.minor(before.st_dev)) != dev or before.st_ino != inode:
+            raise PreflightUnavailable("mapped GGUF inode differs from file stat")
         after = model.stat()
     except OSError as exc:
-        raise PreflightUnavailable("model file changed during observation") from exc
+        raise PreflightUnavailable("mapped GGUF file stat unavailable") from exc
     if (
         _start_ticks(proc_root, pid) != expected_start_ticks
         or _boot_id(proc_root) != expected_boot_id
@@ -204,9 +202,6 @@ def _model_mmap_metadata(
         )
     ):
         raise PreflightUnavailable("model process or file changed during observation")
-    if not matching_mmaps:
-        raise PreflightUnavailable("model file mmap not observed")
-    # Do not emit model full paths, process command-line strings or secrets.
     safe_name = model.name
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,160}", safe_name):
         safe_name = "name_redacted"
@@ -214,11 +209,10 @@ def _model_mmap_metadata(
         "state": "process_model_inode_mmap_correlated",
         "model_filename": safe_name,
         "file_size_bytes": before.st_size,
-        "file_device_major_minor": (
-            f"{target_dev[0]:x}:{target_dev[1]:x}"
-        ),
-        "file_inode": before.st_ino,
+        "file_device_major_minor": f"{dev[0]:x}:{dev[1]:x}",
+        "file_inode": inode,
         "mapped_region_count": matching_mmaps,
+        "process_cmdline_read": False,
         "gguf_contents_read": False,
         "full_artifact_sha256_verified": False,
         "native_resident_instance_verified": False,
@@ -476,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-pid", type=int, default=None)
     parser.add_argument(
         "--model-mmap", action="store_true",
-        help="Opt-in bounded read-only target PID commandline/Maps/GGUF stat correlation",
+        help="Opt-in bounded read-only target PID /proc/maps GGUF inode and file stat check",
     )
     parser.add_argument("--max-pids", type=int, default=2500)
     parser.add_argument("--max-fds-per-pid", type=int, default=256)
