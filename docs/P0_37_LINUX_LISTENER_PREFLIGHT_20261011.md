@@ -92,3 +92,31 @@ At PR code/docs head `a4940e9ea8a5298cfbae1338cfcf39e67425fb1a`:
 - [Read-only Linux preflight GitHub Actions](https://github.com/scottjoyner/auto-router/actions/runs/38190863793) **SUCCESS**, Ruff PASS, **31 tests PASS**. All tests use fake procfs and mocked loopback native inventory; no physical model was tested.
 - [Inherited PostgreSQL owner gate](https://github.com/scottjoyner/auto-router/actions/runs/38190863750) **SUCCESS**, Ruff PASS, **81 tests PASS** against isolated CI PostgreSQL. Deliberate restricted-role and repeat-bootstrap negative tests can log database permission/schema errors while the assertions pass.
 - Broad earlier local fixture-mode regression: **600 passed, 27 skipped, 1 known live-registry-drift test deselected**. Do not claim unfiltered full-suite CI is green.
+
+
+## Read-only xwing candidate inspection
+
+xwing's previously configured RTX 3090/local-provider role made it worth
+checking without touching Beelink or attempting to load a model:
+
+- Strict-host-key SSH returned exact hostname `xwing`, root
+  **83.65 GiB free / 70.88% used**. Two short independent host-pressure
+  snapshots gave `io.full.avg10` **5.32%** (policy `NO_GO`) and
+  **1.31%** (`HEADROOM_ONLY`). This variability means *one healthy
+  instantaneous reading cannot approve sustained model inference*.
+- No listener was observed on loopback port 1234; no resident LM Studio
+  model was therefore inferred from that unavailable native endpoint.
+- An independent configured Bonsai service was listening on
+  **Tailscale-bound port 18270**, **not loopback**. A bounded,
+  unauthenticated **GET /v1/models** to the observed Tailscale listener
+  returned **HTTP 401**, as it should for protected inventory. The
+  response was not treated as an empty model catalog or evidence that
+  a model was or was not resident.
+- No API credentials were displayed, copied or bypassed, and no
+  model generation, trace logging, network scan or host configuration
+  change was attempted.
+
+**xwing release state: UNKNOWN / NOT APPROVED**. A future, separately
+authorized read-only *authenticated* inventory and time-bounded host
+pressure sample might establish its native residency, but even those
+would not provide independently observed per-attempt process execution.
