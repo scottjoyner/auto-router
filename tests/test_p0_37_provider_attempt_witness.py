@@ -17,7 +17,6 @@ from auto_router.provider_attempt_witness import (
     DOMAIN,
     ProviderWitnessRejected,
     correlate_provider_observations,
-    sign_test_observation,
 )
 from auto_router.user_delegation import verify_user_delegation
 
@@ -25,6 +24,14 @@ _NOW = 1770675200000
 _NODE = "x1-370-test-node"
 _MODEL_SHA = "a" * 64
 _KEY_ID = "node-observer-fixture-1"
+
+
+def sign_test_observation(event, fixture_private_key):
+    """Signing exists ONLY in fixture tests; production verifier only reads."""
+    raw = json.dumps(
+        event, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("ascii")
+    return raw, fixture_private_key.sign(DOMAIN + raw)
 
 
 @pytest.fixture
