@@ -1,5 +1,11 @@
 # Auto-Router Documentation
 
+## Release candidate evidence
+
+- [2026-10-14 Auto-Router release packet](RELEASE_CANDIDATE_EVIDENCE_20261014.md) — actual vs configured providers, signed-native provenance and P0 gates. **UNRELEASED / NO-GO**.
+
+- [Unreleased documentation changelog](CHANGELOG.md) — draft-only state, blockers and migration/rollback notes.
+
 ## Core design
 
 - [`HIGH_LEVEL_DESIGN.md`](HIGH_LEVEL_DESIGN.md) — system context, strict-offline boundary, AssistX authority, major components, request/projection/reconciliation flows, security, and failure strategy.
