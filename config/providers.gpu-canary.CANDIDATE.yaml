@@ -1,0 +1,73 @@
+# GPU provider candidates; intentionally separate from live providers.yaml.
+# NOT FOR DEPLOYMENT: verified model IDs and runtime-bound API-key env values
+# are required before any production router admission/ownership review.
+providers:
+  - name: llama-xwing-rocm-canary
+    node_id: xwing
+    type: openai_compatible
+    enabled: false
+    runtime_instance_id: xwing-rocm0-minicpm5-1b-q4k
+    base_url: http://100.108.99.47:18302/v1
+    api_key_env: FLEET_XWING_ROCM_CANARY_API_KEY
+    priority: 30
+    quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    allow_agent_runtime: false
+    allow_code_execution: false
+    models: []  # populate only from authenticated /v1/models evidence
+  - name: llama-joyner-r9700-canary
+    node_id: joyner
+    type: openai_compatible
+    enabled: false
+    runtime_instance_id: joyner-gfx1201-minicpm5-1b-q4k
+    base_url: http://100.83.215.83:18320/v1
+    api_key_env: FLEET_R9700_CANARY_API_KEY
+    priority: 30
+    quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    allow_agent_runtime: false
+    allow_code_execution: false
+    models: []  # populate only from authenticated /v1/models evidence
+  - name: llama-joyner-r9700-toolcall
+    node_id: joyner
+    type: openai_compatible
+    enabled: false
+    runtime_instance_id: joyner-gfx1201-toolcall-v5-3b-f16
+    base_url: http://100.83.215.83:18321/v1
+    api_key_env: FLEET_R9700_TOOLCALL_API_KEY
+    priority: 40
+    quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    allow_agent_runtime: false
+    allow_code_execution: false
+    models:
+      - alias: local/joyner-toolcall-v5-3b
+        provider_model: toolcall-v5-3b-combined-r2-f16
+        capabilities: [chat, streaming, code, json, local_only, tool_use]
+        context_window: 4096
+  - name: llama-xwing-bonsai2-vulkan-canary
+    node_id: xwing
+    type: openai_compatible
+    enabled: false
+    runtime_instance_id: xwing-gfx1151-ternary-bonsai2-27b-ptq1-vulkan
+    base_url: http://100.108.99.47:18271/v1
+    api_key_env: FLEET_XWING_BONSAI2_VULKAN_API_KEY
+    priority: 40
+    quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    allow_agent_runtime: false
+    allow_code_execution: false
+    models:
+      - alias: local/xwing-ternary-bonsai2-27b-gpu
+        provider_model: ternary-bonsai-2-27b-gpu
+        quantization: PTQ1_0
+        capabilities: [chat, streaming, json, local_only, reasoning]
+        context_window: 4096
