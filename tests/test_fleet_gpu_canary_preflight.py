@@ -113,3 +113,20 @@ def test_authenticated_probe_restricts_secret_to_private_tailnet_endpoints():
             mod.validate_private_url(url)
     with pytest.raises(RuntimeError, match="refusing_redirect"):
         mod.DenyRedirects().redirect_request(None, None, 302, "moved", {}, "http://8.8.8.8")
+
+
+def test_router_network_check_proves_no_auth_secret_or_admission():
+    mod = load("gpu_router_network_probe", "fleet_gpu_router_network_probe.py")
+    with patch.object(mod, "get_http_code", side_effect=lambda url, timeout=3.0: 200 if url.endswith("/health") else 401):
+        result = mod.probe(timeout=0.1)
+    assert result["ready_listeners"] == 4
+    assert result["automatic_dispatch"] == "disabled"
+    assert all(not row["approved_for_auto_dispatch"] for row in result["endpoints"])
+
+
+def test_router_network_check_rejects_accidental_auth_bypass():
+    mod = load("gpu_router_network_probe_bad", "fleet_gpu_router_network_probe.py")
+    with patch.object(mod, "get_http_code", return_value=200):
+        result = mod.probe(timeout=0.1)
+    assert result["ready_listeners"] == 0
+    assert all(not row["network_ready_and_auth_guarded"] for row in result["endpoints"])
