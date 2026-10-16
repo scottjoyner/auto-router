@@ -189,12 +189,64 @@ class _RuntimeGate:
         }
 
 
-class RuntimeAdmissionController:
-    """Per-physical-runtime admission control for the strict-offline entrypoint."""
+class PhysicalGpuAdmissionPool:
+    """Physical-card capacity survives signed projection generation swaps."""
 
-    def __init__(self, providers: Iterable[ProviderConfig]) -> None:
+    def __init__(self) -> None:
+        self.gates: dict[str, _RuntimeGate] = {}
+
+    def gate(self, group_id: str, slots: int) -> _RuntimeGate:
+        config = RuntimeAdmissionConfig(
+            runtime_instance_id=f"physical-gpu:{group_id}",
+            parallel_slots=slots,
+            queue_limit=0,
+            queue_timeout_seconds=0,
+        )
+        existing = self.gates.get(group_id)
+        if existing is not None and existing.config != config:
+            raise RuntimeError(f"conflicting physical GPU capacity for {group_id}")
+        return self.gates.setdefault(group_id, _RuntimeGate(config))
+
+
+class _CompositeAdmissionLease:
+    """Return both per-runtime and physical-card capacity on every exit."""
+
+    def __init__(
+        self, runtime: RuntimeAdmissionLease, gpu: RuntimeAdmissionLease,
+    ) -> None:
+        self.runtime = runtime
+        self.gpu = gpu
+        self._released = False
+
+    async def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            await self.gpu.release()
+        finally:
+            await self.runtime.release()
+
+    async def __aenter__(self) -> _CompositeAdmissionLease:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.release()
+
+
+class RuntimeAdmissionController:
+    """Per-runtime admission plus optional shared physical GPU gates."""
+
+    def __init__(
+        self,
+        providers: Iterable[ProviderConfig],
+        *,
+        gpu_pool: PhysicalGpuAdmissionPool | None = None,
+    ) -> None:
         self._gates: dict[str, _RuntimeGate] = {}
         self._provider_runtime_keys: dict[str, str] = {}
+        self._provider_gpu_keys: dict[str, str] = {}
+        self.gpu_pool = gpu_pool if gpu_pool is not None else PhysicalGpuAdmissionPool()
 
         for provider in providers:
             runtime_id = str(provider.runtime_instance_id or "").strip()
@@ -216,6 +268,10 @@ class RuntimeAdmissionController:
                 )
             self._gates.setdefault(runtime_id, _RuntimeGate(config))
             self._provider_runtime_keys[provider.name] = runtime_id
+            physical_group = str(provider.gpu_resource_group_id or "").strip()
+            if physical_group:
+                self.gpu_pool.gate(physical_group, int(provider.gpu_parallel_slots))
+                self._provider_gpu_keys[provider.name] = physical_group
 
     def runtime_key(self, candidate: ProviderCandidate) -> str:
         return self._provider_runtime_keys.get(
@@ -227,7 +283,7 @@ class RuntimeAdmissionController:
         self,
         candidate: ProviderCandidate,
         priority: Priority = Priority.interactive,
-    ) -> RuntimeAdmissionLease:
+    ) -> RuntimeAdmissionLease | _CompositeAdmissionLease:
         runtime_key = self.runtime_key(candidate)
         gate = self._gates.get(runtime_key)
         if gate is None:
@@ -236,7 +292,24 @@ class RuntimeAdmissionController:
                 status_code=503,
                 retryable=True,
             )
-        return await gate.acquire(priority)
+        runtime_lease = await gate.acquire(priority)
+        physical_group = self._provider_gpu_keys.get(candidate.provider.name)
+        if physical_group is None:
+            return runtime_lease
+        try:
+            # GPU group gates are zero-queue: a busy card rejects immediately,
+            # and the runtime slot is always released on failure/cancellation.
+            gpu_lease = await self.gpu_pool.gates[physical_group].acquire(priority)
+        except BaseException:
+            await runtime_lease.release()
+            raise
+        return _CompositeAdmissionLease(runtime_lease, gpu_lease)
 
     def snapshot(self) -> list[dict[str, Any]]:
-        return [self._gates[key].snapshot() for key in sorted(self._gates)]
+        runtimes = [self._gates[key].snapshot() for key in sorted(self._gates)]
+        groups = sorted(set(self._provider_gpu_keys.values()))
+        gpu = [
+            {**self.gpu_pool.gates[key].snapshot(), "resource_kind": "physical_gpu"}
+            for key in groups
+        ]
+        return runtimes + gpu

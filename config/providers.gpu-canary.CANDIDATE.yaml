@@ -3,6 +3,8 @@
 # are required before any production router admission/ownership review.
 providers:
   - name: llama-xwing-rocm-canary
+    gpu_resource_group_id: xwing:1002-1586:gfx1151
+    gpu_parallel_slots: 1
     node_id: xwing
     type: openai_compatible
     enabled: false
@@ -18,6 +20,8 @@ providers:
     allow_code_execution: false
     models: []  # populate only from authenticated /v1/models evidence
   - name: llama-joyner-r9700-canary
+    gpu_resource_group_id: joyner:1002-7551:gfx1201
+    gpu_parallel_slots: 1
     node_id: joyner
     type: openai_compatible
     enabled: false
@@ -33,6 +37,8 @@ providers:
     allow_code_execution: false
     models: []  # populate only from authenticated /v1/models evidence
   - name: llama-joyner-r9700-toolcall
+    gpu_resource_group_id: joyner:1002-7551:gfx1201
+    gpu_parallel_slots: 1
     node_id: joyner
     type: openai_compatible
     enabled: false
@@ -52,6 +58,8 @@ providers:
         capabilities: [chat, streaming, code, json, local_only, tool_use]
         context_window: 4096
   - name: llama-xwing-bonsai2-vulkan-canary
+    gpu_resource_group_id: xwing:1002-1586:gfx1151
+    gpu_parallel_slots: 1
     node_id: xwing
     type: openai_compatible
     enabled: false

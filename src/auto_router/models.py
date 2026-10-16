@@ -53,6 +53,8 @@ class ProviderConfig(BaseModel):
     type: str
     node_id: str | None = None
     runtime_instance_id: str | None = None
+    gpu_resource_group_id: str | None = None
+    gpu_parallel_slots: int = Field(default=0, ge=0)
     runtime_kind: str | None = None
     runtime_version: str | None = None
     headless: bool | None = None
