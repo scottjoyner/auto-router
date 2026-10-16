@@ -177,17 +177,31 @@ def _model_id(m: dict) -> str:
     ).strip()
 
 
-def _is_loaded(m: dict) -> bool:
-    """A model is resident iff LM Studio reports loaded instances. The top-level
-    ``loaded`` boolean is unreliable; the authoritative signal is the
-    ``raw.loaded_instances`` list (non-empty = actually running on the endpoint)."""
+def _is_loaded(m: dict) -> bool | None:
+    """Residency of a model record.
+
+    Returns True/False when residency was actually measured, and **None when it
+    could not be determined**.
+
+    A bare llama-server lane has no LM Studio native API, so its OpenAI-compatible
+    model listing carries no residency field. Coercing that absence to False
+    reports a working lane as idle. None means unknown and must not be treated as
+    a measurement.
+
+    For LM Studio, residency is the ``raw.loaded_instances`` list (non-empty =
+    actually running); the top-level ``loaded`` boolean is unreliable."""
     if not isinstance(m, dict):
         return False
+    if m.get("residency") == "unknown":
+        return None
     raw = m.get("raw", {}) or {}
     instances = raw.get("loaded_instances") or m.get("loaded_instances") or []
     if isinstance(instances, list) and instances:
         return True
-    return bool(m.get("loaded"))
+    if "loaded" in m:
+        return bool(m.get("loaded"))
+    # No residency evidence of any kind: unknown, not False.
+    return None
 
 
 def _loaded_keys(snapshot: LiveModelSnapshot) -> set[str]:
