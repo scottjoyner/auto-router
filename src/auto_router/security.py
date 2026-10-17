@@ -10,6 +10,7 @@ rejected with 401 so operators cannot accidentally expose them.
 
 from __future__ import annotations
 
+import os
 import secrets
 from typing import Any
 
@@ -62,3 +63,20 @@ async def require_admin(
 
 # Type alias used by route decorators.
 AdminAuth = Any
+
+
+async def require_route_decision_token(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    """Authorize route decisions without granting inference/admin privileges.
+
+    Route requests emit persisted decisions into the AssistX outbox and cannot
+    be treated as an anonymous public discovery endpoint. Missing configuration
+    always denies. Do not reuse the broader router admin/executor secrets.
+    """
+    expected = os.getenv("AUTO_ROUTER_ROUTE_DECISION_TOKEN", "").strip()
+    prefix = "Bearer "
+    raw = authorization or ""
+    supplied = raw[len(prefix) :].strip() if raw.startswith(prefix) else ""
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise _unauthorized("Route decision token required")
