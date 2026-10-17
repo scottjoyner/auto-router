@@ -140,10 +140,14 @@ import urllib.error,urllib.request
 for method,path,expected in [
     ("GET","/health",200),("GET","/admin/providers",401),
     ("GET","/admin/context/graph",401),("GET","/admin/usage",401),
-    ("POST","/admin/load",401),("POST","/admin/circuits/reset",401)]:
+    ("POST","/admin/load",401),("POST","/admin/circuits/reset",401),
+    ("POST","/api/routes/request",401)]:
     try:
-        response=urllib.request.urlopen(urllib.request.Request(
-            "http://127.0.0.1:8088"+path,method=method),timeout=2)
+        payload=b'{"correlation_id":"staging-safety"}' if path=="/api/routes/request" else None
+        request=urllib.request.Request(
+            "http://127.0.0.1:8088"+path,method=method,data=payload,
+            headers={"Content-Type":"application/json"} if payload else {})
+        response=urllib.request.urlopen(request,timeout=2)
         actual=response.status
     except urllib.error.HTTPError as exc:
         actual=exc.code
