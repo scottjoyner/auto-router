@@ -131,7 +131,8 @@ async def test_non_gpu_group_names_cannot_trick_the_slot_accounting():
 
 def test_reservation_is_not_raw_llamacpp_fencing():
     assert not remote_dispatch_is_fenced(backend_enforces_token=False)
-    assert remote_dispatch_is_fenced(backend_enforces_token=True)
+    # A caller's optimistic Boolean can never promote raw llama.cpp.
+    assert not remote_dispatch_is_fenced(backend_enforces_token=True)
 
 
 @pytest.mark.asyncio

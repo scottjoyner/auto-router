@@ -141,5 +141,10 @@ class RedisGpuReservation:
 
 
 def remote_dispatch_is_fenced(*, backend_enforces_token: bool) -> bool:
-    """Never promote raw llama.cpp based only on an external reservation."""
-    return bool(backend_enforces_token)
+    """Fail closed: a Boolean assertion is not an attested GPU-side fence.
+
+    No presently deployed GPU backend validates the token. A future GPU-owner
+    proxy must supply an independently verified enforcement proof before this
+    API can be replaced; caller-provided True is deliberately insufficient.
+    """
+    return False
