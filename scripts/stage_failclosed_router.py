@@ -5,6 +5,7 @@ Never connects to AssistX, Redis, Tailscale, Neo4j or inference endpoints.
 The tested checkout is bound read-only; writable state is tmpfs and discarded.
 This is a STAGING probe, not a production promotion or a failover controller.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,11 +38,17 @@ ENV = {
     "AUTO_ROUTER_RUNTIME_PROJECTION_URL": "",
     "AUTO_ROUTER_REDIS_URL": "redis://127.0.0.1:6399/0",
     "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN": "disposable-staging-only-not-a-prod-credential",
+    "AUTO_ROUTER_ADMIN_TOKEN": "",
 }
+
 
 def docker(*args: str, input: str | None = None) -> str:
     result = subprocess.run(
-        ["docker", *args], input=input, capture_output=True, text=True, check=True,
+        ["docker", *args],
+        input=input,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return result.stdout.strip()
 
@@ -57,24 +64,58 @@ def deploy() -> None:
         pass
     else:
         raise RuntimeError(f"{NAME} already exists; refusing to replace any container")
+    if (ROOT / ".env").exists():
+        raise RuntimeError("refusing to mount a checkout containing a credential .env file")
     if not (ROOT / "config/providers.reconciliation.yaml").is_file():
         raise RuntimeError("missing checkout-specific offline provider fixture")
     image_id = docker("image", "inspect", IMAGE, "--format", "{{.Id}}")
     if not image_id.startswith("sha256:"):
         raise RuntimeError("refusing an unpinned image identity")
     cmd = [
-        "run", "-d", "--name", NAME, "--network", "none", "--read-only",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-        "--user", "65534:65534", "--pids-limit", "80", "--memory", "600m",
-        "--cpus", "1", "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
-        "--tmpfs", "/data:rw,nosuid,nodev,size=64m",
-        "--mount", f"type=bind,source={ROOT},target=/candidate,readonly",
-        "--workdir", "/candidate",
+        "run",
+        "-d",
+        "--name",
+        NAME,
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        "65534:65534",
+        "--pids-limit",
+        "80",
+        "--memory",
+        "600m",
+        "--cpus",
+        "1",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,size=64m",
+        "--tmpfs",
+        "/data:rw,nosuid,nodev,size=64m",
+        "--mount",
+        f"type=bind,source={ROOT},target=/candidate,readonly",
+        "--workdir",
+        "/candidate",
     ]
     for key, val in sorted(ENV.items()):
         cmd.extend(("--env", f"{key}={val}"))
-    cmd.extend(("--entrypoint", "python", image_id, "-m", "uvicorn",
-                "auto_router.secure_live:app", "--host", "127.0.0.1", "--port", "8088"))
+    cmd.extend(
+        (
+            "--entrypoint",
+            "python",
+            image_id,
+            "-m",
+            "uvicorn",
+            "auto_router.secure_live:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8088",
+        )
+    )
     print(json.dumps({"stage": NAME, "image_id": image_id, "network": "none"}))
     print(docker(*cmd))
 
