@@ -241,3 +241,93 @@ async def test_ed25519_generation_swap_preserves_active_old_lease(monkeypatch):
 
     await lease.release()
     assert manager.status()["retired_generations"] == []
+
+@pytest.mark.asyncio
+async def test_signed_generation_swap_keeps_physical_gpu_budget(monkeypatch):
+    """An old in-flight GPU lease must block a new signed-generation model."""
+    from auto_router.providers import ProviderError
+
+    private_key = Ed25519PrivateKey.generate()
+    configure_key(monkeypatch, private_key)
+    install_manager_fixtures(monkeypatch)
+    monkeypatch.setattr(legacy.time, "time", lambda: 1010.0)
+    state = SimpleNamespace(agents=SimpleNamespace(), policies=SimpleNamespace())
+    manager = RuntimeProjectionManager(state)
+
+    first_item = provider().model_copy(update={
+        "runtime_instance_id": "xwing-ternary-bonsai-vulkan0",
+        "gpu_resource_group_id": "xwing:1002-1586:gfx1151",
+        "gpu_parallel_slots": 1,
+        "queue_limit": 0,
+        "queue_timeout_seconds": 0,
+    })
+    await manager.apply(sign_document(private_key, generation=1, item=first_item))
+    old_admission = state.admission
+    old_p = state.providers.enabled()[0]
+    old_lease = await old_admission.acquire(
+        ProviderCandidate(provider=old_p, model=old_p.models[0]),
+    )
+
+    other_item = first_item.model_copy(update={
+        "runtime_instance_id": "xwing-minicpm-rocm0",
+    })
+    await manager.apply(sign_document(
+        private_key, generation=2, item=other_item,
+        generated_at_ms=1_010_000, expires_at_ms=1_070_000,
+    ))
+    new_admission = state.admission
+    assert new_admission is not old_admission
+    assert new_admission.gpu_pool is old_admission.gpu_pool
+    new_p = state.providers.enabled()[0]
+    new_candidate = ProviderCandidate(provider=new_p, model=new_p.models[0])
+    with pytest.raises(ProviderError, match="queue full") as exc:
+        await new_admission.acquire(new_candidate)
+    assert exc.value.status_code == 429
+    assert any(
+        row.get("resource_kind") == "physical_gpu" and row["active"] == 1
+        for row in new_admission.snapshot()
+    )
+    assert old_admission.snapshot()[0]["active"] == 1
+
+    await old_lease.release()
+    async with await new_admission.acquire(new_candidate):
+        assert any(
+            row.get("resource_kind") == "physical_gpu" and row["active"] == 1
+            for row in new_admission.snapshot()
+        )
+    assert any(
+        row.get("resource_kind") == "physical_gpu" and row["active"] == 0
+        for row in new_admission.snapshot()
+    )
+
+
+@pytest.mark.asyncio
+async def test_signed_generation_cannot_inflate_gpu_capacity_without_operator_reset(
+    monkeypatch,
+):
+    private_key = Ed25519PrivateKey.generate()
+    configure_key(monkeypatch, private_key)
+    install_manager_fixtures(monkeypatch)
+    monkeypatch.setattr(legacy.time, "time", lambda: 1010.0)
+    state = SimpleNamespace(agents=SimpleNamespace(), policies=SimpleNamespace())
+    manager = RuntimeProjectionManager(state)
+
+    gpu = provider().model_copy(update={
+        "runtime_instance_id": "xwing-ternary-vulkan0",
+        "gpu_resource_group_id": "xwing:1002-1586:gfx1151",
+        "gpu_parallel_slots": 1,
+    })
+    await manager.apply(sign_document(private_key, item=gpu))
+    original_admission = state.admission
+
+    unsafe = gpu.model_copy(update={
+        "runtime_instance_id": "xwing-minicpm-rocm0",
+        "gpu_parallel_slots": 2,
+    })
+    with pytest.raises(RuntimeError, match="conflicting physical GPU capacity"):
+        await manager.apply(sign_document(
+            private_key, generation=2, item=unsafe,
+            generated_at_ms=1_010_000, expires_at_ms=1_070_000,
+        ))
+    assert manager.current.generation == 1
+    assert state.admission is original_admission
