@@ -529,17 +529,17 @@ async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
 
 
 @app.get("/admin/providers/health")
-async def admin_provider_health() -> dict[str, Any]:
+async def admin_provider_health(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": await _provider_health_reports()}
 
 
 @app.get("/admin/context")
-async def admin_context() -> dict[str, Any]:
+async def admin_context(_: None = Depends(require_admin)) -> dict[str, Any]:
     return state.context.model_dump()
 
 
 @app.get("/admin/context/graph")
-async def admin_context_graph() -> dict[str, Any]:
+async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {
         "revision": state.context.revision,
         "source": state.context.source,
@@ -549,12 +549,12 @@ async def admin_context_graph() -> dict[str, Any]:
 
 
 @app.get("/admin/providers")
-async def admin_providers() -> dict[str, Any]:
+async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
 @app.get("/admin/placement")
-async def admin_placement() -> dict[str, Any]:
+async def admin_placement(_: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import compute_plan
 
     return compute_plan(state)
@@ -569,17 +569,17 @@ async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)
 
 
 @app.get("/admin/agent-workers")
-async def admin_agent_workers() -> dict[str, Any]:
+async def admin_agent_workers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
 
 
 @app.get("/admin/usage")
-async def admin_usage(limit: int = 50) -> dict[str, Any]:
+async def admin_usage(limit: int = 50, _: None = Depends(require_admin)) -> dict[str, Any]:
     return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
 
 
 @app.get("/admin/circuits")
-async def admin_circuits() -> dict[str, Any]:
+async def admin_circuits(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
 
 
@@ -598,7 +598,7 @@ async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin
 
 
 @app.get("/admin/agent-jobs")
-async def admin_agent_jobs() -> dict[str, Any]:
+async def admin_agent_jobs(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"jobs": [record_as_dict(record) for record in state.agent_jobs.list_records()]}
 
 
