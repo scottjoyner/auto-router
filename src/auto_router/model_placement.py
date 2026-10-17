@@ -233,6 +233,10 @@ def gather_live(state: Any) -> dict[str, dict[str, Any]]:
             loaded = _loaded_keys(snap)
         if not endpoint:
             endpoint = _strip_v1(prov.base_url)
+        unknown: set[str] = set()
+        if snap and snap.models:
+            unknown = {_model_id(m) for m in snap.models if _is_loaded(m) is None}
+            unknown.discard("")
         available: set[str] = set()
         if snap and snap.models:
             for m in snap.models:
@@ -243,6 +247,7 @@ def gather_live(state: Any) -> dict[str, dict[str, Any]]:
             "endpoint": _strip_v1(endpoint),
             "loaded": loaded,
             "available": available,
+            "unknown": unknown,
             "ok": ok,
             "latency_ms": latency,
         }
@@ -283,7 +288,8 @@ def compute_plan(state: Any) -> dict[str, Any]:
                 )
             )
             continue
-        if d.model_key in node["loaded"]:
+        if d.model_key in node["loaded"] or d.model_key in node.get("unknown", set()):
+            # No mutation is authorized without a positive non-resident measurement.
             continue
         available = node.get("available") or set()
         if available and d.model_key not in available:
