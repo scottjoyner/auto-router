@@ -82,3 +82,12 @@ Isolated worktree `/home/scott/git/.worktrees/auto-router-gpu-20261016` on branc
 - Source guard denies untrusted caller `user`/`metadata`/tools fields, wrong model or GPU identity, incomplete terminal evidence, invalid tokens and oversized requests. It rechecks custody before and during execution, then before returning, and requests backend abort on lost authority, timeout or cancellation. Streaming requests fail closed instead of claiming verified SSE lifecycle.
 - **131 passed, 5 skipped** in the broader GPU/provider/claim/projection suite, including 26 new proxy tests. No live GPU proxy, model/credential migration, production Redis use or automatic fleet dispatch was performed.
 - The remaining hard gates are in `docs/gpu-owner-proxy-contract.md`: durable external fencing epoch, independently verified owner delegation, real physical model-worker isolation and forcible termination, SSE lifecycle, per-user receipts and two-user custody. Do **not** promote this code on synthetic evidence alone.
+
+## Read-only GPU-owner isolation check (2026-10-16 evening)
+
+The standalone read-only isolation probe was run against both physical nodes.
+Joyner's two model endpoints and xwing's three inspected model endpoints bind
+directly to Tailnet, not loopback. Xwing renderD128 currently has mode 0666.
+These are production isolation NO-GO findings, not grounds to interrupt live
+working inference. The probe always reports production dispatch unadmitted.
+File mode alone does not independently verify ACL, firewall or worker abort.

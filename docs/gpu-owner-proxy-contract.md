@@ -26,3 +26,23 @@
 6. **Release/security gates.** Draft PR #41 still protects effective-provider and inherited admin routes. All four GPU candidates in `config/providers.gpu-canary.CANDIDATE.yaml` remain `enabled: false`.
 
 **Release rule:** do not deploy, expose, or call this prototype as a production inference endpoint. Its default health intentionally fails until concrete authority, backend isolation, cancellation and receipt implementations pass independently witnessed tests.
+
+## Read-only host-isolation witnesses (October 16 evening)
+
+The script scripts/gpu_owner_isolation_preflight.py performs a read-only local
+inspection of listening TCP sockets (ss -lntH) and render-device permission
+bits. It does not independently attest firewall rules, GPU identity, process
+termination, trusted delegation or token custody. Its
+production_dispatch_admitted result is always false.
+
+Executed without reading keys or changing either host:
+- joyner ports 18320/18321: both bound to Tailscale rather than loopback.
+  RenderD128 mode 0660; the ACL/firewall review remains unresolved.
+- xwing ports 18270/18271/18302: all bound to Tailscale rather than
+  loopback; renderD128 mode 0666 includes world access bits.
+- Neither node passed the observable loopback-only isolation preflight.
+
+The original CPU path is still available. Any migration needs operator-reviewed
+service bind changes, process UID and ACL isolation, authenticated proxy
+wiring, Tailnet denial of direct ports, and reversible acceptance on the exact
+physical build. Never change all running listeners at once.
