@@ -13,7 +13,7 @@ providers:
     quota_class: local
     models:
       - alias: local/ornith-1.5-35b
-        provider_model: ornith-1.5-35b-a3b-apex-mtp
+        provider_model: destroyer-ornith-apex-mtp
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 32768
       - alias: local/nomic-embed-text-v1.5
@@ -85,7 +85,7 @@ providers:
       # from runtime discovery (live_model_routes.refresh_provider_models writes
       # the sqlite registry), not from this file.
       - alias: local/quick
-        provider_model: qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled
+        provider_model: toolcall-v5-3b-combined-r2
         capabilities: [chat, streaming, code, json, local_only, hermes_worker]
         context_window: 131072
 
@@ -157,6 +157,12 @@ providers:
         capabilities: [chat, streaming, json, local_only, quick_iteration, reasoning, moe]
         context_window: 32768
 
+  # CONTAINMENT LIFTED 2026-10-16: precondition re-verified before enabling.
+  #   optiplex:1234 answered 200 over the tailnet; both declared models served
+  #   (qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled, text-embedding-nomic-embed-text-v1.5).
+  #   Containment was imposed by 6284baf (2026-08-27) while OptiPlex was offline.
+  # NOTE: an enable was attempted 2026-10-05 and reverted 2026-10-06 with no
+  # recorded reason; this re-enable is evidence-based, not a repeat of that attempt.
   # CONTAINED 2026-08-27: OptiPlex is offline on Tailscale and LAN; repeated
   # routed requests are timing out. Keep the Optimax dual-server config intact,
   # but fail closed until direct /v1/models + completion proof returns.
@@ -164,7 +170,7 @@ providers:
     type: lmstudio
     node_id: scott-optiplex-9030-aio
     runtime_instance_id: scott-optiplex-9030-aio-qwen035-08b
-    enabled: false
+    enabled: true
     base_url: ${LMSTUDIO_OPTIPLEX_BASE_URL:-http://scott-optiplex-9030-aio.tailcb8954.ts.net:1234/v1}
     priority: 155
     quota_class: local
@@ -199,14 +205,13 @@ providers:
     queue_timeout_seconds: 0
     models:
       - alias: local/quick-iterate
-        provider_model: qwen3.5-0.8b-mlx
-        capabilities: [chat, streaming, json, image_input, vision, low_latency, local_only, quick_iteration, reasoning]
+        provider_model: ternary-bonsai-2-2b-mlx
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, reasoning]
         context_window: 262144
       - alias: local/tool-call
-        provider_model: refinedtoolcallv5-3b
+        provider_model: ternary-bonsai-2-4b-mlx
         capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
         context_window: 131072
-
   - name: lmstudio-destroyer
     type: lmstudio
     node_id: destroyer
@@ -224,19 +229,14 @@ providers:
         capabilities: [chat, streaming, code, json, local_only, hermes_worker, tool_use]
         context_window: 131072
 
-  - name: lmstudio-r2d2
-    node_id: r2d2
-    type: lmstudio
-    enabled: true
-    base_url: ${LMSTUDIO_R2D2_BASE_URL:-http://r2d2:1234/v1}
-    priority: 900
-    quota_class: local
-    models:
-      - alias: local/default
-        provider_model: local/default
-        capabilities: [chat, streaming, code, json, local_only]
-        context_window: 32768
-
+  # REMOVED 2026-10-16: lmstudio-r2d2 was a stale alias for this same physical
+  # node under its former name. Commit 7ffdda2 dropped the x1-370 lane and added
+  # r2d2 in the same commit, i.e. a rename that was never reflected back here.
+  # x1-370 now serves the new OS; lmstudio-x1-370 covers it. Kept here as prose
+  # only, so the reason is not lost with the entry.
+  # It was left enabled at priority 900 -- the highest of all providers -- with a
+  # placeholder model id (local/default) and no resolvable host, so it would win
+  # routing over every real lane if it ever resolved.
   - name: lmstudio-destroyer-k2
     type: lmstudio
     node_id: destroyer
@@ -246,9 +246,9 @@ providers:
     quota_class: local
     models:
       - alias: local/destroyer-36b
-        provider_model: k2-horizon-moVA-36B-A4B
+        provider_model: k2-1b
         capabilities: [chat, reasoning, streaming, json, local_only, hermes_worker]
-        context_window: 57344
+        context_window: 32768
 
   - name: lmstudio-destroyer-k2-1b
     type: lmstudio
@@ -269,12 +269,12 @@ providers:
     type: lmstudio
     node_id: destroyer
     enabled: true
-    base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
+    base_url: ${LMSTUDIO_DESTROYER_ORNITH_BASE_URL:-http://destroyer.tailcb8954.ts.net:1236/v1}
     priority: 125
     quota_class: local
     runtime_instance_id: destroyer-ornith
     models:
       - alias: local/ornith-1.5-35b
-        provider_model: ornith-1.5-35b-a3b
+        provider_model: destroyer-ornith
         capabilities: [chat, reasoning, json, local_only, large_context, hermes_worker]
         context_window: 131072
