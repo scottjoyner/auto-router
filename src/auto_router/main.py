@@ -561,7 +561,7 @@ async def admin_placement() -> dict[str, Any]:
 
 
 @app.post("/admin/load")
-async def admin_load(apply: bool | None = None) -> dict[str, Any]:
+async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
 
     do_apply = apply if apply is not None else AUTOLOAD_ENABLED
@@ -584,14 +584,14 @@ async def admin_circuits() -> dict[str, Any]:
 
 
 @app.post("/admin/circuits/reset")
-async def admin_circuits_reset() -> dict[str, Any]:
+async def admin_circuits_reset(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear all circuit breakers (recover from tripped providers immediately)."""
     cleared = state.circuits.reset()
     return {"cleared": cleared}
 
 
 @app.post("/admin/circuits/reset/{owner:path}")
-async def admin_circuits_reset_owner(owner: str) -> dict[str, Any]:
+async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear a single circuit breaker by owner (provider/model)."""
     cleared = state.circuits.reset(owner)
     return {"owner": owner, "cleared": cleared}
