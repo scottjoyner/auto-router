@@ -39,6 +39,7 @@ ENV = {
     "AUTO_ROUTER_REDIS_URL": "redis://127.0.0.1:6399/0",
     "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN": "disposable-staging-only-not-a-prod-credential",
     "AUTO_ROUTER_ADMIN_TOKEN": "",
+    "AUTO_ROUTER_ROUTE_DECISION_TOKEN": "",
 }
 
 
