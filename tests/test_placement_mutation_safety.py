@@ -101,3 +101,22 @@ def test_mutating_admin_routes_deny_unauthenticated_http():
                      "/admin/circuits/reset/unit-test"):
             response = client.post(path)
             assert response.status_code == 401, path
+
+def test_all_readonly_admin_routes_require_auth_and_deny_anonymous_http():
+    from fastapi.testclient import TestClient
+
+    from auto_router.main import app
+    from auto_router.security import require_admin
+
+    client = TestClient(app)
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if not route.path.startswith("/admin/") or "GET" not in route.methods:
+            continue
+        dependencies = [dependency.call for dependency in route.dependant.dependencies]
+        assert require_admin in dependencies, route.path
+        # ASGI in-process only; authentication short-circuits before state access.
+        response = client.get(route.path)
+        assert response.status_code == 401, (route.path, response.status_code)
+    client.close()
