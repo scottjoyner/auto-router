@@ -1,4 +1,5 @@
 """Synthetic safety contract for the isolated, disposable router stage runner."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -17,12 +18,9 @@ spec.loader.exec_module(module)
 def isolated_inspect(*, network="none", readonly=True, mounts=None, ports=None):
     return {
         "State": {"Status": "running"},
-        "HostConfig": {"NetworkMode": network, "ReadonlyRootfs": readonly,
-                       "PortBindings": ports},
+        "HostConfig": {"NetworkMode": network, "ReadonlyRootfs": readonly, "PortBindings": ports},
         "Config": {"ExposedPorts": {"8088/tcp": {}}},
-        "Mounts": mounts if mounts is not None else [
-            {"Destination": "/candidate", "RW": False}
-        ],
+        "Mounts": mounts if mounts is not None else [{"Destination": "/candidate", "RW": False}],
     }
 
 
@@ -56,23 +54,100 @@ def test_deployment_command_never_connects_to_fleet(monkeypatch):
     assert module.ENV["AUTO_ROUTER_RUNTIME_PROJECTION_URL"] == ""
 
 
-@pytest.mark.parametrize("override", [
-    {"network": "bridge"}, {"readonly": False}, {"ports": {"8088/tcp": [{}]}},
-    {"mounts": [{"Destination": "/candidate", "RW": True}]},
-    {"mounts": [{"Destination": "/production", "RW": False}]},
-])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"network": "bridge"},
+        {"readonly": False},
+        {"ports": {"8088/tcp": [{}]}},
+        {"mounts": [{"Destination": "/candidate", "RW": True}]},
+        {"mounts": [{"Destination": "/production", "RW": False}]},
+    ],
+)
 def test_verification_refuses_unsealed_container(monkeypatch, override):
     state = isolated_inspect(**override)
     monkeypatch.setattr(module, "get_inspect", lambda: state)
-    monkeypatch.setattr(module, "docker", lambda *a, **kw: (_ for _ in ()).throw(
-        AssertionError("never exec an unsealed candidate")))
+    monkeypatch.setattr(
+        module,
+        "docker",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("never exec an unsealed candidate")),
+    )
     with pytest.raises(RuntimeError):
         module.verify()
 
 
 def test_destroy_refuses_nonstaging_network(monkeypatch):
     monkeypatch.setattr(module, "get_inspect", lambda: isolated_inspect(network="bridge"))
-    monkeypatch.setattr(module, "docker", lambda *a, **kw: (_ for _ in ()).throw(
-        AssertionError("must not remove a nonsealed container")))
+    monkeypatch.setattr(
+        module,
+        "docker",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("must not remove a nonsealed container")
+        ),
+    )
     with pytest.raises(RuntimeError):
         module.destroy()
+
+
+def test_admin_basic_identity_and_constant_time_token_gate(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from auto_router import security
+
+    monkeypatch.setattr(
+        security,
+        "get_settings",
+        lambda: SimpleNamespace(admin_token="synthetic-test-admin-secret"),
+    )
+    app = FastAPI()
+
+    @app.get("/admin/probe")
+    async def probe(_: None = Depends(security.require_admin)):
+        return {"ok": True}
+
+    client = TestClient(app)
+    assert client.get("/admin/probe").status_code == 401
+    assert (
+        client.get("/admin/probe", auth=("other", "synthetic-test-admin-secret")).status_code == 401
+    )
+    assert (
+        client.get("/admin/probe", auth=("admin", "synthetic-test-admin-secret")).status_code == 200
+    )
+    assert (
+        client.get(
+            "/admin/probe", headers={"X-Admin-Token": "synthetic-test-admin-secret"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/admin/probe", headers={"Authorization": "Bearer synthetic-test-admin-secret"}
+        ).status_code
+        == 200
+    )
+    assert client.get("/admin/probe", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    client.close()
+
+
+def test_staging_refuses_checkout_with_dotenv_credentials(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("SENTINEL_DO_NOT_MOUNT=1\n")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/providers.reconciliation.yaml").write_text("{}\n")
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    def fake_inspect():
+        raise subprocess.CalledProcessError(1, ["docker", "inspect"])
+
+    monkeypatch.setattr(module, "get_inspect", fake_inspect)
+    monkeypatch.setattr(
+        module,
+        "docker",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("must reject secret before docker image or container operations")
+        ),
+    )
+    with pytest.raises(RuntimeError, match="credential .env"):
+        module.deploy()
