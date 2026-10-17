@@ -303,7 +303,19 @@ class LMStudioProvider(OpenAICompatibleProvider):
         except httpx.HTTPError as exc:
             raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
         if response.status_code >= 400:
-            return await super().list_models()
+            # A bare llama-server exposes no LM Studio native API (404). The
+            # OpenAI-compatible listing still names the model being served, but it
+            # carries no residency field at all -- an entry is only
+            # {id, object, owned_by}. Tag the records so consumers can tell
+            # "cannot determine residency" apart from "measured as not resident".
+            # Without this, bool(entry.get("loaded")) coerces absence to False
+            # and a lane that is demonstrably serving is reported idle.
+            fallback = await super().list_models()
+            for record in fallback:
+                record["residency"] = "unknown"
+                record["source"] = "openai_compat_fallback"
+                record["loaded"] = None
+            return fallback
         payload = response.json()
         models = payload.get("models") if isinstance(payload, dict) else None
         if not isinstance(models, list):

@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 
 from auto_router.agent_jobs import AgentJobManager, build_agent_job_request
 from auto_router.agent_workers import AgentWorkerAdapter
@@ -168,6 +169,10 @@ def test_agent_worker_hermes_launcher_builds_oneshot_command(monkeypatch, tmp_pa
         return FakeProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    # AgentWorkerAdapter.available() gates on shutil.which(command). Without
+    # this the test passes only where a real `hermes` binary is installed,
+    # which is why it failed on the fleet host and in CI.
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
 
     adapter = AgentWorkerAdapter(
         AgentWorkerConfig(
@@ -218,6 +223,10 @@ def test_agent_worker_merges_explicit_environment(monkeypatch, tmp_path) -> None
         return FakeProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    # AgentWorkerAdapter.available() gates on shutil.which(command). Without
+    # this the test passes only where a real `hermes` binary is installed,
+    # which is why it failed on the fleet host and in CI.
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
 
     adapter = AgentWorkerAdapter(
         AgentWorkerConfig(
