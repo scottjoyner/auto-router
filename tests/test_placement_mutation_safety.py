@@ -88,3 +88,16 @@ def test_mutating_admin_routes_require_auth_dependency():
         assert "POST" in routes[0].methods
         auth_dependencies = [dependency.call for dependency in routes[0].dependant.dependencies]
         assert require_admin in auth_dependencies, path
+
+
+def test_mutating_admin_routes_deny_unauthenticated_http():
+    # In-process ASGI only: no request reaches a live router or fleet endpoint.
+    from fastapi.testclient import TestClient
+
+    from auto_router.main import app
+
+    with TestClient(app) as client:
+        for path in ("/admin/load", "/admin/circuits/reset",
+                     "/admin/circuits/reset/unit-test"):
+            response = client.post(path)
+            assert response.status_code == 401, path
