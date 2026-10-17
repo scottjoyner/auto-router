@@ -269,6 +269,15 @@ class RuntimeAdmissionController:
             self._gates.setdefault(runtime_id, _RuntimeGate(config))
             self._provider_runtime_keys[provider.name] = runtime_id
             physical_group = str(provider.gpu_resource_group_id or "").strip()
+            # A capacity declaration without physical-card identity cannot
+            # establish a trustworthy contention gate; fail before dispatch.
+            if (
+                (provider.gpu_resource_group_id is not None and not physical_group)
+                or (int(provider.gpu_parallel_slots) > 0 and not physical_group)
+            ):
+                raise RuntimeError(
+                    f"GPU capacity for provider {provider.name} lacks physical resource identity"
+                )
             if physical_group:
                 self.gpu_pool.gate(physical_group, int(provider.gpu_parallel_slots))
                 self._provider_gpu_keys[provider.name] = physical_group

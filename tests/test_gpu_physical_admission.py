@@ -133,3 +133,23 @@ async def test_unrelated_legacy_runtime_admission_remains_unchanged():
     assert len(controller.snapshot()) == 1
     await second.release()
     await first.release()
+
+@pytest.mark.parametrize("group", [None, "", "   "])
+def test_nonzero_gpu_slots_without_physical_identity_fail_closed(group):
+    c = _candidates()["llama-joyner-r9700-toolcall"]
+    unsafe = c.provider.model_copy(update={
+        "gpu_resource_group_id": group,
+        "gpu_parallel_slots": 1,
+    })
+    with pytest.raises(RuntimeError, match="lacks physical resource identity"):
+        RuntimeAdmissionController([unsafe])
+
+
+def test_whitespace_only_physical_identity_denied_even_with_zero_gpu_slots():
+    c = _candidates()["llama-joyner-r9700-toolcall"]
+    unsafe = c.provider.model_copy(update={
+        "gpu_resource_group_id": " ",
+        "gpu_parallel_slots": 0,
+    })
+    with pytest.raises(RuntimeError, match="lacks physical resource identity"):
+        RuntimeAdmissionController([unsafe])
