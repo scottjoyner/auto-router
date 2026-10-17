@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from auto_router.agent_jobs import build_agent_job_request
 from auto_router.event_outbox import EventOutbox, OutboxEvent
 from auto_router.memory_models import MemoryQuery
 from auto_router.models import RouteDecision, RouteRequest
 from auto_router.route_events import ensure_event_outbox
+from auto_router.security import require_route_decision_token
 from auto_router.task_contract import build_task_contract
 
 router = APIRouter(tags=["assistx-routes"])
@@ -263,7 +264,7 @@ def register_assistx_routes(app: Any, state: Any) -> None:
             "decisions will be marked for Paperclip dispatch, not executed in-process."
         )
 
-    @app.post("/api/routes/request")
+    @app.post("/api/routes/request", dependencies=[Depends(require_route_decision_token)])
     async def route_request(body: RouteRequest) -> dict[str, Any]:
         if settings.memory_enabled and hasattr(state, "memory_client"):
             metadata = body.metadata if isinstance(body.metadata, dict) else {}

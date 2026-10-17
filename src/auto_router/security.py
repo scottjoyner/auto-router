@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Admin/ops endpoint protection (LLD §3.5 W-64).
 
 A single shared token (``AUTO_ROUTER_ADMIN_TOKEN``) gates the sensitive
@@ -10,10 +8,19 @@ When no token is configured the endpoints are locked down: every request is
 rejected with 401 so operators cannot accidentally expose them.
 """
 
+from __future__ import annotations
+
+import os
+import secrets
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBasic,
+    HTTPBasicCredentials,
+    HTTPBearer,
+)
 
 from auto_router.settings import get_settings
 
@@ -45,10 +52,10 @@ async def require_admin(
         provided.append(x_admin_token.strip())
     if bearer is not None and bearer.credentials:
         provided.append(bearer.credentials.strip())
-    if basic is not None and basic.password:
+    if basic is not None and basic.password and basic.username == "admin":
         provided.append(basic.password.strip())
 
-    if any(secret == token for secret in provided):
+    if any(secrets.compare_digest(candidate, token) for candidate in provided):
         return
 
     raise _unauthorized()
@@ -56,3 +63,20 @@ async def require_admin(
 
 # Type alias used by route decorators.
 AdminAuth = Any
+
+
+async def require_route_decision_token(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    """Authorize route decisions without granting inference/admin privileges.
+
+    Route requests emit persisted decisions into the AssistX outbox and cannot
+    be treated as an anonymous public discovery endpoint. Missing configuration
+    always denies. Do not reuse the broader router admin/executor secrets.
+    """
+    expected = os.getenv("AUTO_ROUTER_ROUTE_DECISION_TOKEN", "").strip()
+    prefix = "Bearer "
+    raw = authorization or ""
+    supplied = raw[len(prefix) :].strip() if raw.startswith(prefix) else ""
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise _unauthorized("Route decision token required")

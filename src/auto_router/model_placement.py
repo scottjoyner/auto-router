@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +45,8 @@ AUTOLOAD_ENABLED = os.getenv("AUTO_ROUTER_AUTOLOAD_ENABLED", "false").lower() in
 )
 RECONCILE_SECONDS = int(os.getenv("AUTO_ROUTER_PLACEMENT_RECONCILE_SECONDS", "0") or "0")
 DEFAULT_TTL = int(os.getenv("AUTO_ROUTER_LOAD_TTL_SECONDS", "0") or "0")
+# A stale inventory must never authorize a mutating load or unload.
+PLACEMENT_MAX_OBSERVATION_AGE_SECONDS = 60
 UNLOAD_ENABLED = os.getenv("AUTO_ROUTER_PLACEMENT_UNLOAD", "false").lower() in (
     "1",
     "true",
@@ -177,17 +180,31 @@ def _model_id(m: dict) -> str:
     ).strip()
 
 
-def _is_loaded(m: dict) -> bool:
-    """A model is resident iff LM Studio reports loaded instances. The top-level
-    ``loaded`` boolean is unreliable; the authoritative signal is the
-    ``raw.loaded_instances`` list (non-empty = actually running on the endpoint)."""
+def _is_loaded(m: dict) -> bool | None:
+    """Residency of a model record.
+
+    Returns True/False when residency was actually measured, and **None when it
+    could not be determined**.
+
+    A bare llama-server lane has no LM Studio native API, so its OpenAI-compatible
+    model listing carries no residency field. Coercing that absence to False
+    reports a working lane as idle. None means unknown and must not be treated as
+    a measurement.
+
+    For LM Studio, residency is the ``raw.loaded_instances`` list (non-empty =
+    actually running); the top-level ``loaded`` boolean is unreliable."""
     if not isinstance(m, dict):
         return False
+    if m.get("residency") == "unknown":
+        return None
     raw = m.get("raw", {}) or {}
     instances = raw.get("loaded_instances") or m.get("loaded_instances") or []
     if isinstance(instances, list) and instances:
         return True
-    return bool(m.get("loaded"))
+    if "loaded" in m:
+        return bool(m.get("loaded"))
+    # No residency evidence of any kind: unknown, not False.
+    return None
 
 
 def _loaded_keys(snapshot: LiveModelSnapshot) -> set[str]:
@@ -214,11 +231,28 @@ def gather_live(state: Any) -> dict[str, dict[str, Any]]:
         loaded: set[str] = set()
         ok = bool(snap and snap.ok)
         latency = snap.latency_ms if snap else None
+        now = int(time.time())
+        fetched_at = getattr(snap, "fetched_at", None)
+        expires_at = getattr(snap, "expires_at", None)
+        fresh = bool(
+            ok
+            and isinstance(fetched_at, int)
+            and isinstance(expires_at, int)
+            and fetched_at <= now < expires_at
+            and now - fetched_at <= PLACEMENT_MAX_OBSERVATION_AGE_SECONDS
+        )
         if snap and snap.models:
             endpoint = snap.models[0].get("endpoint")
             loaded = _loaded_keys(snap)
         if not endpoint:
             endpoint = _strip_v1(prov.base_url)
+        unknown: set[str] = set()
+        measured_unloaded: set[str] = set()
+        if snap and snap.models:
+            unknown = {_model_id(m) for m in snap.models if _is_loaded(m) is None}
+            measured_unloaded = {_model_id(m) for m in snap.models if _is_loaded(m) is False}
+            unknown.discard("")
+            measured_unloaded.discard("")
         available: set[str] = set()
         if snap and snap.models:
             for m in snap.models:
@@ -229,6 +263,9 @@ def gather_live(state: Any) -> dict[str, dict[str, Any]]:
             "endpoint": _strip_v1(endpoint),
             "loaded": loaded,
             "available": available,
+            "unknown": unknown,
+            "measured_unloaded": measured_unloaded,
+            "fresh": fresh,
             "ok": ok,
             "latency_ms": latency,
         }
@@ -239,66 +276,26 @@ def compute_plan(state: Any) -> dict[str, Any]:
     live = gather_live(state)
     loads: list[LoadAction] = []
     unloads: list[UnloadAction] = []
+    skipped_placements: list[dict[str, str]] = []
     for d in DESIRED_PLACEMENTS:
         node = live.get(d.provider)
-        if not node:
-            loads.append(
-                LoadAction(
-                    d.provider,
-                    "",
-                    d.model_key,
-                    d.context_length,
-                    d.ttl if d.ttl is not None else DEFAULT_TTL,
-                    d.usecase,
-                    swappable=is_swappable(d.provider),
-                    reason="provider not present in live state",
-                )
-            )
-            continue
-        if not node["ok"]:
-            loads.append(
-                LoadAction(
-                    d.provider,
-                    node["endpoint"],
-                    d.model_key,
-                    d.context_length,
-                    d.ttl if d.ttl is not None else DEFAULT_TTL,
-                    d.usecase,
-                    swappable=is_swappable(d.provider),
-                    reason="node unreachable (ok=false)",
-                )
-            )
+        if not node or not node["ok"] or not node["fresh"]:
+            skipped_placements.append({"provider": d.provider, "model_key": d.model_key,
+                                       "reason": "missing, unreachable, or stale inventory"})
             continue
         if d.model_key in node["loaded"]:
             continue
-        available = node.get("available") or set()
-        if available and d.model_key not in available:
-            # Desired key is not in this node's catalog (e.g. spelling
-            # divergence between nodes). Skip rather than firing a doomed load
-            # that would 400 and trip the circuit breaker.
-            loads.append(
-                LoadAction(
-                    d.provider,
-                    node["endpoint"],
-                    d.model_key,
-                    d.context_length,
-                    d.ttl if d.ttl is not None else DEFAULT_TTL,
-                    d.usecase,
-                    swappable=is_swappable(d.provider),
-                    reason="model key not in node catalog (skip)",
-                )
-            )
+        # A missing model or an OpenAI-compatible 404 fallback is NOT evidence
+        # that a model is unloaded. Only explicit measured non-residency may load.
+        if d.model_key not in node["measured_unloaded"]:
+            skipped_placements.append({"provider": d.provider, "model_key": d.model_key,
+                                       "reason": "residency not positively measured as unloaded"})
             continue
         loads.append(
             LoadAction(
-                d.provider,
-                node["endpoint"],
-                d.model_key,
-                d.context_length,
-                d.ttl if d.ttl is not None else DEFAULT_TTL,
-                d.usecase,
-                swappable=is_swappable(d.provider),
-                reason="desired model not loaded",
+                d.provider, node["endpoint"], d.model_key, d.context_length,
+                d.ttl if d.ttl is not None else DEFAULT_TTL, d.usecase,
+                swappable=is_swappable(d.provider), reason="fresh measured non-residency",
             )
         )
     if UNLOAD_ENABLED:
@@ -306,10 +303,12 @@ def compute_plan(state: Any) -> dict[str, Any]:
         for d in DESIRED_PLACEMENTS:
             desired_keys_by_provider.setdefault(d.provider, set()).add(d.model_key)
         for prov, node in live.items():
+            if not node["ok"] or not node["fresh"]:
+                continue
             for key in node["loaded"]:
                 if key in desired_keys_by_provider.get(prov, set()):
                     continue
-                if UNLOAD_ALLOWED_KEYS and key not in UNLOAD_ALLOWED_KEYS:
+                if key not in UNLOAD_ALLOWED_KEYS:
                     continue
                 unloads.append(
                     UnloadAction(prov, node["endpoint"], key, reason="loaded but not in desired set")
@@ -322,6 +321,8 @@ def compute_plan(state: Any) -> dict[str, Any]:
             p: {
                 "ok": n["ok"],
                 "loaded": sorted(n["loaded"]),
+                "fresh": n["fresh"],
+                "unknown": sorted(n["unknown"]),
                 "latency_ms": n["latency_ms"],
                 "swappable": is_swappable(p),
             }
@@ -329,6 +330,7 @@ def compute_plan(state: Any) -> dict[str, Any]:
         },
         "desired_count": len(DESIRED_PLACEMENTS),
         "loads_needed": [vars(a) for a in loads],
+        "skipped_placements": skipped_placements,
         "load_backoff": {
             k: len([t for t in v if time.time() - t < LOAD_FAILURE_BACKOFF_SECONDS])
             for k, v in _load_failures.items()
