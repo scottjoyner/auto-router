@@ -33,6 +33,7 @@ from auto_router.access_paths import AccessPathChoice, RuntimeAccessPathSelector
 from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
 from auto_router.assistx_routes import register_assistx_routes
 from auto_router.claim_fence import assert_executor_claim_current
+from auto_router.executor_auth import require_executor_inference_auth_ready
 from auto_router.fleet_routes import router as fleet_router
 from auto_router.main import app, state
 from auto_router.memory_routes import register_memory_routes
@@ -225,6 +226,7 @@ async def strict_offline_lifespan(_: FastAPI) -> AsyncIterator[None]:
     retain their original gate objects until completion.
     """
 
+    require_executor_inference_auth_ready(app)
     await main_module.load_state()
     providers = state.providers.enabled()
     state.admission = RuntimeAdmissionController(providers)

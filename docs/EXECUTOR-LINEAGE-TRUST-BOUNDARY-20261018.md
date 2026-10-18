@@ -30,6 +30,10 @@ an exploitable deployment ingress.
 - The downstream task-claim fence rejects simultaneously present service
   and executor lineage, and requires an exact known internal-service
   identity rather than a bare authenticated=true boolean.
+- The strict-offline router lifespan now fails at startup unless the
+  executor middleware is installed and its auth-required setting is ON.
+  This prevents accidentally running the compatibility main_live
+  entrypoint without the secure_live authentication wrapper.
 - Existing production code paths still require fresh signed projection,
   a task-claim status lookup after any admission wait, owner-scoped
   execution policy, and valid nonexpired leases.
@@ -60,10 +64,11 @@ production release review.
 ## Remaining P0 work
 
 - Verify that actual deployed router process is launched through
-  auto_router.secure_live:app, not an unwrapped main_live entrypoint,
-  and AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED=true is enforced. The checked-in
-  Dockerfile and compose file use those settings, but this is not an
-  attestation of the live process.
+  auto_router.secure_live:app with required middleware, not an unwrapped
+  main_live entrypoint. The patched startup guard fails closed when the
+  middleware is absent or the auth-required setting is disabled. The
+  Dockerfile and compose already name secure_live/auth-required, but
+  these are not an attestation of the live process.
 - Bind authorized execution to independent human/user ownership,
   verified source-authoritative AssistX task claims, task/jti,
   projection generation, exact model/path and per-user admission

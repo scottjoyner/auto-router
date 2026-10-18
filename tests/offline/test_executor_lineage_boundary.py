@@ -198,6 +198,21 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(fence._executor_metadata(self.request(**meta_a)))
         self.assertIsNotNone(fence._executor_metadata(self.request(**meta_b)))
 
+    async def test_unwrapped_router_startup_rejected(self):
+        app=SimpleNamespace(state=SimpleNamespace())
+        with self.assertRaisesRegex(RuntimeError,"middleware is not installed"):
+            auth.require_executor_inference_auth_ready(app)
+
+    async def test_executor_auth_flag_disabled_rejected(self):
+        app=SimpleNamespace(state=SimpleNamespace(executor_inference_auth_installed=True))
+        with patch.dict(os.environ,{"AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED":"false"}):
+            with self.assertRaisesRegex(RuntimeError,"cannot be disabled"):
+                auth.require_executor_inference_auth_ready(app)
+
+    async def test_secure_wrapper_and_enabled_flag_pass_startup_guard(self):
+        app=SimpleNamespace(state=SimpleNamespace(executor_inference_auth_installed=True))
+        auth.require_executor_inference_auth_ready(app)
+
     async def test_missing_bearer_denied_without_downstream_execution(self):
         result=await self.invoke("",self.payload({"assistx_service":{
             "identity":"assistx-internal","authenticated":True

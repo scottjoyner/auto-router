@@ -323,6 +323,20 @@ class ExecutorInferenceAuthMiddleware:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(scope, replay, send)
 
 
+def require_executor_inference_auth_ready(app: Any) -> None:
+    """Do not boot the strict-offline inference router without its auth edge.
+
+    The compatibility main_live module must not be a deployable alternative
+    to secure_live. Check this before loading runtime state or model routes.
+    """
+    if getattr(app.state, "executor_inference_auth_installed", False) is not True:
+        raise RuntimeError("NO_GO inference executor-auth middleware is not installed")
+    if os.getenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true").strip().lower() not in {
+        "1", "true", "yes", "on"
+    }:
+        raise RuntimeError("NO_GO inference executor authentication cannot be disabled")
+
+
 def install_executor_inference_auth(app: Any, state: Any) -> None:
     if getattr(app.state, "executor_inference_auth_installed", False):
         return

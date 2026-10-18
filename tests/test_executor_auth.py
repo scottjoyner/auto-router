@@ -257,3 +257,21 @@ async def test_internal_service_token_overwrites_client_supplied_executor(monkey
         "authenticated": True,
     }
     assert metadata["client_trace"] == "retained"
+
+
+def test_strict_offline_startup_requires_executor_boundary(monkeypatch):
+    from types import SimpleNamespace
+    import pytest
+    from auto_router.executor_auth import require_executor_inference_auth_ready
+
+    installed = SimpleNamespace(state=SimpleNamespace(
+        executor_inference_auth_installed=True
+    ))
+    missing = SimpleNamespace(state=SimpleNamespace())
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
+    with pytest.raises(RuntimeError, match="not installed"):
+        require_executor_inference_auth_ready(missing)
+    require_executor_inference_auth_ready(installed)
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "false")
+    with pytest.raises(RuntimeError, match="cannot be disabled"):
+        require_executor_inference_auth_ready(installed)
