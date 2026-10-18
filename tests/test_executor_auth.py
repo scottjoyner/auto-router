@@ -205,3 +205,55 @@ async def test_inference_token_enforces_output_and_attempt_budgets(signing_key):
     )
     assert first[0]["status"] == 204
     assert second[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_client_supplied_service_lineage_is_stripped_from_scoped_executor(signing_key):
+    """A valid executor JWT must still undergo the live task-claim fence."""
+    sent, captured = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key),
+        {
+            "model": "auto/code",
+            "messages": [{"role": "user", "content": "probe"}],
+            "max_tokens": 2,
+            "metadata": {
+                "assistx_service": {"identity": "assistx-internal", "authenticated": True},
+                "assistx_executor": {"task_id": "forged"},
+                "client_trace": "retained",
+            },
+        },
+    )
+    assert sent[0]["status"] == 204
+    metadata = captured["metadata"]
+    assert metadata["client_trace"] == "retained"
+    assert "assistx_service" not in metadata
+    assert metadata["assistx_executor"]["task_id"] == "task-1"
+    assert metadata["assistx_executor"]["claim_id"] == "claim-1"
+
+
+@pytest.mark.asyncio
+async def test_internal_service_token_overwrites_client_supplied_executor(monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "unit-test-internal-token")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
+    sent, captured = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        "unit-test-internal-token",
+        {
+            "model": "auto/code",
+            "messages": [{"role": "user", "content": "probe"}],
+            "metadata": {
+                "assistx_executor": {"task_id": "forged-task", "claim_id": "fake"},
+                "assistx_service": {"identity": "untrusted", "authenticated": True},
+                "client_trace": "retained",
+            },
+        },
+    )
+    assert sent[0]["status"] == 204
+    metadata = captured["metadata"]
+    assert "assistx_executor" not in metadata
+    assert metadata["assistx_service"] == {
+        "identity": "assistx-internal",
+        "authenticated": True,
+    }
+    assert metadata["client_trace"] == "retained"

@@ -132,6 +132,26 @@ def decode_executor_token(token: str, *, now: int | None = None) -> dict[str, An
     return claims
 
 
+_RESERVED_LINEAGE_FIELDS = frozenset({"assistx_service", "assistx_executor"})
+
+
+def _untrusted_metadata_without_lineage(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Never let request JSON self-declare authenticated execution lineage.
+
+    The ASGI executor middleware is the sole writer of these fields. They
+    must be stripped even on the trusted service-token path so that a
+    caller cannot smuggle a conflicting identity downstream.
+    """
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        key: value
+        for key, value in metadata.items()
+        if isinstance(key, str) and key not in _RESERVED_LINEAGE_FIELDS
+    }
+
+
 def _bearer(headers: list[tuple[bytes, bytes]]) -> str:
     for key, value in headers:
         if key.lower() == b"authorization":
@@ -247,11 +267,8 @@ class ExecutorInferenceAuthMiddleware:
             bearer = _bearer(list(scope.get("headers") or []))
             service_token = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
             if service_token and hmac.compare_digest(bearer, service_token):
-                metadata = payload.get("metadata")
-                if not isinstance(metadata, dict):
-                    metadata = {}
                 payload["metadata"] = {
-                    **metadata,
+                    **_untrusted_metadata_without_lineage(payload),
                     "assistx_service": {
                         "identity": "assistx-internal",
                         "authenticated": True,
@@ -290,11 +307,8 @@ class ExecutorInferenceAuthMiddleware:
                 int(claims["exp"]),
                 max(1, int(claims.get("max_attempts") or 1)),
             )
-            metadata = payload.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
             payload["metadata"] = {
-                **metadata,
+                **_untrusted_metadata_without_lineage(payload),
                 "assistx_executor": {
                     "task_id": claims["task_id"],
                     "claim_id": claims["claim_id"],

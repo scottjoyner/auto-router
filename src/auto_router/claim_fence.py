@@ -15,9 +15,17 @@ class ExecutorClaimFenceError(RuntimeError):
 def _executor_metadata(request: Any) -> dict[str, Any] | None:
     metadata = request.metadata if isinstance(getattr(request, "metadata", None), dict) else {}
     service = metadata.get("assistx_service")
-    if isinstance(service, dict) and service.get("authenticated") is True:
-        return None
     value = metadata.get("assistx_executor")
+    # These are mutually exclusive *authenticated* identities. If both
+    # are present, this request could be client-forged metadata or a
+    # broken middleware integration: neither may silently win.
+    if service is not None and value is not None:
+        raise ExecutorClaimFenceError("conflicting executor and service lineage")
+    if isinstance(service, dict) and (
+        service.get("identity") == "assistx-internal"
+        and service.get("authenticated") is True
+    ):
+        return None
     if not isinstance(value, dict):
         raise ExecutorClaimFenceError("claim-scoped executor lineage is missing")
     return value

@@ -142,7 +142,7 @@ async def test_internal_assistx_service_bypasses_task_claim_lookup(monkeypatch):
         raising=False,
     )
     await assert_executor_claim_current(
-        _request(assistx_service={"authenticated": True}),
+        _request(assistx_service={"identity": "assistx-internal", "authenticated": True}),
         _state(),
     )
     assert _Client.observed == {}
@@ -152,3 +152,25 @@ async def test_internal_assistx_service_bypasses_task_claim_lookup(monkeypatch):
 async def test_missing_executor_lineage_fails_closed():
     with pytest.raises(ExecutorClaimFenceError, match="lineage is missing"):
         await assert_executor_claim_current(_request(), _state())
+
+
+@pytest.mark.asyncio
+async def test_forged_weak_service_marker_cannot_skip_claim_status():
+    with pytest.raises(ExecutorClaimFenceError, match="lineage is missing"):
+        await assert_executor_claim_current(
+            _request(assistx_service={"authenticated": True}), _state()
+        )
+
+
+@pytest.mark.asyncio
+async def test_conflicting_service_and_executor_lineage_denied_even_if_service_claimed_trusted():
+    with pytest.raises(ExecutorClaimFenceError, match="conflicting"):
+        await assert_executor_claim_current(
+            _request(
+                assistx_service={"identity": "assistx-internal", "authenticated": True},
+                assistx_executor={
+                    "task_id": "task-1", "claim_id": "claim-1",
+                    "agent_id": "hermes-test", "projection_generation": 9,
+                },
+            ), _state(),
+        )
