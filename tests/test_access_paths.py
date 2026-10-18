@@ -124,3 +124,75 @@ def test_transport_classification_distinguishes_lan_and_tailnet() -> None:
     assert classify_access_transport("http://192.168.1.44:1234/v1") == "lan"
     assert classify_access_transport("http://100.90.80.70:1234/v1") == "tailscale"
     assert classify_access_transport("http://xwing.example.ts.net:1234/v1") == "tailscale"
+
+
+def _mock_runtime_model_catalog(monkeypatch, handler):
+    """Return an isolated HTTPX transport without any real network request."""
+    import httpx
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "auto_router.access_paths.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [301, 302, 307, 401, 403, 404, 429, 500, 503])
+async def test_default_probe_rejects_non_200_status(monkeypatch, status):
+    import httpx
+
+    candidate = _candidate()
+    _mock_runtime_model_catalog(
+        monkeypatch,
+        lambda _: httpx.Response(status, json={"data": [{"id": "test-model"}]},
+                                 headers={"location": "http://example.invalid"} if status < 400 else {}),
+    )
+    selector = RuntimeAccessPathSelector([candidate.provider])
+    with pytest.raises(ProviderError, match="no approved access path"):
+        await selector.select(candidate)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    b'{"data":[]}',
+    b'{"data":[{"id":"wrong-model"}]}',
+    b'{"data":{"id":"test-model"}}',
+    b'{"models":[{"id":"test-model"}]}',
+    b'not-json',
+    b'{"data":[{"id":"test-model"}]}' + b" " * 65537,
+])
+async def test_default_probe_rejects_missing_malformed_or_oversized_model(monkeypatch, body):
+    import httpx
+
+    candidate = _candidate()
+    _mock_runtime_model_catalog(
+        monkeypatch,
+        lambda _: httpx.Response(200, content=body),
+    )
+    selector = RuntimeAccessPathSelector([candidate.provider])
+    with pytest.raises(ProviderError, match="no approved access path"):
+        await selector.select(candidate)
+
+
+@pytest.mark.asyncio
+async def test_default_probe_accepts_only_exact_model_on_selected_runtime(monkeypatch):
+    import httpx
+
+    candidate = _candidate()
+    seen = []
+
+    def reply(request):
+        seen.append(str(request.url))
+        if request.url.host == "192.168.1.44":
+            return httpx.Response(200, json={"data": [{"id": "some-other-model"}]})
+        return httpx.Response(200, json={"data": [{"id": "test-model"}]})
+
+    _mock_runtime_model_catalog(monkeypatch, reply)
+    choice = await RuntimeAccessPathSelector([candidate.provider]).select(candidate)
+    assert choice.base_url == "http://100.90.80.70:1234/v1"
+    assert seen == [
+        "http://192.168.1.44:1234/v1/models",
+        "http://100.90.80.70:1234/v1/models",
+    ]
