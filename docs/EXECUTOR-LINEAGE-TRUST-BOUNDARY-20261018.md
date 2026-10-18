@@ -88,3 +88,28 @@ production release review.
 This is an important trust-boundary fix but does NOT automatically make
 any inference route safe for 24/7 production. Review and complete the
 authenticated end-to-end verification before promotion.
+
+## Additional isolated and live read-only verification
+
+After the two local commits, the 11 offline ASGI regression tests also
+passed inside a disposable git-router image container with:
+- --network none, --read-only filesystem, no-new-privileges
+- unprivileged user, 384 MiB RAM and 0.5 CPU, source mounted read-only
+- no model tokens, service credentials, external network, or deployed router
+
+The existing router image does not include pytest. The host sandbox also
+lacks the current project's full pytest collection dependencies. Therefore
+these 11 tests are **not** a substitute for the full CI integration suite.
+
+A read-only process command-line check of the *running* git-router-1
+container confirmed uvicorn was launched with
+auto_router.secure_live:app. Its /health returned HTTP200, and a no-
+credential GET of /admin/runtime-projection returned HTTP401. Those
+observations establish entrypoint and admin endpoint behavior, but not
+all inference-token, owner-binding or revocation guarantees at runtime.
+No production POST test was performed and no restart was requested.
+
+P0 next: exercise the fully authenticated staging gateway under two
+genuine identities, confirm per-user source-authoritative claim ownership
+and monotonic JTI/replay protection across process restart and replicas,
+then run full CI before any code promotion. Fix remains local only.
