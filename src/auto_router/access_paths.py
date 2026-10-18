@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from auto_router.providers import ProviderError
 
 Probe = Callable[[str], Awaitable[bool]]
 _TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+_MAX_PROBE_RESPONSE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -87,7 +89,7 @@ class RuntimeAccessPathSelector:
 
             urls = self._paths.get(runtime_id) or self._ordered_unique_urls(candidate.provider)
             for base_url in urls:
-                if await self._probe(base_url):
+                if await self._probe(base_url, expected_model=candidate.model.provider_model):
                     choice = AccessPathChoice(
                         runtime_instance_id=runtime_id,
                         base_url=base_url,
@@ -105,9 +107,19 @@ class RuntimeAccessPathSelector:
             retryable=True,
         )
 
-    async def _probe(self, base_url: str) -> bool:
+    async def _probe(self, base_url: str, *, expected_model: str) -> bool:
+        """Only a catalog containing the exact selected model qualifies a path.
+
+        This is transport/catalog qualification, NOT loaded-model generation,
+        authenticated owner binding, admission, or failover authorization.
+        Deny 3xx, 401, 403, 404, oversized and malformed replies.
+        """
         if self._probe_override is not None:
+            # Test-only/custom probes continue to receive the pinned URL. A
+            # custom probe is responsible for its own semantic qualification.
             return bool(await self._probe_override(base_url))
+        if not expected_model:
+            return False
         url = f"{base_url.rstrip('/')}/models"
         timeout = httpx.Timeout(
             connect=self.probe_timeout_seconds,
@@ -116,10 +128,23 @@ class RuntimeAccessPathSelector:
             pool=self.probe_timeout_seconds,
         )
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(url)
-            return response.status_code < 500
-        except httpx.HTTPError:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                async with client.stream("GET", url) as response:
+                    if response.status_code != 200:
+                        return False
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > _MAX_PROBE_RESPONSE_BYTES:
+                            return False
+            data = json.loads(raw)
+            if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                return False
+            return any(
+                isinstance(item, dict) and item.get("id") == expected_model
+                for item in data["data"]
+            )
+        except (httpx.HTTPError, ValueError, TypeError):
             return False
 
     def snapshot(self) -> list[dict[str, Any]]:
