@@ -137,3 +137,15 @@ it during two catalog samples. This was reproduced in earlier work
 before this SQL experiment; the gate has not been disabled or weakened.
 Static tests are hermetic; only the explicitly operator-triggered
 `qualify_pg.py --run` starts a disposable PostgreSQL instance.
+
+## Physical x1/xwing qualification — October 19
+
+See PHYSICAL-X1-XWING-20261019.md, pgwire_client.py,
+qualify_twohost.py, the physical_x1_xwing_20261019.json evidence
+and test_pg_twohost_fence_research.py. Two actual physical clients
+competed over loopback-bound ports and temporary pinned SSH tunneling.
+The bridge was NOT internal-only (Docker internal networking prevented
+host loopback publication); no external port was published and all
+values were synthetic. All ephemeral resources were removed. These
+tests do not prove independent owner custody, replicated consensus,
+or stopping an old-epoch model worker.
