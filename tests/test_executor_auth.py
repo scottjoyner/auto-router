@@ -212,9 +212,10 @@ async def test_inference_token_enforces_output_and_attempt_budgets(signing_key):
 
 @pytest.mark.asyncio
 async def test_strict_owner_fence_matches_signed_and_authenticated_principal(
-    signing_key, monkeypatch
+    signing_key, monkeypatch, tmp_path
 ):
     monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    monkeypatch.setenv("AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH",str(tmp_path / "owner.db"))
     claims = {"owner_issuer": "test-idp", "owner_subject": "person-a"}
     principal = {**claims, "authenticated": True}
     request = {"model": "auto/code", "messages": [{"role": "user", "content": "test"}],
@@ -273,3 +274,73 @@ async def test_strict_owner_fence_denies_unowned_internal_token(monkeypatch):
     )
     assert sent[0]["status"] == 401
     assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_strict_middleware_rejects_replayed_signed_jti_after_budget(
+    signing_key, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING","true")
+    monkeypatch.setenv("AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH",str(tmp_path/"attempts.sqlite"))
+    owner={"owner_issuer":"test-idp","owner_subject":"person-a"}
+    principal={**owner,"authenticated":True}
+    token=_token(signing_key,**owner,max_attempts=1)
+    request={"model":"auto/code","messages":[{"role":"user","content":"x"}],
+             "max_tokens":2}
+    first,_=await _invoke(ExecutorInferenceAuthMiddleware,token,request,verified_owner=principal)
+    second,_=await _invoke(ExecutorInferenceAuthMiddleware,token,request,verified_owner=principal)
+    assert first[0]["status"]==204
+    assert second[0]["status"]==401
+
+
+@pytest.mark.asyncio
+async def test_strict_middleware_fail_closed_missing_sqlite_store(
+    signing_key, monkeypatch
+):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING","true")
+    monkeypatch.delenv("AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH",raising=False)
+    owner={"owner_issuer":"test-idp","owner_subject":"person-a"}
+    request={"model":"auto/code","messages":[{"role":"user","content":"x"}],
+             "max_tokens":2}
+    response,forwarded=await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key,**owner,max_attempts=1),
+        request,verified_owner={**owner,"authenticated":True}
+    )
+    assert response[0]["status"]==503
+    assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_strict_middleware_replay_budget_survives_process_restart(
+    signing_key, monkeypatch, tmp_path
+):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING","true")
+    path=tmp_path/"attempts.sqlite"
+    monkeypatch.setenv("AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH",str(path))
+    owner={"owner_issuer":"test-idp","owner_subject":"person-a"}
+    principal={**owner,"authenticated":True}
+    token=_token(signing_key,**owner,max_attempts=1)
+    request={"model":"auto/code","messages":[{"role":"user","content":"x"}],
+             "max_tokens":2}
+    first,_=await _invoke(ExecutorInferenceAuthMiddleware,token,request,verified_owner=principal)
+    assert first[0]["status"]==204
+    code=(
+        "import os;"
+        "from auto_router.owner_attempt_ledger import DurableOwnerAttemptLedger;"
+        "from auto_router.executor_auth import decode_executor_token;"
+        "print(DurableOwnerAttemptLedger(os.environ['AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH'])."
+        "count(decode_executor_token(os.environ['TEST_SIGNED_TOKEN'])))"
+    )
+    env={**os.environ,
+         "TEST_SIGNED_TOKEN":token,
+         "PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
+    result=subprocess.run([sys.executable,"-c",code],env=env,
+                          capture_output=True,text=True,timeout=7,check=True)
+    assert result.stdout.strip()=="1"
+    second,_=await _invoke(ExecutorInferenceAuthMiddleware,token,request,verified_owner=principal)
+    assert second[0]["status"]==401
