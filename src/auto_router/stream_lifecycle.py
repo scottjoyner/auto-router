@@ -9,6 +9,10 @@ from typing import Any
 from auto_router.event_outbox import OutboxEvent
 from auto_router.providers import ProviderError, ProviderStreamResponse
 from auto_router.route_events import ensure_event_outbox
+from auto_router.stream_effect_fence import (
+    StreamEffectDenied, abort_upstream, authorize_chunk,
+    effect_fence_required, preflight, require_authority,
+)
 
 
 class StreamCancelledError(RuntimeError):
@@ -175,6 +179,11 @@ def install_stream_lifecycle(main_module: Any) -> None:
     original_record_usage = main_module._record_usage
 
     async def dispatch(provider: Any, candidate: Any, request: Any, route_plan: Any = None):
+        # Non-streaming bodies have no per-chunk trusted output gate.
+        # In strict mode, deny BEFORE provider dispatch rather than silently
+        # bypassing the effect fence with stream=false.
+        if effect_fence_required():
+            raise StreamEffectDenied("non-streaming inference has no fenced effect path")
         _transition(state, request, "upstream_started")
         try:
             return await original_dispatch(
@@ -223,6 +232,11 @@ def install_stream_lifecycle(main_module: Any) -> None:
         request: Any,
         route_plan: Any = None,
     ) -> ProviderStreamResponse:
+        # Resolve a trusted *injected* authority before contacting any
+        # provider. With strict mode enabled, absent authority is NO-GO.
+        # Default-off mode preserves existing live routing/stream behavior.
+        effect_authority = require_authority(state)
+        await preflight(effect_authority, request, candidate)
         _transition(state, request, "upstream_started")
         try:
             response = await original_dispatch_stream(
@@ -353,21 +367,43 @@ def install_stream_lifecycle(main_module: Any) -> None:
 
         async def body():
             completed = False
+            aborted = False
+
+            async def stop_once() -> None:
+                nonlocal aborted
+                if effect_authority is None or aborted:
+                    return
+                aborted = True
+                # Cleanup is bounded and best-effort. A provider's claim to
+                # abort is not evidence that a real model stopped producing.
+                await abort_upstream(effect_authority, request, upstream_body)
+
+            sequence = 0
             try:
                 async for chunk in upstream_body:
+                    sequence += 1
+                    # No collector/output effect until the current epoch has
+                    # atomically accepted this exact chunk digest. The future
+                    # broker is responsible for proving that transaction.
+                    await authorize_chunk(
+                        effect_authority, request, candidate, chunk, sequence
+                    )
                     collector.feed(chunk)
                     yield chunk
                 completed = True
             except asyncio.CancelledError as exc:
+                await stop_once()
                 await finalize("cancelled", exc)
                 raise
             except BaseException as exc:
+                await stop_once()
                 await finalize("failed", exc)
                 raise
             finally:
                 if completed:
                     await finalize("completed")
                 elif not finalized:
+                    await stop_once()
                     await finalize("cancelled")
 
         response.body = body()

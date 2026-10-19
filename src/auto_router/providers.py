@@ -187,12 +187,23 @@ class OpenAICompatibleProvider:
             )
 
         async def body_stream() -> AsyncIterator[bytes]:
+            # Closing only this outer generator may leave a nested HTTP raw
+            # iterator's finalizer pending until a later event-loop sweep.
+            # Drain its cleanup explicitly BEFORE closing the HTTP context.
+            raw_iterator = response.aiter_raw()
             try:
-                async for chunk in response.aiter_raw():
+                async for chunk in raw_iterator:
                     yield chunk
             finally:
-                await stream_cm.__aexit__(None, None, None)
-                await client.aclose()
+                try:
+                    close_iterator = getattr(raw_iterator, "aclose", None)
+                    if callable(close_iterator):
+                        await close_iterator()
+                finally:
+                    try:
+                        await stream_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
 
         headers = {key.lower(): value for key, value in response.headers.items()}
         return ProviderStreamResponse(provider=self.name, model=provider_model, status_code=response.status_code, headers=headers, body=body_stream())
@@ -634,12 +645,23 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             )
         
         async def body_stream() -> AsyncIterator[bytes]:
+            # Closing only this outer generator may leave a nested HTTP raw
+            # iterator's finalizer pending until a later event-loop sweep.
+            # Drain its cleanup explicitly BEFORE closing the HTTP context.
+            raw_iterator = response.aiter_raw()
             try:
-                async for chunk in response.aiter_raw():
+                async for chunk in raw_iterator:
                     yield chunk
             finally:
-                await stream_cm.__aexit__(None, None, None)
-                await client.aclose()
+                try:
+                    close_iterator = getattr(raw_iterator, "aclose", None)
+                    if callable(close_iterator):
+                        await close_iterator()
+                finally:
+                    try:
+                        await stream_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
         
         headers_dict = {key.lower(): value for key, value in response.headers.items()}
         return ProviderStreamResponse(
