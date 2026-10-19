@@ -43,6 +43,16 @@ def _resident_resources() -> dict[str,float]:
 
 
 def _check_preflight()->dict:
+    # Check the actual research integration imports BEFORE launching the
+    # expensive model subprocess. Some hosts' system Python lacks router
+    # dependencies (for example pydantic_settings) even though the router
+    # project venv is ready. Missing libraries must fail before startup.
+    import importlib.util
+    for name in ("httpx", "pydantic_settings", "pydantic", "cryptography"):
+        if importlib.util.find_spec(name) is None:
+            raise RuntimeError(
+                f"NO_GO missing {name}; run via the existing Auto-Router virtualenv"
+            )
     if socket.gethostname()!=HOST:
         raise RuntimeError("NO_GO host mismatch: x1 physical canary only")
     if not BINARY.is_file() or not os.access(BINARY,os.X_OK) or not MODEL.is_file():

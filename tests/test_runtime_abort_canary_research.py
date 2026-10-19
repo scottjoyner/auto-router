@@ -133,3 +133,13 @@ def test_busy_slots_detect_runtime_processing(canary):
     assert canary._busy([{"is_processing":True}])
     assert not canary._busy([{"is_processing":False}])
     assert not canary._busy([{"other":True}])
+
+
+
+def test_missing_router_dependency_denies_before_model_start(monkeypatch,canary):
+    import importlib.util
+    real=importlib.util.find_spec
+    monkeypatch.setattr(importlib.util,"find_spec",
+                        lambda name: None if name=="pydantic_settings" else real(name))
+    with pytest.raises(RuntimeError,match="missing pydantic_settings"):
+        canary._check_preflight()

@@ -1,0 +1,39 @@
+{
+  "client_delivery_linearizability_proven": false,
+  "cross_host_all_followup_generations_succeeded": true,
+  "cross_host_all_fourth_chunks_suppressed": true,
+  "cross_host_all_runtime_active_at_refusal": true,
+  "cross_host_fence_trials": 2,
+  "cross_host_idle_median_s": 0.169,
+  "cross_host_idle_seconds": [
+    0.171,
+    0.167
+  ],
+  "date": "2026-10-19",
+  "decision": "TWO_PHYSICAL_REAL_LENOVO_CROSS_HOST_FENCE_PASS_SYNTHETIC_AUTHORITY_ONLY",
+  "evidence_sha256": {
+    "k2_revalidation": "89f6094d2b2814c268e4b254d6dad6893faefeb21eefc69036edf80e0ca5c3bf",
+    "lenovo_direct": "c6cc4de567f2a29745509c677497395c8f5842a9ef9de444f3bd7671d43dce3c",
+    "x1_router_lenovo_first": "c6e40f80fc34c9b0402627728888374763d20f98e120a086787872071ad2925d",
+    "x1_router_lenovo_second": "47c30d1550e297f731df02e62e1c197c94e77b18e8c69f282ed8c7dce297abbc"
+  },
+  "independently_authenticated_users": false,
+  "k2_revalidation_pass": true,
+  "lenovo_direct_pass": true,
+  "model_internal_stop_proven": false,
+  "model_sha256": {
+    "lenovo_lfm25_12b_q8": "c40c8a9239dbc2d8874c5508110b9b1f3d325376eecffdba7bce2dcb49a0207c",
+    "x1_k2_horizon_1b_bf16": "371010db1807bb07b62e738422ee0de26c1e15a347f31108ed2c6e219095a8b8"
+  },
+  "physical_hosts": [
+    "x1-370",
+    "lenovo"
+  ],
+  "production_routes_unchanged": true,
+  "result": "RESEARCH_HOLD",
+  "server_binary_sha256": {
+    "lenovo_fleet_llama_server": "56195f47a71aa24c1b89f07c14a510c7b1749cc8c519a0174a4116706a2eea50",
+    "x1_lmstudio_backend": "699be04ebab1eab941867195f15ac1fbbd526b989071618a96e31c50bc14dadc"
+  },
+  "shared_postgres_epoch_revocation_tested_with_real_model": false
+}
