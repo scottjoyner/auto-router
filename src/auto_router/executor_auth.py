@@ -15,6 +15,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
 from .owner_binding import OwnerBindingError, bound_principal, owner_binding_required
+from .owner_attempt_ledger import (
+    OwnerAttemptDenied, OwnerAttemptStoreError, acquire_strict_attempt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,11 +300,14 @@ class ExecutorInferenceAuthMiddleware:
             token_generation = int(claims.get("projection_generation") or 0)
             if token_generation != int(current.generation):
                 raise ExecutorAuthError("executor token runtime projection generation is stale")
-            attempt = _ATTEMPTS.acquire(
-                str(claims["jti"]),
-                int(claims["exp"]),
-                max(1, int(claims.get("max_attempts") or 1)),
-            )
+            if owner_binding_required():
+                attempt = acquire_strict_attempt(claims)
+            else:
+                attempt = _ATTEMPTS.acquire(
+                    str(claims["jti"]),
+                    int(claims["exp"]),
+                    max(1, int(claims.get("max_attempts") or 1)),
+                )
             metadata = payload.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
@@ -318,7 +324,15 @@ class ExecutorInferenceAuthMiddleware:
                 },
             }
             await self.app(scope, _encoded_receive(payload, receive), send)
-        except (ExecutorAuthError, OwnerBindingError, json.JSONDecodeError) as exc:
+        except OwnerAttemptStoreError:
+            # Storage is not authoritative if unavailable, missing or
+            # uncommittable. Never fall back to process-local counting.
+            await JSONResponse(
+                status_code=503,
+                content={"detail": "durable owner attempt authority unavailable"},
+            )(scope, replay, send)
+        except (ExecutorAuthError, OwnerBindingError, OwnerAttemptDenied,
+                json.JSONDecodeError) as exc:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(scope, replay, send)
 
 
