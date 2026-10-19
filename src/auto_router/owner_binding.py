@@ -18,9 +18,11 @@ class OwnerBindingError(ValueError):
 
 
 def owner_binding_required() -> bool:
-    return os.getenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "false").strip().lower() in {
-        "1", "true", "on", "yes"
-    }
+    raw = os.getenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "false").strip().lower()
+    if raw in {"", "0", "false", "off", "no"}:
+        return False
+    # Unknown values (including typos) must fail closed, not disable the fence.
+    return True
 
 
 def _identity(value: Any, *, origin: str) -> tuple[str, str]:

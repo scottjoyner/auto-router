@@ -237,6 +237,12 @@ class ExecutorInferenceAuthMiddleware:
             "yes",
             "on",
         }:
+            if owner_binding_required():
+                await JSONResponse(
+                    status_code=503,
+                    content={"detail": "strict owner fence requires executor authentication"},
+                )(scope, receive, send)
+                return
             await self.app(scope, receive, send)
             return
 

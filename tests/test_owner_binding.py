@@ -138,3 +138,28 @@ async def test_strict_owner_fence_disallows_unowned_service_bypass():
     state=SimpleNamespace(runtime_projection_manager=SimpleNamespace(current=_Projection()))
     with pytest.raises(ExecutorClaimFenceError,match="unowned"):
         await assert_executor_claim_current(req,state)
+
+
+
+def test_owner_fence_misspelled_config_fails_closed(monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "tru")
+    assert owner_binding_required() is True
+    with pytest.raises(OwnerBindingError):
+        bound_principal({}, {})
+
+
+@pytest.mark.asyncio
+async def test_strict_owner_requires_executor_auth_enabled(monkeypatch):
+    from auto_router.executor_auth import ExecutorInferenceAuthMiddleware
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING","true")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED","false")
+    sent=[]
+    async def down(*args):
+        raise AssertionError("auth-disabled bypass reached downstream")
+    async def receive():
+        return {"type":"http.request","body":b"", "more_body":False}
+    async def send(message):
+        sent.append(message)
+    middleware=ExecutorInferenceAuthMiddleware(down,SimpleNamespace())
+    await middleware({"type":"http","method":"POST","path":"/v1/chat/completions"},receive,send)
+    assert sent[0]["status"]==503
