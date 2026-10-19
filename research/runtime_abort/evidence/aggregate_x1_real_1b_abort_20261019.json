@@ -1,0 +1,25 @@
+{
+  "decision": "3_PASS_WITH_INTERVENING_PREFLIGHT_DENIAL_NOT_PROD_READY",
+  "device_runtime_real": true,
+  "fourth_chunk_suppressed_all_three": true,
+  "independent_epoch_broker_tested": false,
+  "intervening_pressure_preflight_denials": 1,
+  "production_routing_modified": false,
+  "real_active_generation_at_revocation_all_three": true,
+  "real_model_process_termination_proven": false,
+  "runtime_slot_idle_max_s": 0.153,
+  "runtime_slot_idle_median_s": 0.152,
+  "runtime_slot_idle_seconds": [
+    0.153,
+    0.152,
+    0.152
+  ],
+  "subsequent_inference_success_all_three": true,
+  "successful_physical_runs": 3,
+  "synthetic_authority_not_trusted": true,
+  "test_files_sha256": {
+    "x1_real_1b_abort_trial_1_20261019.json": "50b0c3acb792711c3bd95ded68efb90a72a594fb7a03bdaae3647af0efda118c",
+    "x1_real_1b_abort_trial_2_20261019.json": "83ee68a2874fa2df528b557691a375fb3ed94532713c9b3052884da2fb4e30a7",
+    "x1_real_1b_abort_trial_3_20261019.json": "509032d68b30dabf1fe0f5744ed1a066d08942f3930d6a0c0b4d0005cced9de3"
+  }
+}
