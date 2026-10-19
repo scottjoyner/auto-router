@@ -17,6 +17,8 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
+_MAX_EXECUTOR_REQUEST_BYTES = 8 * 1024 * 1024
+
 _PROTECTED_PATHS = {
     "/v1/chat/completions",
     "/v1/responses",
@@ -141,12 +143,20 @@ def _bearer(headers: list[tuple[bytes, bytes]]) -> str:
     return ""
 
 
-async def _read_body(receive: Any) -> tuple[bytes, Any]:
+async def _read_body(
+    receive: Any, *, max_bytes: int = _MAX_EXECUTOR_REQUEST_BYTES
+) -> tuple[bytes, Any]:
+    """Fail before buffering oversized unauthenticated ASGI request chunks."""
     body = bytearray()
     more = True
     while more:
         message = await receive()
-        body.extend(message.get("body", b""))
+        chunk = message.get("body", b"")
+        if not isinstance(chunk, bytes):
+            raise ExecutorAuthError("inference request body must contain bytes")
+        if len(chunk) > max_bytes - len(body):
+            raise ExecutorAuthError("inference request exceeds maximum body size")
+        body.extend(chunk)
         more = bool(message.get("more_body", False))
     sent = False
 
@@ -239,7 +249,13 @@ class ExecutorInferenceAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        body, replay = await _read_body(receive)
+        try:
+            body, replay = await _read_body(receive)
+        except ExecutorAuthError as exc:
+            await JSONResponse(status_code=413, content={"detail": str(exc)})(
+                scope, receive, send
+            )
+            return
         try:
             payload = json.loads(body)
             if not isinstance(payload, dict):
