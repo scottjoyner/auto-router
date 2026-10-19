@@ -121,3 +121,13 @@ from its observed served model catalog. This issue was independently
 seen in earlier unmodified router checkouts. The failure is preserved,
 not skipped or altered to make this PR green. It is not a failure in
 the signed terminal receipt tests.
+
+## Explicit local split-brain counterexample
+
+A further negative architecture test proves that two *independent*
+SQLite databases, representing router hosts without common storage,
+will **both** record the same perfectly signed receipt as new. The
+test intentionally PASSES only by demonstrating duplicate acceptance:
+there is no cross-host global election, shared transaction state or
+fencing witness implemented here. A shared authoritative store must
+be made mandatory BEFORE any production receipt admission.
