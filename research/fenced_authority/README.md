@@ -149,3 +149,17 @@ host loopback publication); no external port was published and all
 values were synthetic. All ephemeral resources were removed. These
 tests do not prove independent owner custody, replicated consensus,
 or stopping an old-epoch model worker.
+
+## Physical synthetic worker effect gate — October 19
+
+A separate stacked research branch adds worker_effect_schema.sql,
+worker_effect_gate.py, worker_effect_trial.py and an extended physical
+qualify_twohost.py runner. Report: WORKER-EFFECT-FENCE-20261019.md.
+Evidence: evidence/physical_worker_chunk_fencing_20261019.json.
+Hermetic negative tests: tests/test_worker_effect_fence_research.py.
+
+These prove xwing's synthetic worker emitted only one DB-accepted
+chunk after either revocation or loss of its SSH authority tunnel, and
+invoked a synthetic cancel callback. They do NOT prove real LFM/GLM
+worker cancellation or linearized client network delivery. No service,
+credential, model, production database or live route was changed.

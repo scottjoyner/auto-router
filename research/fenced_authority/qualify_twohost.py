@@ -157,6 +157,7 @@ def execute() -> dict:
     created_network=False
     created_container=False
     tunnel=None
+    synthetic_workers=[]
     start=time.monotonic()
     try:
         # Docker --internal disables published-port host access here. Use
@@ -205,6 +206,10 @@ def execute() -> dict:
         must_ok(remote("SELECT current_database();"),"postgres")
         schema=(ROOT/"schema.sql").read_text()
         must_ok(local(schema))
+        # Add independent synthetic accepted-chunk effect schema; this is
+        # explicitly NOT a production migration or network-facing API.
+        effect_schema=(ROOT/"worker_effect_schema.sql").read_text()
+        must_ok(local(effect_schema))
         expiry=must_ok(local("SELECT (clock_timestamp()+interval '45 seconds')::text;"))
         token_expiry=must_ok(local("SELECT (clock_timestamp()+interval '40 seconds')::text;"))
         must_ok(local(stmt_grant(HASH["scope_main"],expiry)),"1")
@@ -260,16 +265,41 @@ def execute() -> dict:
         ])!=1:
             raise AssertionError("unsafe physical competing grants "+str(grants))
 
+        # Synthetic PHYSICAL xwing worker: each token requires one atomic
+        # effect ACK transaction *before* the output is released by this
+        # synthetic stream. No actual LFM/GLM model invoked.
+        from worker_effect_trial import start as start_worker,finish as finish_worker
+        revoke_scope="7"*64
+        partition_scope="8"*64
+        for scope,request,jti in (
+            (revoke_scope,201,"9"*64),
+            (partition_scope,202,"0"*64),
+        ):
+            must_ok(local(stmt_grant(scope,expiry)),"1")
+            must_ok(local(stmt_reserve(scope,1,jti,request,token_expiry,budget=1)),"1")
+        revoke_worker,first_revoke=start_worker(revoke_scope,1,201)
+        synthetic_workers.append(revoke_worker)
+        must_ok(local(stmt_revoke(revoke_scope,1)),"t")
+        revocation_event=finish_worker(revoke_worker)
+        must_ok(local(
+            "SELECT count(*) FROM fence_research.accepted_chunks WHERE "
+            f"request_hash='{201:064x}';"),"1")
+        partition_worker,first_partition=start_worker(partition_scope,1,202)
+        synthetic_workers.append(partition_worker)
+
         # Partition simulation: revoke an existing xwing-executed epoch
         # while tunnel is connected, then remove the authority path from
         # xwing. x1 can regrant epoch 3; xwing cannot reach PostgreSQL.
-        # This does NOT terminate model work already accepted on xwing.
+        # The synthetic worker must cancel on the next chunk.
         must_ok(local(stmt_revoke(HASH["scope_remote"],2)),"t")
         must_deny(remote(stmt_terminal(HASH["scope_remote"],2,104)),
                   "terminal rejected by stale/revoked/expired fence")
         must_ok(local(stmt_grant(HASH["scope_remote"],expiry)),"3")
         tunnel.terminate()
         tunnel.wait(timeout=5)
+        partition_event=finish_worker(partition_worker)
+        must_ok(local("SELECT count(*) FROM fence_research.accepted_chunks WHERE "
+                      f"request_hash='{202:064x}';"),"1")
         failure=remote("SELECT 1;")
         if not failure.startswith("DENIED:") or not any(
             word in failure.lower() for word in ("refused","unavailable","timed out")
@@ -280,11 +310,12 @@ def execute() -> dict:
                                    106,token_expiry,budget=1)),"1")
 
         return {
-            "decision":"PASS_TWO_PHYSICAL_CLIENTS_ONE_PRIMARY_NOT_CONSENSUS",
+            "decision":"PASS_PHYSICAL_SYNTHETIC_WORKER_OUTPUT_FENCE_NOT_PRODUCTION",
             "controller":"x1-370","second_client":"xwing",
             "second_client_exec":"xwing Python3 PostgreSQL wire over SSH reverse tunnel",
             "postgres_image_sha256":image,
             "schema_sha256":hashlib.sha256(schema.encode()).hexdigest(),
+            "worker_effect_schema_sha256":hashlib.sha256(effect_schema.encode()).hexdigest(),
             "host_port_binding":"127.0.0.1:55439",
             "remote_port_binding":"127.0.0.1:55539",
             "docker_network_internal":False,"ephemeral_private_bridge":True,
@@ -300,12 +331,26 @@ def execute() -> dict:
             "physical_ssh_tunnel_partition":"xwing_authority_unreachable",
             "post_partition_replacement_epoch":3,
             "revocation_while_remote_epoch_active":"late_terminal_denied",
+            "synthetic_xwing_worker_revoke_after_chunk1":"chunk2_blocked_cancel_callback",
+            "synthetic_xwing_worker_partition_after_chunk1":"chunk2_blocked_cancel_callback",
+            "synthetic_effect_ack_count_per_worker":1,
+            "synthetic_worker_cancel_achieved":True,
+            "real_model_worker_cancel_proven":False,
+            "network_delivery_linearizability_proven":False,
             "no_worker_side_cancel_proven":True,
             "no_independent_administrative_custody":True,
             "elapsed_seconds":round(time.monotonic()-start,2),
             "ephemeral_resources_cleaned":True,
         }
     finally:
+        for worker in synthetic_workers:
+            if worker.poll() is None:
+                worker.kill()
+                try:worker.wait(timeout=4)
+                except subprocess.TimeoutExpired:pass
+            for stream in (worker.stdin,worker.stdout,worker.stderr):
+                if stream and not stream.closed:
+                    stream.close()
         if tunnel is not None:
             if tunnel.poll() is None:
                 tunnel.terminate()
