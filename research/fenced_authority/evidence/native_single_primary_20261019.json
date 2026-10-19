@@ -1,0 +1,23 @@
+{
+  "accepted_attempts": 2,
+  "conflicting_terminal": "denied",
+  "container_removed_on_exit": true,
+  "contending_client_processes": 6,
+  "decision": "PASS_SINGLE_PRIMARY_MECHANISM_NOT_PRODUCTION",
+  "denied_over_budget": 4,
+  "duplicate_terminal": "idempotent",
+  "elapsed_s": 3.83,
+  "image_sha256": "sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24",
+  "network": "none",
+  "no_cross_host_consensus_proven": true,
+  "ports_published": 0,
+  "postgres_image": "postgres:17-alpine",
+  "replacement_epoch": 2,
+  "revoked_epoch_late_terminal": "denied",
+  "schema_sha256": "cb306770d0f7560fd4ce3c8be10b4fdd80e8042c04d24b4d2e861e2e03c7280e",
+  "signed_attempt_budget": 2,
+  "simultaneous_grant_contenders": 2,
+  "single_grant_winner": 1,
+  "unspent_old_epoch_jti_reuse": "denied",
+  "untrusted_sql_role_execute": "denied"
+}
