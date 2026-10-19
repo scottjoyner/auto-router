@@ -196,3 +196,63 @@ async def test_default_probe_accepts_only_exact_model_on_selected_runtime(monkey
         "http://192.168.1.44:1234/v1/models",
         "http://100.90.80.70:1234/v1/models",
     ]
+
+
+@pytest.mark.asyncio
+async def test_cache_cannot_reuse_model_a_path_to_admit_model_b(monkeypatch):
+    """One physical runtime does not mean all of its models are resident."""
+    import httpx
+
+    original = _candidate()
+    second_model = ModelConfig(
+        alias="local/second",
+        provider_model="not-installed",
+        capabilities={"chat"},
+    )
+    second = ProviderCandidate(provider=original.provider, model=second_model)
+    urls = []
+
+    def serve(request):
+        urls.append(str(request.url))
+        return httpx.Response(200, json={"data": [{"id": "test-model"}]})
+
+    _mock_runtime_model_catalog(monkeypatch, serve)
+    selector = RuntimeAccessPathSelector(
+        [original.provider], cache_ttl_seconds=30
+    )
+    selected = await selector.select(original)
+    assert selected.qualified_model_id == "test-model"
+    with pytest.raises(ProviderError, match="no approved access path"):
+        await selector.select(second)
+    # Model B must check both approved paths despite a fresh A entry.
+    assert len(urls) == 3
+    assert selector.snapshot()[0]["qualified_model_id"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_successful_model_switch_requalifies_cache(monkeypatch):
+    import httpx
+
+    original = _candidate()
+    second = ProviderCandidate(
+        provider=original.provider,
+        model=ModelConfig(
+            alias="local/second", provider_model="second-model",
+            capabilities={"chat"}
+        ),
+    )
+    observed = []
+
+    def serve(request):
+        observed.append(str(request.url))
+        return httpx.Response(200, json={"data": [
+            {"id": "test-model"}, {"id": "second-model"}
+        ]})
+
+    _mock_runtime_model_catalog(monkeypatch, serve)
+    selector = RuntimeAccessPathSelector([original.provider], cache_ttl_seconds=30)
+    assert (await selector.select(original)).qualified_model_id == "test-model"
+    assert (await selector.select(second)).qualified_model_id == "second-model"
+    assert (await selector.select(second)).qualified_model_id == "second-model"
+    assert (await selector.select(original)).qualified_model_id == "test-model"
+    assert len(observed) == 3  # model switch forces fresh catalog check

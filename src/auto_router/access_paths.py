@@ -22,6 +22,7 @@ _MAX_PROBE_RESPONSE_BYTES = 64 * 1024
 @dataclass(frozen=True)
 class AccessPathChoice:
     runtime_instance_id: str
+    qualified_model_id: str
     base_url: str
     transport: str
     selected_at: float
@@ -76,22 +77,32 @@ class RuntimeAccessPathSelector:
             f"unresolved:{candidate.provider.name}",
         )
         now = time.monotonic()
+        expected_model = candidate.model.provider_model
         cached = self._choices.get(runtime_id)
-        if cached is not None and cached.expires_at > now:
+        if (
+            cached is not None
+            and cached.qualified_model_id == expected_model
+            and cached.expires_at > now
+        ):
             return cached
 
         lock = self._locks.setdefault(runtime_id, asyncio.Lock())
         async with lock:
             now = time.monotonic()
             cached = self._choices.get(runtime_id)
-            if cached is not None and cached.expires_at > now:
+            if (
+                cached is not None
+                and cached.qualified_model_id == expected_model
+                and cached.expires_at > now
+            ):
                 return cached
 
             urls = self._paths.get(runtime_id) or self._ordered_unique_urls(candidate.provider)
             for base_url in urls:
-                if await self._probe(base_url, expected_model=candidate.model.provider_model):
+                if await self._probe(base_url, expected_model=expected_model):
                     choice = AccessPathChoice(
                         runtime_instance_id=runtime_id,
+                        qualified_model_id=expected_model,
                         base_url=base_url,
                         transport=classify_access_transport(base_url),
                         selected_at=now,
@@ -157,6 +168,7 @@ class RuntimeAccessPathSelector:
                     "runtime_instance_id": runtime_id,
                     "approved_access_urls": list(self._paths[runtime_id]),
                     "selected_access_url": choice.base_url if choice else None,
+                    "qualified_model_id": choice.qualified_model_id if choice else None,
                     "selected_transport": choice.transport if choice else None,
                     "selection_fresh": bool(choice and choice.expires_at > now),
                     "probe_failures": {

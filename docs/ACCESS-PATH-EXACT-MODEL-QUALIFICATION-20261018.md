@@ -49,3 +49,37 @@ authorization without separately verifying the gateway boundary.
 
 Joyner GLM-5.3 production admission remains HOLD. Lenovo LFM CPU is
 only a restricted degraded-mode research candidate.
+
+## Model-switch cache boundary — additional safety test
+
+An existing per-runtime cache stored the last approved transport without
+remembering which provider model was verified. Even with the new exact
+model catalog probe, model A could qualify the LAN path and model B
+could reuse that cached path for up to 30 seconds without a model-B check.
+
+The patch now binds each cached choice to the exact provider_model.
+A cache hit is valid only if both runtime identity and model identity
+match the current candidate, within the bounded TTL. Switching models
+re-probes an approved path even if the transport was recently healthy.
+A failed model-B probe leaves model-A's prior selection intact, but
+cannot authorize B. This does not change runtime capacity accounting:
+physical runtime admission is still shared.
+
+Additional hermetic tests validate a missing model B is denied despite
+model A's cached HTTP200, and a successful A-to-B-to-A switch rechecks
+each distinct model. Six adjacent suites now pass 52/52.
+
+## Two-user authenticated authority still unverified
+
+Source inspection of Auto-Router's ExecutorInferenceAuthMiddleware and
+AssistX's claim-status endpoint found that the token/fence tuple is
+task_id, claim_id, agent_id and projection_generation. There is no
+independently verified human owner_id in the inspected claim-status
+response, and Auto-Router idempotency groups an explicit key by a
+hash of the presented bearer. These are valuable task-execution
+boundaries, not proof of distinct authenticated human/tenant owners.
+A two-principal gateway acceptance test cannot be reported as passed
+until the producer contract and consumer verifier expose and check
+canonical owner binding with actual separately authenticated users.
+
+Live routing remains untouched, and this code stays draft/review only.
