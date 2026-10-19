@@ -205,3 +205,85 @@ async def test_inference_token_enforces_output_and_attempt_budgets(signing_key):
     )
     assert first[0]["status"] == 204
     assert second[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_untrusted_chunked_inference_body_enforces_bound_before_buffering() -> None:
+    from auto_router.executor_auth import _read_body, ExecutorAuthError
+
+    pieces = iter([
+        {"type": "http.request", "body": b"123456", "more_body": True},
+        {"type": "http.request", "body": b"abcdef", "more_body": False},
+    ])
+
+    async def receive():
+        return next(pieces)
+
+    with pytest.raises(ExecutorAuthError, match="maximum body size"):
+        await _read_body(receive, max_bytes=10)
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_oversized_anonymous_request_before_downstream(monkeypatch) -> None:
+    import auto_router.executor_auth as module
+
+    monkeypatch.setattr(module, "_MAX_EXECUTOR_REQUEST_BYTES", 32)
+    # The default parameter is fixed at function definition, so explicitly
+    # patch the reader with a bounded wrapper for this unit test.
+    original = module._read_body
+
+    async def bounded(receive):
+        return await original(receive, max_bytes=32)
+
+    monkeypatch.setattr(module, "_read_body", bounded)
+    seen = []
+    messages = iter([
+        {"type": "http.request", "body": b"z" * 17, "more_body": True},
+        {"type": "http.request", "body": b"z" * 17, "more_body": False},
+    ])
+
+    async def receive():
+        return next(messages)
+
+    async def downstream(*_args):
+        raise AssertionError("unauthenticated oversized body reached downstream")
+
+    async def send(message):
+        seen.append(message)
+
+    scope = {
+        "type": "http", "method": "POST",
+        "path": "/v1/chat/completions", "headers": []
+    }
+    middleware = module.ExecutorInferenceAuthMiddleware(downstream, SimpleNamespace())
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
+    await middleware(scope, receive, send)
+    assert seen[0]["status"] == 413
+
+
+@pytest.mark.asyncio
+async def test_executor_bounded_reader_keeps_valid_body_and_replay() -> None:
+    from auto_router.executor_auth import _read_body
+
+    messages = iter([
+        {"type": "http.request", "body": b'{"model":', "more_body": True},
+        {"type": "http.request", "body": b'"m"}', "more_body": False},
+    ])
+
+    async def receive():
+        return next(messages)
+
+    body, replay = await _read_body(receive, max_bytes=100)
+    assert body == b'{"model":"m"}'
+    assert (await replay())["body"] == body
+
+
+@pytest.mark.asyncio
+async def test_executor_bounded_reader_refuses_nonbyte_chunks() -> None:
+    from auto_router.executor_auth import _read_body, ExecutorAuthError
+
+    async def receive():
+        return {"type": "http.request", "body": "unexpected-text", "more_body": False}
+
+    with pytest.raises(ExecutorAuthError, match="must contain bytes"):
+        await _read_body(receive, max_bytes=100)
