@@ -83,3 +83,37 @@ until the producer contract and consumer verifier expose and check
 canonical owner binding with actual separately authenticated users.
 
 Live routing remains untouched, and this code stays draft/review only.
+
+## Full-suite result and independent live-drift reproduction
+
+Full non-integration suite on this isolated review branch (Oct 18):
+447 passed, 9 skipped, 1 failed. The sole failure was the deliberate
+live drift assertion in test_provider_registry_drift.py. During this
+run the x1-370 provider advertised a Qwen 0.8B distilled entry that
+its live catalog did not serve. In an unmodified auto-router checkout,
+the same exact test independently failed, reporting a different
+missing x1 model alias (toolcall-v5-3b-combined-r2). The live runtime's
+advertised/served set can change between samples, but the failure class
+is present without this patch; the drift test should NOT be weakened.
+
+This review branch does not update the x1 provider registry, load
+either missing model or renew any stale admission approval. Fixing live
+registry drift requires a separately authorized inventory and model
+owner decision.
+
+## Genuine two-owner claim contract gap
+
+The present AssistX issuer and Auto-Router fence use task_id, claim_id,
+agent_id, projection_generation, and a signed short-lived executor token.
+The inspected AssistX claim-status response does not carry a canonical
+human/tenant owner identifier, and the Router cannot verify that a
+claimed task belongs to one of two separately authenticated human users.
+Moreover, the local executor attempt-count ledger is process-local;
+these tests do not validate replay budgeting across worker restarts.
+
+Any accepted human-owner-bound fallback MUST add a trusted owner
+identity to the issuer and claim-status authority, bind it to a distinct
+authenticated gateway principal, reject stale/revoked owner scopes,
+and produce persistent per-owner execution receipts in a real
+two-principal authenticated integration test. Do not interpret two
+synthetic prompt labels or two executor task IDs as that acceptance.
