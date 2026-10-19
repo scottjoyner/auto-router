@@ -383,3 +383,21 @@ def test_receipt_cannot_be_rebound_to_another_request_key(authority):
                      (request_hash,))
     with pytest.raises(ReceiptDenied,match="indexed fields"):
         store.get("request-2")
+
+
+def test_split_brain_counterexample_independent_hosts_both_accept(authority,tmp_path):
+    """Explicit NO-GO witness: local SQLite is NOT a cross-host arbiter.
+
+    Each independent store starts with the same valid public signer trust root,
+    signed receipt, active-claim expectation and fencing epoch. Neither store
+    can see the other's INSERT. This must NOT be promoted to global admission.
+    """
+    first,seal,pem,_=authority
+    second=SignedTerminalCustody(
+        str(tmp_path/"another-router-host-simulated.db"),
+        verifying_key_pem=pem,signer_id="test-result-signer"
+    )
+    expected,payload=make()
+    signed=seal(payload)
+    assert first.accept(envelope=signed,expected=expected,now_s=TIME)=="recorded"
+    assert second.accept(envelope=signed,expected=expected,now_s=TIME)=="recorded"
