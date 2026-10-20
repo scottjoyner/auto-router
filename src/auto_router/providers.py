@@ -76,8 +76,11 @@ class OpenAICompatibleProvider:
                     f"{self.config.base_url.rstrip('/')}/models",
                     headers=self._headers(),
                 )
-            if response.status_code < 500:
-                return ProviderHealth(provider=self.name, ok=True, detail=f"HTTP {response.status_code}")
+            # Readiness requires authorization AND a successful model-list response.
+            # 401/403 (bad credentials), 429 (throttling), and 3xx redirects are
+            # not healthy providers, even though the TCP endpoint is reachable.
+            if response.status_code == 200:
+                return ProviderHealth(provider=self.name, ok=True, detail="HTTP 200")
             return ProviderHealth(provider=self.name, ok=False, detail=f"HTTP {response.status_code}")
         except Exception as exc:  # pragma: no cover - network dependent
             return ProviderHealth(provider=self.name, ok=False, detail=str(exc))

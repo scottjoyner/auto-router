@@ -368,7 +368,13 @@ class RuntimeProjectionManager:
         registry = ProviderRegistry(
             providers=_apply_tool_use_capability_ceiling(document.providers)
         )
-        admission = RuntimeAdmissionController(registry.enabled())
+        # Reuse physical GPU gates across Ed25519 projection generations:
+        # old in-flight requests cannot be double-booked by a new projection.
+        previous_admission = getattr(self.state, "admission", None)
+        gpu_pool = getattr(previous_admission, "gpu_pool", None)
+        admission = RuntimeAdmissionController(
+            registry.enabled(), gpu_pool=gpu_pool,
+        )
         access_paths = RuntimeAccessPathSelector(
             registry.enabled(),
             cache_ttl_seconds=float(
@@ -453,8 +459,9 @@ class RuntimeProjectionManager:
         for generation in self.retired[-16:]:
             snapshots = generation.admission.snapshot()
             if any(
-                int(item.get("active") or 0) > 0
-                or int(item.get("queued") or 0) > 0
+                (int(item.get("active") or 0) > 0
+                 or int(item.get("queued") or 0) > 0)
+                and item.get("resource_kind") != "physical_gpu"
                 for item in snapshots
             ):
                 retained.append(generation)
