@@ -51,7 +51,7 @@ class _Generation:
         return True
 
 
-async def _invoke(app, token: str, payload: dict):
+async def _invoke(app, token: str, payload: dict, *, verified_owner=None):
     sent = []
     captured = {}
     encoded = json.dumps(payload).encode()
@@ -79,6 +79,9 @@ async def _invoke(app, token: str, payload: dict):
         "client": ("127.0.0.1", 12345),
         "server": ("test", 80),
     }
+
+    if verified_owner is not None:
+        scope["state"] = {"verified_owner": verified_owner}
 
     async def downstream(inner_scope, inner_receive, inner_send):
         body = await inner_receive()
@@ -205,3 +208,68 @@ async def test_inference_token_enforces_output_and_attempt_budgets(signing_key):
     )
     assert first[0]["status"] == 204
     assert second[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_strict_owner_fence_matches_signed_and_authenticated_principal(
+    signing_key, monkeypatch
+):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    claims = {"owner_issuer": "test-idp", "owner_subject": "person-a"}
+    principal = {**claims, "authenticated": True}
+    request = {"model": "auto/code", "messages": [{"role": "user", "content": "test"}],
+               "max_tokens": 2}
+    sent, body = await _invoke(
+        ExecutorInferenceAuthMiddleware, _token(signing_key, **claims),
+        request, verified_owner=principal
+    )
+    assert sent[0]["status"] == 204
+    assert body["metadata"]["assistx_executor"]["owner_subject"] == "person-a"
+    assert body["metadata"]["assistx_executor"]["owner_issuer"] == "test-idp"
+
+
+@pytest.mark.asyncio
+async def test_strict_owner_fence_rejects_owner_switch(signing_key, monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    request = {"model": "auto/code", "messages": [{"role": "user", "content": "x"}],
+               "max_tokens": 2}
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key, owner_issuer="test-idp", owner_subject="person-a"),
+        request,
+        verified_owner={"owner_issuer":"test-idp","owner_subject":"person-b",
+                        "authenticated":True},
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_strict_owner_fence_ignores_forged_payload_owner(signing_key, monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    request = {"model":"auto/code","messages":[{"role":"user","content":"x"}],
+               "max_tokens":2,
+               "metadata":{"verified_owner":{"owner_issuer":"test-idp",
+                                              "owner_subject":"person-a",
+                                              "authenticated":True}}}
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key, owner_issuer="test-idp", owner_subject="person-a"),
+        request,
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_strict_owner_fence_denies_unowned_internal_token(monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "internal-test-token")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware, "internal-test-token",
+        {"model": "auto/code", "messages": [{"role": "user", "content": "x"}],
+         "max_tokens": 2},
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded

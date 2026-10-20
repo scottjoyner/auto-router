@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 import httpx
 
+from .owner_binding import OwnerBindingError, assert_claim_owner, owner_binding_required
+
 
 class ExecutorClaimFenceError(RuntimeError):
     pass
@@ -28,6 +30,10 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
 
     identity = _executor_metadata(request)
     if identity is None:
+        if owner_binding_required():
+            raise ExecutorClaimFenceError(
+                "unowned service execution disabled by strict owner fence"
+            )
         return
     manager = getattr(state, "runtime_projection_manager", None)
     current = getattr(manager, "current", None)
@@ -83,5 +89,9 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
     }
     if actual != expected:
         raise ExecutorClaimFenceError("AssistX active claim no longer matches executor token")
+    try:
+        assert_claim_owner(identity, payload)
+    except OwnerBindingError as exc:
+        raise ExecutorClaimFenceError(str(exc)) from exc
     if int(payload.get("lease_expires_at_ts") or 0) <= int(time.time() * 1000):
         raise ExecutorClaimFenceError("AssistX task lease expired before provider dispatch")

@@ -14,6 +14,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
+from .owner_binding import OwnerBindingError, bound_principal, owner_binding_required
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +237,12 @@ class ExecutorInferenceAuthMiddleware:
             "yes",
             "on",
         }:
+            if owner_binding_required():
+                await JSONResponse(
+                    status_code=503,
+                    content={"detail": "strict owner fence requires executor authentication"},
+                )(scope, receive, send)
+                return
             await self.app(scope, receive, send)
             return
 
@@ -247,6 +254,10 @@ class ExecutorInferenceAuthMiddleware:
             bearer = _bearer(list(scope.get("headers") or []))
             service_token = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
             if service_token and hmac.compare_digest(bearer, service_token):
+                if owner_binding_required():
+                    raise ExecutorAuthError(
+                        "unowned internal-service bypass disabled by strict owner fence"
+                    )
                 metadata = payload.get("metadata")
                 if not isinstance(metadata, dict):
                     metadata = {}
@@ -261,6 +272,7 @@ class ExecutorInferenceAuthMiddleware:
                 return
 
             claims = decode_executor_token(bearer)
+            owner = bound_principal(scope, claims)
             model = str(payload.get("model") or "").strip()
             allowed_models = {str(item) for item in claims.get("allowed_model_aliases") or []}
             if not model or model not in allowed_models:
@@ -302,10 +314,11 @@ class ExecutorInferenceAuthMiddleware:
                     "token_jti": claims["jti"],
                     "attempt": attempt,
                     "projection_generation": token_generation,
+                    **owner,
                 },
             }
             await self.app(scope, _encoded_receive(payload, receive), send)
-        except (ExecutorAuthError, json.JSONDecodeError) as exc:
+        except (ExecutorAuthError, OwnerBindingError, json.JSONDecodeError) as exc:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(scope, replay, send)
 
 
