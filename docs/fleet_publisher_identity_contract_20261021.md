@@ -162,3 +162,28 @@ PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q \
 There is **no production integration**, no live `/api/fleet` publisher
 endpoint, and no verified GPU inference. Do not merge this research as a
 production-admission authorization.
+
+## Observer-side atomic checkpoint issuance — offline-only research
+
+`fleet_checkpoint_authority_research.py` models a **synthetic, separate observer**. The test operator supplies an Ed25519 private key, an explicit SQLite path, separately pinned publisher public keys, and synthetic bootstrap high-water counters. There are NO live fleet keys, no Lenovo service, no API route, and no production writes.
+
+The offline observer checks signed publisher role/key/node/lease, then atomically advances only that publisher's high-water sequence using SQLite `BEGIN IMMEDIATE` and a compare-and-swap **expected generation**. It signs the new full checkpoint, offers readback of the signed document, rejects stale generations and replays, and can record monotonic publisher revocations. Observer/publisher key reuse and unexpected trust-key replacement are rejected.
+
+**Security boundary:** The observer signing key and its database are under the SAME test operator's control. This is not physical independence, and SQLite durability is not rollback resistance.
+
+| Synthetic scenario | Result |
+|---|---|
+| Competing updates with the same expected generation | Exactly one accepted |
+| Restart with previously accepted publisher sequence | Replay rejected |
+| Forged publisher signature / model-vs-GPU role confusion | Rejected |
+| Revoked publisher attempts to report | Rejected |
+| Roll back local reporter DB while latest external generation remains pinned | Rejected |
+| Roll back BOTH observer DB and reporter DB; client derives latest generation from rolled-back observer | OLD SIGNED STATE ACCEPTED — NO_GO |
+| Changed observer verification key or deleted database | Rejected |
+
+The module's `latest()` merely reads a stored signed document. Consumers MUST independently verify its signature and compare against an externally controlled latest-generation anchor. Even a successful synthetic comparison returns `production_admission=NO_GO`. The fixture's genesis counters are not evidence of real-world reporter history.
+
+Production still requires independent signing-key custody, trusted genesis, an authenticated observer endpoint, atomic remote CAS, current signed checkpoint readback, negative remote rollback tests, revocation, outage fail-closed behavior, and separately verified owner-bound GPU execution receipts. No remote observer endpoint or physical GPU admission was enabled.
+
+Run against disposable test files only:
+`PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q tests/test_fleet_checkpoint_authority_research.py`
