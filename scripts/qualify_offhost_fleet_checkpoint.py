@@ -12,9 +12,13 @@ import argparse
 import base64
 import binascii
 import hashlib
+import hmac
 import json
+import os
+import re
 import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -65,8 +69,22 @@ def _canonical(value: dict[str, Any]) -> bytes:
     ).encode("ascii")
 
 
-def verify_transcript(data: dict[str, Any], *, challenge: str) -> TrustedObserver:
-    """Validate freshness challenge and transient key binding, NOT custody."""
+def verify_transcript(
+    data: dict[str, Any], *, challenge: str,
+    pinned_observer_public_key: bytes | None = None,
+    require_pinned_identity: bool = False,
+) -> TrustedObserver:
+    """Validate a challenge and optionally an operator-supplied public-key pin.
+
+    A pin is proof of key consistency, not proof of independent key custody.
+    Without one, the key is self-presented and can be swapped by the sender.
+    """
+    if require_pinned_identity and pinned_observer_public_key is None:
+        raise OffhostWitnessError("independently pinned observer key required")
+    if (pinned_observer_public_key is not None and
+            (not isinstance(pinned_observer_public_key, bytes)
+             or len(pinned_observer_public_key) != 32)):
+        raise OffhostWitnessError("observer public-key pin format rejected")
     if not isinstance(data, dict) or set(data) != {
         "schema", "observer_public_key", "challenge", "host_role",
         "old_checkpoint", "latest_checkpoint", "challenge_proof",
@@ -74,7 +92,8 @@ def verify_transcript(data: dict[str, Any], *, challenge: str) -> TrustedObserve
     }:
         raise OffhostWitnessError("off-host transcript shape rejected")
     if (data["schema"] != "fleet-offhost-research-transcript.v1"
-            or data["challenge"] != challenge or len(challenge) != 32
+            or data["challenge"] != challenge
+            or re.fullmatch(r"[0-9a-f]{32}", challenge) is None
             or data["host_role"] != "disposable-observer"
             or data["separate_custody_verified"] is not False
             or data["production_admission"] != "NO_GO"):
@@ -88,6 +107,9 @@ def verify_transcript(data: dict[str, Any], *, challenge: str) -> TrustedObserve
             new.get("highwater") != {A: 2, B: 1}):
         raise OffhostWitnessError("off-host generation CAS result unexpected")
     public_bytes = _decode(data["observer_public_key"], 32)
+    if (pinned_observer_public_key is not None
+            and not hmac.compare_digest(public_bytes, pinned_observer_public_key)):
+        raise OffhostWitnessError("observer signing key differs from operator pin")
     key = Ed25519PublicKey.from_public_bytes(public_bytes)
     transcript_message = (
         _DOMAIN + bytes.fromhex(challenge) +
@@ -105,9 +127,15 @@ def verify_transcript(data: dict[str, Any], *, challenge: str) -> TrustedObserve
 
 def check_remote_evidence(
     data: dict[str, Any], *, challenge: str, now_ms: int,
+    pinned_observer_public_key: bytes | None = None,
+    require_pinned_identity: bool = False,
 ) -> dict[str, Any]:
-    """Run all local rollback experiments against signed remote records."""
-    observer = verify_transcript(data, challenge=challenge)
+    """Run rollback tests, allowing a strict externally supplied public-key pin."""
+    observer = verify_transcript(
+        data, challenge=challenge,
+        pinned_observer_public_key=pinned_observer_public_key,
+        require_pinned_identity=require_pinned_identity,
+    )
     with tempfile.TemporaryDirectory(prefix="r9700-local-fence-test-") as folder:
         store = Path(folder) / "local.sqlite3"
         backup = Path(folder) / "old-local.sqlite3"
@@ -173,7 +201,12 @@ def check_remote_evidence(
         "physical_remote_test": True,
         "remote_host": HOST,
         "remote_key_provisioned": False,
-        "remote_key_trust": "SELF_PRESENTED_SSH_HANDOFF_ONLY",
+        "remote_key_trust": (
+            "OPERATOR_SUPPLIED_PUBLIC_KEY_PIN_NOT_CUSTODY_PROOF"
+            if pinned_observer_public_key is not None
+            else "SELF_PRESENTED_SSH_HANDOFF_ONLY"
+        ),
+        "observer_identity_pin_checked": pinned_observer_public_key is not None,
         "independent_admin_custody_verified": False,
         "checkpoint_genesis_is_synthetic": True,
         "signed_remote_checkpoint_verified": True,
@@ -188,7 +221,13 @@ def check_remote_evidence(
     }
 
 
-def run_physical(host: str, source: Path, *, timeout: int = 20) -> dict[str, Any]:
+def run_physical(
+    host: str, source: Path, *, timeout: int = 20,
+    pinned_observer_public_key: bytes | None = None,
+    require_pinned_identity: bool = False,
+) -> dict[str, Any]:
+    if require_pinned_identity and pinned_observer_public_key is None:
+        raise OffhostWitnessError("independently pinned observer key required")
     if host != HOST:
         raise OffhostWitnessError("only the pinned research host is supported")
     if not source.is_file() or source.stat().st_size > 12000:
@@ -212,15 +251,57 @@ def run_physical(host: str, source: Path, *, timeout: int = 20) -> dict[str, Any
         raise OffhostWitnessError("remote observer output invalid") from exc
     return check_remote_evidence(
         data, challenge=challenge, now_ms=int(time.time() * 1000),
+        pinned_observer_public_key=pinned_observer_public_key,
+        require_pinned_identity=require_pinned_identity,
     )
+
+
+def read_observer_public_pin(path: Path) -> bytes:
+    """Read exactly 32 public bytes without following a final symlink.
+
+    The file is operator supplied; ownership/custody CANNOT be inferred from
+    a successful read or from any Unix permissions.
+    """
+    if not path.is_absolute():
+        raise OffhostWitnessError("observer public-key pin path must be absolute")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size != 32:
+                raise OffhostWitnessError("observer public-key pin file is invalid")
+            public_bytes = os.read(fd, 33)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise OffhostWitnessError("observer public-key pin file is unavailable") from exc
+    if len(public_bytes) != 32:
+        raise OffhostWitnessError("observer public-key pin file has wrong length")
+    return public_bytes
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=HOST, choices=[HOST])
+    parser.add_argument(
+        "--require-pinned-identity", action="store_true",
+        help="Fail closed unless an explicit raw 32-byte Ed25519 public key is supplied",
+    )
+    parser.add_argument(
+        "--observer-public-key-file", type=Path,
+        help="Previously provisioned raw public-key pin; does not certify separate custody",
+    )
     args = parser.parse_args()
+    pinned_key = (
+        read_observer_public_pin(args.observer_public_key_file)
+        if args.observer_public_key_file is not None else None
+    )
     source = Path(__file__).resolve().with_name("temporary_offhost_observer.py")
-    result = run_physical(args.host, source)
+    result = run_physical(
+        args.host, source, pinned_observer_public_key=pinned_key,
+        require_pinned_identity=args.require_pinned_identity,
+    )
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0
 

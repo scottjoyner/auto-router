@@ -253,3 +253,42 @@ custody, independently anchored current-generation readback,
 remote atomic CAS and signer attestation, revocation and outage
 denial evidence, protected host/process identity, and owner-bound
 execution receipts remain mandatory. **This cannot promote IQ3_S.**
+
+## Strict public-key pinning gate — October 21 continuation
+
+The disposable Lenovo physical test deliberately used a **self-presented
+public key**. Any actor able to replace the SSH-handled transcript could also
+replace its signing key. This qualifies a two-host cryptographic protocol, but
+**cannot authenticate Lenovo as an independently controlled observer**.
+
+`scripts/qualify_offhost_fleet_checkpoint.py` now has an **opt-in strict
+identity gate**, using `--require-pinned-identity` and a separate
+`--observer-public-key-file /absolute/path/to/pinned-raw-32-byte-ed25519.pub`.
+Strict mode **fails before SSH** if the operator-supplied public key is
+missing, rejects a different signing key even when the substituted transcript
+has internally valid signatures, and only reads an exactly 32-byte regular
+public-key file with a no-follow check on its final path component. The
+fresh challenge is also required to be exactly 16 bytes of lowercase
+hexadecimal. All results explicitly retain
+`independent_admin_custody_verified=false`,
+`external_authority_verified=false` and
+`production_admission=NO_GO`, even when a pin matches.
+
+The physical disposable remote observer currently **generates a new key for
+each invocation**, so this does not supply a persistent, independently
+provisioned Lenovo identity. An externally pinned key can only be regarded as
+authoritative after its initial provenance, physical process identity, custody,
+rotation and revocation have all been separately established. Merely writing
+or obtaining a pin through the same SSH session would be self-assertion.
+
+Run the existing non-admitting research only:
+
+`PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python scripts/qualify_offhost_fleet_checkpoint.py --host lenovo`
+
+To see the strict fail-closed gate without modifying any node:
+
+`PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python scripts/qualify_offhost_fleet_checkpoint.py --require-pinned-identity`
+
+No real observer key was installed, no production endpoint has been modified
+and a successful strict signature check still cannot establish remote
+tamper-resistant latest-generation authority or model GPU residency.
