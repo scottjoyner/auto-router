@@ -187,3 +187,69 @@ Production still requires independent signing-key custody, trusted genesis, an a
 
 Run against disposable test files only:
 `PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q tests/test_fleet_checkpoint_authority_research.py`
+
+## Actual off-host disposable checkpoint qualification — October 21, 2026
+
+**Physical machines:** x1-370 control/verification host and Lenovo
+(`scott-Lenovo-ideapad-330S-15IKB`) executing an ephemeral observation
+process reached through pre-existing strict-host-key SSH. Both SSH
+sessions were operated as `scott`; **separate administrative custody is
+not proven**.
+
+New fully reproducible source files:
+
+- `scripts/temporary_offhost_observer.py`: streamed as Python source
+  on the remote host via SSH stdin. An Ed25519 key is generated in that
+  process memory and is never serialized to an on-disk private-key file.
+  A SQLite database in a self-cleaning temporary directory stores
+  synthetic generation 1 and is advanced with `BEGIN IMMEDIATE` to
+  generation 2. Two signed checkpoints and a challenge-bound signature
+  are returned through stdout; no daemon/listener is installed.
+- `scripts/qualify_offhost_fleet_checkpoint.py`: verifies a fresh
+  challenge and signatures, creates a completely separate temporary
+  x1-370 SQLite reporter fence, compares both checkpoints with the
+  existing `fleet_publisher_checkpoint` verifier, deliberately
+  restores the old local database, and requires a **rejection**
+  against the retained second checkpoint. It also verifies an older
+  signed checkpoint is rejected against the newer pinned generation.
+  Every assessment returns `production_admission=NO_GO`.
+- `tests/test_offhost_checkpoint_qualification.py`: offline
+  synthetic positives and negatives including tampering, invalid
+  remote proof, missing/failed/timeout SSH, oversized/unparseable
+  output, expiration, restrictive command flags, and fail-closed
+  behavior.
+
+Run from the **isolated** research checkout on x1-370 only:
+
+```bash
+cd /home/scott/git/wt-auto-router-publisher-auth-20261021
+PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python \
+  scripts/qualify_offhost_fleet_checkpoint.py --host lenovo
+PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q \
+  tests/test_offhost_checkpoint_qualification.py
+```
+
+This **does not** use the production router POST endpoint, alter Joyner
+LLM services, distribute keys to fleet nodes, or persist observer signing
+keys. The remote Linux filesystem is touched only within a temporary
+directory, deleted at process exit. No existing Lenovo service is
+changed.
+
+**Evidence and limits**: The first live Lenovo→x1-370 run passed
+challenge-bound signed transcript verification, generation progression,
+local rollback rejection with the retained signed checkpoint, and stale
+checkpoint rejection. The observer public key was **self-presented
+inside the same SSH-controlled test session**; it was not verified
+against an independently held trust root, HSM or different
+administrator. The checkpoint was generated from synthetic counters;
+no physical Joyner process provenance or live accepted-sequence
+history was attested. If an attacker controls both checkpoint
+generation and the supposed latest anchor, the tests still show that
+rollback can evade detection. A physical two-host test does not
+establish a tamper-resistant replay authority.
+
+Before production admission: separate observer key and service
+custody, independently anchored current-generation readback,
+remote atomic CAS and signer attestation, revocation and outage
+denial evidence, protected host/process identity, and owner-bound
+execution receipts remain mandatory. **This cannot promote IQ3_S.**
