@@ -58,3 +58,51 @@ Tests generate **ephemeral private keys in their own Python process**. They cove
 6. **Hardware/model:** No 64 GiB RAM upgrade or real R9700 IQ3_S benchmark is verified. The four existing inference servers must remain running until an independently approved maintenance window.
 
 This document does **not** authorize a production router deployment, a new GPU context, an IQ3_S load, or the conclusion that any particular model is optimal.
+
+
+## Offline SQLite high-water research (October 21 continuation)
+
+The verifier can now be constructed with an **explicitly opt-in**
+\`LocalSQLiteReplayFence(path)\`. This is a local research backend, **not**
+externally anchored replay authority, and it is **not** used by a live router
+endpoint or by the default verifier. It accepts only an absolute local SQLite
+path and stores per-publisher monotonic sequence values with
+\`BEGIN IMMEDIATE\`, SQLite conflict-conditional update, and
+\`PRAGMA synchronous=FULL\`. It explicitly closes SQLite handles after each
+operation, rejects duplicate/older sequence numbers across verifier restarts,
+and serializes concurrent writers sharing the same file. It does not store
+private keys, prompts or model weights.
+
+**Security distinction established by an executable negative test:**
+
+| Scenario | In-memory fence | Local SQLite research fence | Independently controlled durable authority |
+|---|---|---|---|
+| Duplicate sequence in one verifier | Rejects | Rejects | Required |
+| New verifier / ordinary process restart | Loses state | Rejects old sequence | Required |
+| Concurrent verifier instances | No shared process state | Atomic local-file enforcement | Required |
+| Restore old on-disk snapshot, then restart | Loses state | **Old sequence can be accepted again** | Must reject |
+| Remote custody / revocation / operator rollback | Not proven | Not proven | **Not implemented** |
+| Production model admission | **NO_GO** | **NO_GO** | Separate source and execution gates still required |
+
+The test deliberately snapshots the database after sequence 1, accepts
+sequence 2, restores the older image, starts a fresh verifier and confirms
+sequence 2 is accepted again. The resulting receipt continues to say
+\`replay_protection_durable=false\`, \`publisher_custody_verified=false\`,
+\`gpu_residency_verified=false\` and \`production_admission=NO_GO\`. A
+successful local SQLite durability test must never be described as
+rollback-resistant security.
+
+Reproduce **only in disposable test directories**:
+
+\`\`\`bash
+PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q \
+  tests/test_fleet_publisher_envelope.py \
+  tests/test_fleet_publisher_sqlite_replay.py
+\`\`\`
+
+Independent next gate: define a non-self-issued checkpoint (external witness
+with separate key custody, atomic compare-and-swap, latest accepted high-water,
+revocation, signed proof, and a negative on-disk rollback test). The production
+router must fail closed if that authority is unavailable. Physical Joyner
+publisher keys, reporter code deployment, API integration and GPU residency
+remain unverified.
