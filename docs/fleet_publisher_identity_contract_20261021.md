@@ -63,12 +63,12 @@ This document does **not** authorize a production router deployment, a new GPU c
 ## Offline SQLite high-water research (October 21 continuation)
 
 The verifier can now be constructed with an **explicitly opt-in**
-\`LocalSQLiteReplayFence(path)\`. This is a local research backend, **not**
+`LocalSQLiteReplayFence(path)`. This is a local research backend, **not**
 externally anchored replay authority, and it is **not** used by a live router
 endpoint or by the default verifier. It accepts only an absolute local SQLite
 path and stores per-publisher monotonic sequence values with
-\`BEGIN IMMEDIATE\`, SQLite conflict-conditional update, and
-\`PRAGMA synchronous=FULL\`. It explicitly closes SQLite handles after each
+`BEGIN IMMEDIATE`, SQLite conflict-conditional update, and
+`PRAGMA synchronous=FULL`. It explicitly closes SQLite handles after each
 operation, rejects duplicate/older sequence numbers across verifier restarts,
 and serializes concurrent writers sharing the same file. It does not store
 private keys, prompts or model weights.
@@ -87,18 +87,18 @@ private keys, prompts or model weights.
 The test deliberately snapshots the database after sequence 1, accepts
 sequence 2, restores the older image, starts a fresh verifier and confirms
 sequence 2 is accepted again. The resulting receipt continues to say
-\`replay_protection_durable=false\`, \`publisher_custody_verified=false\`,
-\`gpu_residency_verified=false\` and \`production_admission=NO_GO\`. A
+`replay_protection_durable=false`, `publisher_custody_verified=false`,
+`gpu_residency_verified=false` and `production_admission=NO_GO`. A
 successful local SQLite durability test must never be described as
 rollback-resistant security.
 
 Reproduce **only in disposable test directories**:
 
-\`\`\`bash
+```bash
 PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q \
   tests/test_fleet_publisher_envelope.py \
   tests/test_fleet_publisher_sqlite_replay.py
-\`\`\`
+```
 
 Independent next gate: define a non-self-issued checkpoint (external witness
 with separate key custody, atomic compare-and-swap, latest accepted high-water,
@@ -106,3 +106,59 @@ revocation, signed proof, and a negative on-disk rollback test). The production
 router must fail closed if that authority is unavailable. Physical Joyner
 publisher keys, reporter code deployment, API integration and GPU residency
 remain unverified.
+
+## Signed independent checkpoint comparison — offline research (October 21)
+
+The **new** `fleet_publisher_checkpoint.py` module verifies a second,
+domain-separated Ed25519 signature from a separately pinned observer key. It
+uses a fixed `fleet-independent-checkpoint.v1` envelope containing the
+observer/key identity, monotonic checkpoint generation, short issuance/expiry,
+an **exact** map of all expected publisher sequence high-water marks, a
+deny-only revocation list and a detached Ed25519 signature.
+
+The caller must separately supply the **latest checkpoint generation** from
+a trustworthy, independent authority. The signed checkpoint is validated
+against that pinned generation before comparing it with a **read-only
+transactional snapshot** of the local research SQLite database. Unknown
+publishers, removed counters, changed values, invalid signatures, expiry,
+wrong observer identities, revoked publishers, missing/invalid databases and
+an older checkpoint generation are rejected.
+
+The synthetic test fixture uses an ephemeral `lenovo-independent-observer`
+key separate from both ephemeral Joyner publisher keys. **This is only the
+observer's illustrative name, not proof that Lenovo currently controls such
+a signing key or runs a durable checkpoint service.** No real observer key,
+publisher private key, network endpoint, authoritative generation database
+or external checkpoint publication has been created.
+
+**Negative rollback qualification:**
+
+| Offline test | Result | Trust implication |
+|---|---|---|
+| Local SQLite rollback after checkpoint for sequence 2 | **REJECTED** | Works only when the independent latest checkpoint stays available and current |
+| Replayed valid older signed checkpoint while external generation remains at 2 | **REJECTED** | Correctly compares against independently supplied generation 2 |
+| Local database **and** supplied latest-generation anchor both rolled back to 1 | **ACCEPTED IN SYNTHETIC TEST** | Independent rollback resistance is **not established** |
+| Changed signed high-water/revocation or reused publisher key | **REJECTED** | Signature and role separation work with pinned trust roots |
+| Checkpoint unavailable, expired, corrupt, or with missing publisher | **REJECTED** | Fail closed rather than fallback to local state |
+
+The assessment always sets `externally_anchored_latest_verified=false`,
+`external_authority_custody_verified=false`,
+`live_replay_protection_verified=false`, `gpu_residency_verified=false`
+and `production_admission=NO_GO`. Local comparison does **not** make the
+checkpoint itself recent, unforgeable by its custodians, or physically
+independent, and the one-shot read is not an atomic live cross-node
+compare-and-swap. Separate publication/fencing, independent key custody,
+revocation and authenticated process provenance remain necessary.
+
+Reproduction on the research host (test-scoped disposable SQLite files only):
+
+```bash
+PYTHONPATH=src /home/scott/git/auto-router/.venv/bin/python -m pytest -q \
+  tests/test_fleet_publisher_checkpoint.py \
+  tests/test_fleet_publisher_envelope.py \
+  tests/test_fleet_publisher_sqlite_replay.py
+```
+
+There is **no production integration**, no live `/api/fleet` publisher
+endpoint, and no verified GPU inference. Do not merge this research as a
+production-admission authorization.
