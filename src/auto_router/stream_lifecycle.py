@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -139,19 +140,30 @@ def _honest_estimate(estimate: Any, usage: dict[str, int]) -> Any:
     )
 
 
+def _route_config_identity(value: Any) -> str | None:
+    """A planned config ID, not attestation from the running model process."""
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) else None
+
+
 def _enqueue_lifecycle_event(
     state: Any,
     request: Any,
     *,
     provider: str,
     model: str,
+    selected_candidate: Any,
     status: str,
     usage_status: str,
     collector: StreamUsageCollector,
     latency_ms: int,
     error: BaseException | None,
 ) -> None:
-    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    # The incoming request's metadata is not model-execution evidence:
+    # callers can supply runtime_instance_id, model_instance_id and claim_id.
+    # The route candidate comes from the router's own configuration, though
+    # it is still only planned selection, not a provider-attested process ID.
+    chosen_provider = selected_candidate.provider
+    chosen_model = selected_candidate.model
     ensure_event_outbox(state).enqueue(
         OutboxEvent(
             event_type=f"router.stream.{status}",
@@ -159,11 +171,11 @@ def _enqueue_lifecycle_event(
             payload={
                 "request_id": request.request_id,
                 "task_id": getattr(request, "task_id", None),
-                "claim_id": (
-                    metadata.get("assistx_executor", {}).get("claim_id")
-                    if isinstance(metadata.get("assistx_executor"), dict)
-                    else None
-                ),
+                # TODO: link a claim only after executor-auth supplies an
+                # independently verified, server-bound receipt. A caller's
+                # assistx_executor.claim_id does NOT prove authorization.
+                "authenticated_claim_binding": False,
+                "claim_id": None,  # retained schema field, NEVER caller's claim
                 "provider": provider,
                 "model": model,
                 "status": status,
@@ -183,12 +195,20 @@ def _enqueue_lifecycle_event(
                 "chunks_sent": collector.chunks_sent,
                 "latency_ms": latency_ms,
                 "error_type": type(error).__name__ if error else None,
-                "error_message": str(error)[:1000] if error else None,
-                "runtime_projection_generation": metadata.get(
-                    "runtime_projection_generation"
+                # Raw exception text may contain upstream response bodies,
+                # URLs or API credentials: never publish in shared outbox.
+                "error_message": None,
+                "runtime_projection_generation": None,
+                "runtime_instance_id": _route_config_identity(
+                    getattr(chosen_provider, "runtime_instance_id", None)
                 ),
-                "runtime_instance_id": metadata.get("runtime_instance_id"),
-                "model_instance_id": metadata.get("model_instance_id"),
+                "model_instance_id": _route_config_identity(
+                    getattr(chosen_model, "model_instance_id", None)
+                ),
+                "node_id": _route_config_identity(
+                    getattr(chosen_provider, "node_id", None)
+                ),
+                "instance_identity_source": "configured_route_not_runtime_attestation",
             },
         )
     )
@@ -374,6 +394,7 @@ def install_stream_lifecycle(main_module: Any) -> None:
                 request,
                 provider=response.provider,
                 model=response.model,
+                selected_candidate=candidate,
                 status=status,
                 usage_status=usage_status,
                 collector=collector,
