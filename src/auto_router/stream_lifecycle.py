@@ -21,6 +21,8 @@ class StreamUsageCollector:
         self.usage: dict[str, int] = {}
         self.bytes_sent = 0
         self.chunks_sent = 0
+        self.terminal_status: str | None = None
+        self.terminal_evidence: str | None = None
 
     def feed(self, chunk: bytes) -> None:
         self.bytes_sent += len(chunk)
@@ -43,7 +45,14 @@ class StreamUsageCollector:
             return
         if line.startswith("data:"):
             line = line[5:].strip()
-        if not line or line == "[DONE]" or not line.startswith("{"):
+        if not line:
+            return
+        if line == "[DONE]":
+            if self.terminal_status != "failed":
+                self.terminal_status = "completed"
+                self.terminal_evidence = "openai_sse_done"
+            return
+        if not line.startswith("{"):
             return
         try:
             payload = json.loads(line)
@@ -51,6 +60,19 @@ class StreamUsageCollector:
             return
         if not isinstance(payload, dict):
             return
+        # OpenAI Responses emits a typed terminal rather than requiring
+        # [DONE]. Only protocol terminal markers may prove stream completion.
+        # A clean TCP EOF or HTTP 200 cannot: providers can truncate a stream.
+        kind = payload.get("type")
+        if kind == "response.completed" and self.terminal_status != "failed":
+            self.terminal_status = "completed"
+            self.terminal_evidence = "responses_completed"
+        elif kind in {"response.failed", "response.incomplete"}:
+            self.terminal_status = "failed"
+            self.terminal_evidence = (
+                "responses_failed" if kind == "response.failed"
+                else "responses_incomplete"
+            )
         candidates = [payload.get("usage")]
         response = payload.get("response")
         if isinstance(response, dict):
@@ -147,6 +169,13 @@ def _enqueue_lifecycle_event(
                 "status": status,
                 "acceptance_state": (
                     "completed" if status == "completed" else "possibly_accepted"
+                ),
+                # Whitelisted protocol evidence only; no content or secrets.
+                # EOF after HTTP headers alone must never mean model completion.
+                "terminal_evidence": (
+                    "client_cancelled" if status == "cancelled"
+                    else "transport_exception" if status == "failed"
+                    else collector.terminal_evidence or "eof_without_terminal"
                 ),
                 "usage_status": usage_status,
                 "usage": collector.usage,
@@ -317,9 +346,10 @@ def install_stream_lifecycle(main_module: Any) -> None:
             record_error: Exception | None
             if status == "cancelled":
                 record_error = StreamCancelledError("client cancelled response stream")
-            elif status == "failed":
+            elif status in {"failed", "incomplete"}:
                 record_error = (
-                    error if isinstance(error, Exception) else RuntimeError(str(error))
+                    error if isinstance(error, Exception)
+                    else RuntimeError("provider_stream_unverified_or_incomplete")
                 )
             else:
                 record_error = None
@@ -366,7 +396,12 @@ def install_stream_lifecycle(main_module: Any) -> None:
                 raise
             finally:
                 if completed:
-                    await finalize("completed")
+                    if collector.terminal_status == "completed":
+                        await finalize("completed")
+                    else:
+                        # Iterator EOF without a terminal event is not evidence
+                        # that a shared model completed the requested work.
+                        await finalize("incomplete")
                 elif not finalized:
                     await finalize("cancelled")
 

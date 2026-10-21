@@ -185,6 +185,7 @@ async def test_stream_is_recorded_only_after_iterator_completion() -> None:
     }
     assert any(state == "completed" for _key, state, _data in idempotency.transitions)
     assert outbox.events[-1].event_type == "router.stream.completed"
+    assert outbox.events[-1].payload["terminal_evidence"] == "openai_sse_done"
     assert outbox.events[-1].payload["usage_status"] == "reported"
     assert outbox.events[-1].payload["usage"]["total_tokens"] == 5
 
@@ -257,3 +258,125 @@ def test_usage_collector_accepts_responses_api_usage_shape() -> None:
         "completion_tokens": 6,
         "total_tokens": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_http_200_without_done_marker_is_incomplete_not_execution_success() -> None:
+    async def body():
+        yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+        yield b'data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(owner)
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 2
+    assert policy.active[owner] == 0
+    assert not circuits.successes
+    assert quota.releases
+    assert len(recorded) == 1
+    assert outbox.events[-1].event_type == "router.stream.incomplete"
+    assert outbox.events[-1].payload["terminal_evidence"] == "eof_without_terminal"
+    assert outbox.events[-1].payload["acceptance_state"] == "possibly_accepted"
+    assert outbox.events[-1].payload["usage_status"] == "reported"
+    assert outbox.events[-1].payload["usage"]["prompt_tokens"] == 3
+    assert not any(state == "completed" for _, state, _ in idempotency.transitions)
+
+
+@pytest.mark.asyncio
+async def test_responses_api_completed_marker_proves_clean_terminal_without_done() -> None:
+    async def body():
+        yield b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+        yield b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    policy.mark_inflight_start(module._owner(candidate))
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(module._owner(candidate))
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 2
+    assert circuits.successes
+    assert quota.releases == []
+    assert len(recorded) == 1
+    assert outbox.events[-1].event_type == "router.stream.completed"
+    assert outbox.events[-1].payload["terminal_evidence"] == "responses_completed"
+    assert outbox.events[-1].payload["usage"]["total_tokens"] == 6
+    assert any(state == "completed" for _, state, _ in idempotency.transitions)
+
+
+@pytest.mark.asyncio
+async def test_responses_api_declared_failure_never_counts_as_success() -> None:
+    async def body():
+        yield b'event: response.failed\ndata: {"type":"response.failed"}\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(owner)
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 1
+    assert not circuits.successes
+    assert quota.releases
+    assert outbox.events[-1].event_type == "router.stream.incomplete"
+    assert not any(status == "completed" for _, status, _ in idempotency.transitions)
+
+
+@pytest.mark.asyncio
+async def test_split_done_marker_across_network_chunks_is_valid_terminal() -> None:
+    async def body():
+        yield b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+        yield b'data: [DO'
+        yield b'NE]\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(owner)
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 3
+    assert circuits.successes
+    assert outbox.events[-1].event_type == "router.stream.completed"
+    assert quota.releases == []
+
+
+def test_usage_parser_detects_terminal_without_retaining_prompt_text() -> None:
+    from auto_router.stream_lifecycle import StreamUsageCollector
+
+    collector = StreamUsageCollector()
+    collector.feed(b'data: {"choices":[{"delta":{"content":"sensitive text"}}]}\n\n')
+    assert collector.terminal_status is None
+    collector.feed(b'data: [DONE]\n\n')
+    assert collector.terminal_status == "completed"
+    collector.feed(b'data: {"type":"response.incomplete"}\n\n')
+    assert collector.terminal_status == "failed"
+
+
+
+def test_sse_failure_marker_takes_precedence_over_later_done():
+    from auto_router.stream_lifecycle import StreamUsageCollector
+
+    collector = StreamUsageCollector()
+    collector.feed(b'data: {"type":"response.failed"}\n\n')
+    collector.feed(b'data: [DONE]\n\n')
+    assert collector.terminal_status == "failed"
+    assert collector.terminal_evidence == "responses_failed"
+
+
+def test_terminal_event_evidence_is_a_small_allowlisted_metadata_label():
+    from auto_router.stream_lifecycle import StreamUsageCollector
+
+    collector = StreamUsageCollector()
+    collector.feed(
+        b'data: {"type":"response.completed","response":{"output_text":"private"}}\n\n'
+    )
+    assert collector.terminal_status == "completed"
+    assert collector.terminal_evidence == "responses_completed"
+    assert "private" not in collector.terminal_evidence
