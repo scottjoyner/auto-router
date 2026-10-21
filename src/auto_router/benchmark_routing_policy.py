@@ -61,18 +61,33 @@ def normalize_task_family(request: RouterRequest) -> str:
     return "general"
 
 
+def _observer_only(candidate: Any) -> bool:
+    """Explicit signed observer-only policy can never become routing authority.
+
+    Legacy providers without routing metadata retain their historical behavior;
+    a signed missing-policy denial is represented by worker_mode=observer_only.
+    """
+    return any(
+        str(mode or "").strip().lower() == "observer_only"
+        for mode in (candidate.model.worker_mode, candidate.provider.worker_mode)
+    )
+
+
 def _role_allowed(candidate: Any, family: str) -> bool:
     model = candidate.model
     provider = candidate.provider
+    if _observer_only(candidate):
+        return False
+    # A mismatch between provider/model permissions must never grant execution.
+    if family == "coding" and not (
+        model.allow_code_execution and provider.allow_code_execution
+    ):
+        return False
     roles = set(model.routing_roles) | set(provider.routing_roles)
     if not roles:
         return True
     required = _FAMILY_ROLES.get(family)
     if required and not roles.intersection(required):
-        return False
-    if family == "coding" and not (
-        model.allow_code_execution or provider.allow_code_execution
-    ):
         return False
     return True
 
@@ -105,8 +120,19 @@ def benchmark_order(
     request: RouterRequest,
 ) -> ExecutionStage:
     family = normalize_task_family(request)
-    if family == "general" or not stage.candidates:
+    if not stage.candidates:
         return stage
+    if family == "general":
+        # Do not let the legacy general-workload fast path bypass an explicit
+        # signed observer-only denial. Preserve relative order otherwise.
+        return stage.model_copy(
+            update={
+                "candidates": [
+                    candidate for candidate in stage.candidates
+                    if not _observer_only(candidate)
+                ]
+            }
+        )
     allowed = [
         candidate
         for candidate in stage.candidates
