@@ -13,10 +13,13 @@ import base64
 import binascii
 import json
 import re
+import sqlite3
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import closing
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -84,6 +87,91 @@ class InMemoryReplayFence:
             self._highwater[publisher_id] = sequence
 
 
+class LocalSQLiteReplayFence:
+    """Offline-only atomic, restart-persistent fence, NOT rollback resistant.
+
+    This stores independent high-water values with SQLite BEGIN IMMEDIATE and
+    FULL synchronous commit. It protects against ordinary process restarts and
+    concurrent verifier instances sharing the same DB file. A privileged actor
+    can replace or restore the database; therefore it is never production
+    replay authority and can never set replay_protection_durable=True.
+
+    The path must be an explicit absolute local file. No network/database
+    environment or secret material is consulted, and callers must create an
+    independent *externally anchored* high-water authority before admission.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        path = Path(path)
+        if not path.is_absolute() or str(path) == ":memory:":
+            raise ValueError("local replay research requires an absolute SQLite path")
+        if path.is_symlink():
+            raise ValueError("symlink database paths are not supported")
+        self.path = path
+        try:
+            with closing(self._connect()) as conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS publisher_replay_highwater ("
+                    "publisher_id TEXT PRIMARY KEY NOT NULL,"
+                    "sequence INTEGER NOT NULL CHECK (sequence > 0))"
+                )
+        except sqlite3.Error as exc:
+            raise PublisherEnvelopeError("local replay research database is unavailable") from exc
+        self._fingerprint = self._file_fingerprint()
+
+    def _file_fingerprint(self) -> tuple[int, int]:
+        # Detect an on-disk replacement while this process remains alive.
+        # Not a safe external checkpoint: inode/dev are resettable/cloneable.
+        if self.path.is_symlink():
+            raise PublisherEnvelopeError("local replay database file replaced")
+        try:
+            stat = self.path.stat()
+        except OSError as exc:
+            raise PublisherEnvelopeError("local replay database file unavailable") from exc
+        return stat.st_dev, stat.st_ino
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA synchronous=FULL")
+            return conn
+        except Exception:
+            conn.close()
+            raise
+
+    def consume(self, publisher_id: str, sequence: int) -> None:
+        if not _safe_identifier(publisher_id) or not _is_int(sequence) or not (
+            1 <= sequence <= _MAX_SEQUENCE
+        ):
+            raise PublisherEnvelopeError("local replay fence identity or sequence rejected")
+        if self._file_fingerprint() != self._fingerprint:
+            raise PublisherEnvelopeError("local replay database file replaced")
+        try:
+            with closing(self._connect()) as conn:
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    if self._file_fingerprint() != self._fingerprint:
+                        raise PublisherEnvelopeError("local replay database file replaced")
+                    changed = conn.execute(
+                        "INSERT INTO publisher_replay_highwater (publisher_id, sequence)"
+                        " VALUES (?, ?)"
+                        " ON CONFLICT(publisher_id) DO UPDATE SET sequence=excluded.sequence"
+                        " WHERE excluded.sequence > publisher_replay_highwater.sequence",
+                        (publisher_id, sequence),
+                    )
+                    if changed.rowcount != 1:
+                        raise PublisherEnvelopeError("publisher sequence replay or rollback")
+                    conn.execute("COMMIT")
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
+        except sqlite3.Error as exc:
+            raise PublisherEnvelopeError("local replay research database is unavailable") from exc
+
+
+
 @dataclass(frozen=True)
 class PublisherDiagnosticReceipt:
     publisher_id: str
@@ -138,11 +226,15 @@ def _signature_bytes(signature: Any) -> bytes:
 
 
 class SignedFleetPublisherVerifier:
-    """Verify configured reporters in memory; never authorize routing."""
+    """Verify configured reporters with a pluggable offline replay fence.
+
+    The default is volatile. Supplying LocalSQLiteReplayFence protects normal
+    restarts but NOT storage rollback or key custody. Never authorizes routing.
+    """
 
     def __init__(
         self, trust_roots: Mapping[str, TrustedPublisher],
-        *, fence: InMemoryReplayFence | None = None,
+        *, fence: InMemoryReplayFence | LocalSQLiteReplayFence | None = None,
     ):
         self.trust_roots = dict(trust_roots)
         self.fence = fence if fence is not None else InMemoryReplayFence()
@@ -205,8 +297,8 @@ class SignedFleetPublisherVerifier:
         except InvalidSignature as exc:
             raise PublisherEnvelopeError("publisher Ed25519 signature mismatch") from exc
 
-        # Only after cryptographic authorization; distinct producers have
-        # independently fenced counters. This remains volatile test state.
+        # Only after cryptographic authorization; each publisher has a separate
+        # counter. Any supplied SQLite state is still locally rollbackable.
         self.fence.consume(root.publisher_id, seq)
         return PublisherDiagnosticReceipt(
             publisher_id=root.publisher_id, node_id=root.node_id,
