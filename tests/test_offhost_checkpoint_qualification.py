@@ -201,3 +201,136 @@ def test_temporary_observer_script_does_not_export_private_key(transcript):
     assert "private_key" not in as_text
     assert "pem" not in as_text.lower()
     assert transcript["production_admission"] == "NO_GO"
+
+
+def _public_bytes(document):
+    return qualifier._decode(document["observer_public_key"], 32)
+
+
+def test_transcript_with_operator_supplied_public_key_pin(transcript):
+    pin = _public_bytes(transcript)
+    result = qualifier.verify_transcript(
+        transcript, challenge=CHALLENGE,
+        pinned_observer_public_key=pin,
+        require_pinned_identity=True,
+    )
+    assert result.observer_id == "lenovo-research-observer"
+
+
+def test_operator_pinned_offhost_evidence_remains_no_go(transcript):
+    pin = _public_bytes(transcript)
+    result = qualifier.check_remote_evidence(
+        transcript, challenge=CHALLENGE,
+        now_ms=transcript["latest_checkpoint"]["issued_at_ms"] + 1000,
+        pinned_observer_public_key=pin,
+        require_pinned_identity=True,
+    )
+    assert result["observer_identity_pin_checked"] is True
+    assert result["remote_key_trust"] == (
+        "OPERATOR_SUPPLIED_PUBLIC_KEY_PIN_NOT_CUSTODY_PROOF"
+    )
+    assert result["independent_admin_custody_verified"] is False
+    assert result["external_authority_verified"] is False
+    assert result["production_admission"] == "NO_GO"
+
+
+def test_operator_pin_rejects_unexpected_signing_key(transcript):
+    pin = bytes([0] * 32)
+    with pytest.raises(qualifier.OffhostWitnessError, match="differs"):
+        qualifier.verify_transcript(
+            transcript, challenge=CHALLENGE,
+            pinned_observer_public_key=pin,
+            require_pinned_identity=True,
+        )
+
+
+def test_self_presented_key_rotation_is_not_independent_identity(transcript):
+    old_pin = _public_bytes(transcript)
+    replaced = observer.produce_transcript(CHALLENGE)
+    assert qualifier.verify_transcript(replaced, challenge=CHALLENGE)
+    with pytest.raises(qualifier.OffhostWitnessError, match="differs"):
+        qualifier.verify_transcript(
+            replaced, challenge=CHALLENGE,
+            pinned_observer_public_key=old_pin,
+            require_pinned_identity=True,
+        )
+
+
+def test_strict_mode_requires_pin_before_receipt_check(transcript):
+    with pytest.raises(qualifier.OffhostWitnessError, match="required"):
+        qualifier.check_remote_evidence(
+            transcript, challenge=CHALLENGE,
+            now_ms=transcript["latest_checkpoint"]["issued_at_ms"] + 1000,
+            require_pinned_identity=True,
+        )
+
+
+def test_strict_mode_rejects_without_ssh(tmp_path):
+    source = tmp_path / "test_source.py"
+    source.write_text("print('not executed')\n")
+    with patch.object(qualifier.subprocess, "run") as subprocess_run:
+        with pytest.raises(qualifier.OffhostWitnessError, match="required"):
+            qualifier.run_physical(
+                "lenovo", source, require_pinned_identity=True,
+            )
+        subprocess_run.assert_not_called()
+
+
+def test_operator_pin_rejects_wrong_length_or_type(transcript):
+    for bad_pin in (b"", b"0" * 31, b"0" * 33, "0" * 32, 1234, False):
+        with pytest.raises(qualifier.OffhostWitnessError, match="format"):
+            qualifier.verify_transcript(
+                transcript, challenge=CHALLENGE,
+                pinned_observer_public_key=bad_pin,
+            )
+
+
+def test_malformed_challenge_is_rejected_before_signature(transcript):
+    with pytest.raises(qualifier.OffhostWitnessError, match="claim"):
+        qualifier.verify_transcript(transcript, challenge="z" * 32)
+
+
+def test_valid_raw_public_pin_file_read_exact(tmp_path, transcript):
+    pin = _public_bytes(transcript)
+    path = tmp_path / "pinned-observer.pub"
+    path.write_bytes(pin)
+    assert qualifier.read_observer_public_pin(path) == pin
+
+
+def test_reject_missing_relative_or_oversized_public_pin(tmp_path, monkeypatch):
+    with pytest.raises(qualifier.OffhostWitnessError):
+        qualifier.read_observer_public_pin(tmp_path / "missing.pub")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(qualifier.OffhostWitnessError, match="absolute"):
+        qualifier.read_observer_public_pin(Path("relative.pub"))
+    large = tmp_path / "private.pem"
+    large.write_bytes(b"PRIVATE_SECRET" * 100)
+    with pytest.raises(qualifier.OffhostWitnessError, match="invalid"):
+        qualifier.read_observer_public_pin(large)
+
+
+def test_reject_public_pin_symlink(tmp_path, transcript):
+    real = tmp_path / "real.pub"
+    real.write_bytes(_public_bytes(transcript))
+    link = tmp_path / "alias.pub"
+    link.symlink_to(real)
+    with pytest.raises(qualifier.OffhostWitnessError, match="unavailable"):
+        qualifier.read_observer_public_pin(link)
+
+
+def test_reject_public_pin_directory(tmp_path):
+    with pytest.raises(qualifier.OffhostWitnessError):
+        qualifier.read_observer_public_pin(tmp_path)
+
+
+def test_no_production_admission_even_with_pinned_key(transcript):
+    pin = _public_bytes(transcript)
+    result = qualifier.check_remote_evidence(
+        transcript, challenge=CHALLENGE,
+        now_ms=transcript["latest_checkpoint"]["issued_at_ms"] + 500,
+        pinned_observer_public_key=pin,
+        require_pinned_identity=True,
+    )
+    assert result["production_admission"] == "NO_GO"
+    assert not result["model_gpu_residency_verified"]
+    assert result["combined_generation_anchor_rollback_unprevented"]
