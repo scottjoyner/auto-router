@@ -1,5 +1,12 @@
 # auto-router
 
+<!-- repo-entrypoint-guide:start -->
+> **Role in the fleet:** This repository is the strict-offline protocol gateway; AssistX is the authority for node identity, loaded models, approvals, admission, and recovery. Read [Role](#role), [Strict offline mode](#strict-offline-mode), and [What the router does not own](#what-the-router-does-not-own) before adding a provider.
+> 
+> **Safe validation:** Keep production dispatch and autoload disabled until the physical runtime, shared-slot accounting, route provenance, and stale/fenced-request behavior are independently verified.
+<!-- repo-entrypoint-guide:end -->
+
+
 Strict-offline OpenAI-compatible inference gateway for the AssistX fleet.
 
 On branch `full-auto-reconciliation-20260730`, `auto-router` is deliberately narrower than its earlier design. It no longer treats hosted quota, backlog scheduling, worker placement, model placement, or broad service discovery as production responsibilities.
