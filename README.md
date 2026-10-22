@@ -1,9 +1,19 @@
 # auto-router
 
 <!-- repo-entrypoint-guide:start -->
-> **Role in the fleet:** This repository is the strict-offline protocol gateway; AssistX is the authority for node identity, loaded models, approvals, admission, and recovery. Read [Role](#role), [Strict offline mode](#strict-offline-mode), and [What the router does not own](#what-the-router-does-not-own) before adding a provider.
-> 
-> **Safe validation:** Keep production dispatch and autoload disabled until the physical runtime, shared-slot accounting, route provenance, and stale/fenced-request behavior are independently verified.
+## Repository guide
+
+**Role in the fleet:** This repository is the strict-offline protocol gateway; AssistX is the authority for node identity, loaded models, approvals, admission, and recovery. Read [Role](#role), [Strict offline mode](#strict-offline-mode), and [What the router does not own](#what-the-router-does-not-own) before adding a provider.
+
+**Safe validation:** Keep production dispatch and autoload disabled until the physical runtime, shared-slot accounting, route provenance, and stale/fenced-request behavior are independently verified.
+
+### Find your way
+
+- [Role](#role)
+- [Strict offline mode](#strict-offline-mode)
+- [What the router owns](#what-the-router-owns)
+- [Fleet loadout reconciliation safety](#fleet-loadout-reconciliation-safety)
+- [Verification](#verification)
 <!-- repo-entrypoint-guide:end -->
 
 
