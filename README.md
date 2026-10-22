@@ -19,7 +19,7 @@
 
 Strict-offline OpenAI-compatible inference gateway for the AssistX fleet.
 
-On branch `full-auto-reconciliation-20260730`, `auto-router` is deliberately narrower than its earlier design. It no longer treats hosted quota, backlog scheduling, worker placement, model placement, or broad service discovery as production responsibilities.
+The reconciled `auto-router` design is deliberately narrower than its earlier design. The historical `full-auto-reconciliation-20260730` branch name is included here for provenance; this README is on the repository's default branch. It no longer treats hosted quota, backlog scheduling, worker placement, model placement, or broad service discovery as production responsibilities.
 
 ## Role
 
