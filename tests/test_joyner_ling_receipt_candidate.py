@@ -148,6 +148,15 @@ def test_signed_request_cannot_be_reused_for_other_prompt_or_model(tmp_path):
     deny("signed_request_bytes_mismatch", f, body=changed)
 
 
+def test_signed_integer_stream_flag_rejected(tmp_path):
+    f = fixture(tmp_path)
+    payload = json.loads(f[3])
+    payload["stream"] = 1  # Python 1 == True must not count as JSON true.
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    claims = {**f[2], "request_sha256": hashlib.sha256(body).hexdigest()}
+    deny("ling_request_model_or_stream_invalid", f, claims=claims, body=body)
+
+
 def test_signed_wrong_model_payload_rejected(tmp_path):
     f = fixture(tmp_path)
     body = f[3].replace(b"joyner-ling", b"toolcall-v5")
