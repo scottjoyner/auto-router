@@ -60,7 +60,7 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
     except (ValueError,TypeError) as exc:
         raise EvidenceDenied("missing machine-readable canary proof") from exc
     if (canary.get("result")!="DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS"
-        or canary.get("checked_routes")!=5
+        or canary.get("checked_routes")!=10
         or canary.get("denied_missing_and_wrong_token") is not True
         or canary.get("authorized_read_pass") is not True
         or canary.get("effective_snapshot",{}).get("sanitized") is not True

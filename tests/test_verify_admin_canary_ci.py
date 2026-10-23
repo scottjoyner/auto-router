@@ -70,9 +70,9 @@ def test_fake_full_canary_passes_without_network(monkeypatch,capsys):
     printed=capsys.readouterr().out
     doc=json.loads(printed)
     assert doc["result"]=="DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS"
-    assert doc["checked_routes"]==5
+    assert doc["checked_routes"]==10
     assert "smoke-admin-token" not in printed
-    assert len(paths)==13
+    assert len(paths)==23
 
 def test_if_any_anonymous_admin_returns_200_deny(monkeypatch):
     monkeypatch.setenv("AUTO_ROUTER_CANARY_ENV","disposable-github-ci")

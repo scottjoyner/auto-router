@@ -17,8 +17,13 @@ BASE = "http://127.0.0.1:8088"
 CHECKED = (
     "/admin/providers",
     "/admin/circuits",
+    "/admin/usage",
+    "/admin/context",
+    "/admin/agent-workers",
+    "/admin/placement",
     "/admin/providers/effective",
     "/admin/quota",
+    "/admin/ops/summary",
     "/admin/admission",
 )
 FORBIDDEN_KEYS = {

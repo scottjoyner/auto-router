@@ -37,7 +37,7 @@ def healthy_subprocess(monkeypatch):
     monkeypatch.setattr(m,"digest",lambda path:"c"*64)
     data={
         "result":"DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS",
-        "checked_routes":5,"denied_missing_and_wrong_token":True,
+        "checked_routes":10,"denied_missing_and_wrong_token":True,
         "authorized_read_pass":True,"production_tested":False,
         "synthetic_credentials_only":True,
         "effective_snapshot":{"sanitized":True,"provider_count":0}
@@ -53,7 +53,7 @@ def test_ci_exact_head_evidence_only(monkeypatch):
     result=m.build_evidence(fake_env())
     assert result["source_commit"]=="a"*40
     assert result["ci_container_image_id"]=="sha256:"+"f"*64
-    assert result["checked_admin_route_count"]==5
+    assert result["checked_admin_route_count"]==10
     assert result["production_deployment_authorized"] is False
     assert result["rollback_proven"] is False
     assert result["independent_archival_custody_proven"] is False
