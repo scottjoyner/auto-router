@@ -260,7 +260,14 @@ jobs:
         env:
           AUTO_ROUTER_CANARY_ENV: disposable-github-ci
           AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN: smoke-admin-token
-        run: python3 scripts/verify_admin_canary_ci.py
+        run: python3 scripts/write_ci_admin_release_evidence.py
+      - name: Upload non-secret exact-image canary evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-admin-auth-evidence-${{ github.sha }}
+          path: /tmp/auto-router-admin-ci-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Capture diagnostics on failure
         if: failure()
         run: |
