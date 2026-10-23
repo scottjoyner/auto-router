@@ -268,6 +268,19 @@ jobs:
           path: /tmp/auto-router-admin-ci-evidence.json
           if-no-files-found: error
           retention-days: 14
+      - name: Package tested Router image for offline, non-production handoff
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023'
+        env:
+          AUTO_ROUTER_CI_IMAGE_PACKAGE: unpromoted-disposable-only
+        run: python3 scripts/package_ci_router_image.py
+      - name: Upload tested Router image and receipt (not a production deployment)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023'
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-image-handoff-${{ github.sha }}
+          path: /tmp/router-ci-image-handoff/
+          if-no-files-found: error
+          retention-days: 3
       - name: Capture diagnostics on failure
         if: failure()
         run: |
