@@ -1,0 +1,33 @@
+name: joyner-cutover-readiness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/joyner_cutover_readiness.py
+      - tests/test_joyner_cutover_readiness.py
+      - .github/workflows/joyner-cutover-readiness.yml
+  pull_request:
+    paths:
+      - scripts/joyner_cutover_readiness.py
+      - tests/test_joyner_cutover_readiness.py
+      - .github/workflows/joyner-cutover-readiness.yml
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-cutover-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated tests
+        run: python -m pip install pytest
+      - name: Verify synthetic cutover refusal
+        run: |
+          python -m py_compile scripts/joyner_cutover_readiness.py
+          python -m pytest -o addopts= tests/test_joyner_cutover_readiness.py -q
