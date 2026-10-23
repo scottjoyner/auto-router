@@ -62,6 +62,8 @@ def test_fake_full_canary_passes_without_network(monkeypatch,capsys):
     paths=[]
     def fake(path,token=None,*,read_body=False):
         paths.append((path,token,read_body))
+        if path in c.PUBLIC_CHECKED:
+            return 200,b""
         if token in (None,"known-incorrect-ci-token"):
             return 401,b""
         return 200,_safe_payload() if read_body else b""
@@ -72,7 +74,8 @@ def test_fake_full_canary_passes_without_network(monkeypatch,capsys):
     assert doc["result"]=="DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS"
     assert doc["checked_routes"]==10
     assert "smoke-admin-token" not in printed
-    assert len(paths)==23
+    assert len(paths)==25
+    assert doc["public_client_reads_pass"] is True
 
 def test_if_any_anonymous_admin_returns_200_deny(monkeypatch):
     monkeypatch.setenv("AUTO_ROUTER_CANARY_ENV","disposable-github-ci")
@@ -84,3 +87,10 @@ def test_if_any_anonymous_admin_returns_200_deny(monkeypatch):
 def test_only_allowlisted_get_paths():
     with pytest.raises(c.CanaryRejected):
         c.get_status("/admin/circuits/reset")
+
+def test_if_existing_public_client_read_is_blocked_deny(monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_CANARY_ENV","disposable-github-ci")
+    monkeypatch.setenv("AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN","smoke-admin-token")
+    monkeypatch.setattr(c,"get_status",lambda *_a,**_kw:(401,b""))
+    with pytest.raises(c.CanaryRejected,match="existing public client read failed"):
+        c.main()

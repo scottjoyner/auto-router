@@ -61,6 +61,7 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
         raise EvidenceDenied("missing machine-readable canary proof") from exc
     if (canary.get("result")!="DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS"
         or canary.get("checked_routes")!=10
+        or canary.get("public_client_reads_pass") is not True
         or canary.get("denied_missing_and_wrong_token") is not True
         or canary.get("authorized_read_pass") is not True
         or canary.get("effective_snapshot",{}).get("sanitized") is not True
@@ -85,6 +86,7 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
         "canary_result":canary["result"],
         "checked_admin_route_count":canary["checked_routes"],
         "missing_and_wrong_token_rejected":True,
+        "public_client_reads_preserved":True,
         "synthetic_operator_auth_accepted":True,
         "sanitized_provider_response":True,
         "provider_count":canary["effective_snapshot"]["provider_count"],

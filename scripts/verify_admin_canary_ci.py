@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 BASE = "http://127.0.0.1:8088"
+PUBLIC_CHECKED = ("/health", "/v1/models")
 CHECKED = (
     "/admin/providers",
     "/admin/circuits",
@@ -39,7 +40,7 @@ class CanaryRejected(RuntimeError):
     pass
 
 def get_status(path: str, token: str | None = None, *, read_body: bool = False):
-    if path not in CHECKED:
+    if path not in CHECKED and path not in PUBLIC_CHECKED:
         raise CanaryRejected("unapproved GET path")
     headers = {"Accept": "application/json"}
     if token is not None:
@@ -105,6 +106,10 @@ def main():
     token = os.environ.get("AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN", "")
     if token != "smoke-admin-token":
         raise CanaryRejected("CI token must match known disposable fixture")
+    for path in PUBLIC_CHECKED:
+        status, _ = get_status(path)
+        if status != 200:
+            raise CanaryRejected("existing public client read failed: " + path)
     results = []
     for path in CHECKED:
         no_token, _ = get_status(path)
@@ -122,6 +127,7 @@ def main():
         "result": "DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS",
         "checked_routes": len(results),
         "denied_missing_and_wrong_token": True,
+        "public_client_reads_pass": True,
         "authorized_read_pass": True,
         "effective_snapshot": snapshot,
         "production_tested": False,
