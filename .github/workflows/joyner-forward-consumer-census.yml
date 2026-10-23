@@ -1,0 +1,32 @@
+name: joyner-forward-consumer-census
+
+on:
+  pull_request:
+    paths:
+      - scripts/joyner_forward_consumer_census.py
+      - tests/test_joyner_forward_consumer_census.py
+      - .github/workflows/joyner-forward-consumer-census.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/joyner_forward_consumer_census.py
+      - tests/test_joyner_forward_consumer_census.py
+      - .github/workflows/joyner-forward-consumer-census.yml
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-no-payload-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest
+      - name: Syntax and synthetic process-free census tests
+        run: |
+          python -m py_compile scripts/joyner_forward_consumer_census.py
+          python -m pytest -o addopts= tests/test_joyner_forward_consumer_census.py -q
