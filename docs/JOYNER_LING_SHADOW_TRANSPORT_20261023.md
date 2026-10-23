@@ -65,3 +65,28 @@ and exclusive GPU memory/resource leases. This module alone
 grants no routing, model promotion or training permission.
 
 Tracking: auto-router issues #81 and #37.
+
+## Follow-up interruption hardening (October 23)
+
+The shadow stream no longer treats upstream exhaustion, invalid bytes
+or timeout as an uneventful HTTP 200 response. For SSE, a successful
+ending requires the exact literal final data: [DONE] marker. A
+midstream failure emits a generic upstream_interrupted error event,
+without inventing a DONE marker or disclosing upstream exception
+messages. A disconnected client receives no additional event.
+
+For stream=false requests, the mock backend response is bounded and
+JSON-parsed before status 200 is emitted. Invalid/truncated JSON and
+mock upstream failure now return HTTP 502 instead of a partial 200.
+The initial producer is explicitly closed after pre-header errors.
+These behaviors are covered by seven additional isolated tests.
+
+The receipt contract also now handles simultaneous first-use SQLite
+file creation through exclusive create and guarded existing-file
+inspection; the losing worker must reach the replay check rather
+than report a false storage outage. Repeated two-thread fixture
+races confirm one receipt succeeds and one is denied as replay.
+
+This remains library-only, with no real proxy listener, signing
+issuer, actual Ling model digest or routing permission. Tests are
+synthetic and do not replace a networked ASGI fault-injection trial.

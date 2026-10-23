@@ -253,3 +253,29 @@ def test_no_raw_request_body_or_token_saved_to_database(tmp_path):
     assert b'"content"' not in raw
     assert receipt.request_sha256.encode() in raw
     assert receipt.approved_for_proxy_cutover is False
+
+
+def test_parallel_initial_database_creation_and_one_use_replay_classification(tmp_path):
+    # On first use, both workers may observe an absent SQLite file. A racing
+    # O_EXCL must not be confused with a storage outage or accepted twice.
+    for round_id in range(16):
+        work = tmp_path / f"round-{round_id}"
+        work.mkdir(mode=0o700)
+        f = fixture(work)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(
+                lambda _: _try_submit_for_race(f), (0, 1)
+            ))
+        assert sorted(outcomes) == ["ling_receipt_replayed", "ok"]
+
+
+def _try_submit_for_race(f):
+    try:
+        submit(f)
+    except c.LingReceiptDenied as exc:
+        # Return classified denial, not potentially private exception output.
+        raise_on_unknown = str(exc)
+        if raise_on_unknown == "ling_receipt_replayed":
+            return "ling_receipt_replayed"
+        raise
+    return "ok"

@@ -135,25 +135,67 @@ class LingShadowTransport:
 
         # The current implementation never uses real services; only a
         # deliberately injected, disposable backend is usable.
+        iterator: AsyncIterator[bytes] | None = None
         try:
-            stream_mode = json.loads(body).get("stream") is True
+            payload = json.loads(body)
+            if not isinstance(payload, dict):
+                raise ValueError("invalid payload")
+            stream_mode = payload.get("stream") is True
             iterator = self._backend(body, receipt).__aiter__()
-            initial = await asyncio.wait_for(anext(iterator), timeout=_FIRST_CHUNK_TIMEOUT)
-            if not isinstance(initial, bytes) or len(initial) > _MAX_CHUNK:
+
+            if not stream_mode:
+                # Non-streaming cannot report partial JSON with HTTP 200:
+                # fully validate and bound the mock response before headers.
+                aggregate = bytearray()
+                while True:
+                    try:
+                        part = await asyncio.wait_for(
+                            anext(iterator), timeout=_NEXT_CHUNK_TIMEOUT
+                        )
+                    except StopAsyncIteration:
+                        break
+                    if not isinstance(part, bytes) or len(part) > _MAX_CHUNK or (
+                        len(aggregate) + len(part) > _MAX_STREAM
+                    ):
+                        raise ValueError("unbounded response")
+                    aggregate.extend(part)
+                parsed = json.loads(aggregate)
+                if not isinstance(parsed, dict):
+                    raise ValueError("invalid response JSON")
+                await send({
+                    "type": "http.response.start", "status": 200,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"cache-control", b"no-store"),
+                        (b"x-content-type-options", b"nosniff"),
+                    ],
+                })
+                await send({
+                    "type": "http.response.body", "body": bytes(aggregate),
+                    "more_body": False,
+                })
+                return
+
+            first = await asyncio.wait_for(anext(iterator), timeout=_FIRST_CHUNK_TIMEOUT)
+            if not isinstance(first, bytes) or len(first) > _MAX_CHUNK:
                 raise ValueError("unbounded upstream")
-        except (Exception, asyncio.TimeoutError):
+        except Exception:
             await _reply(send, 502, b"upstream unavailable")
             return
+        finally:
+            # Never leak an abandoned producer when the first chunk fails.
+            if iterator is not None and "first" not in locals():
+                close = getattr(iterator, "aclose", None)
+                if close is not None:
+                    try:
+                        await close()
+                    except (Exception, RuntimeError):
+                        pass
 
-        response_type = (
-            b"text/event-stream; charset=utf-8" if stream_mode
-            else b"application/json"
-        )
         await send({
-            "type": "http.response.start",
-            "status": 200,
+            "type": "http.response.start", "status": 200,
             "headers": [
-                (b"content-type", response_type),
+                (b"content-type", b"text/event-stream; charset=utf-8"),
                 (b"cache-control", b"no-store"),
                 (b"x-content-type-options", b"nosniff"),
             ],
@@ -162,12 +204,17 @@ class LingShadowTransport:
         next_task: asyncio.Task[bytes] | None = None
         disconnect_task: asyncio.Task[dict[str, Any]] | None = None
         sent = 0
+        last_bytes = b""
+        completed = False
+        interrupted = False
         try:
-            current = initial
+            current = first
             while True:
                 if sent + len(current) > _MAX_STREAM:
+                    interrupted = True
                     break
                 sent += len(current)
+                last_bytes = (last_bytes + current)[-512:]
                 await send({"type": "http.response.body", "body": current, "more_body": True})
                 next_task = asyncio.create_task(anext(iterator))
                 disconnect_task = asyncio.create_task(receive())
@@ -176,20 +223,34 @@ class LingShadowTransport:
                     timeout=_NEXT_CHUNK_TIMEOUT,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                if disconnect_task in done and (
-                    (await disconnect_task).get("type") == "http.disconnect"
-                ):
-                    return
+                if disconnect_task in done:
+                    event = await disconnect_task
+                    if event.get("type") == "http.disconnect":
+                        return
+                    # Unexpected extra request body or receive event:
+                    # terminate, never silently declare a successful stream.
+                    if next_task not in done:
+                        interrupted = True
+                        break
                 if next_task not in done:
-                    # No trusted upstream data; don't fabricate completion.
+                    interrupted = True
                     break
                 try:
                     current = await next_task
                 except StopAsyncIteration:
+                    # The final exact SSE marker is mandatory for success.
+                    completed = (
+                        last_bytes.endswith(b"data: [DONE]\n\n")
+                        or last_bytes.endswith(b"data: [DONE]\r\n\r\n")
+                    )
+                    if not completed:
+                        interrupted = True
                     break
                 except Exception:
+                    interrupted = True
                     break
                 if not isinstance(current, bytes) or len(current) > _MAX_CHUNK:
+                    interrupted = True
                     break
                 await _cancel_task(disconnect_task)
                 next_task = None
@@ -197,7 +258,19 @@ class LingShadowTransport:
         finally:
             await _cancel_task(next_task)
             await _cancel_task(disconnect_task)
-            close = getattr(iterator, "aclose", None)
-            if close is not None:
-                await close()
+            if iterator is not None:
+                close = getattr(iterator, "aclose", None)
+                if close is not None:
+                    try:
+                        await close()
+                    except (Exception, RuntimeError):
+                        pass
+        if interrupted and not completed:
+            # SSE cannot change an already-sent HTTP 200. Emit an explicit,
+            # generic failure event WITHOUT fabricating data: [DONE].
+            await send({
+                "type": "http.response.body",
+                "body": b'\n\nevent: error\ndata: {"error":"upstream_interrupted"}\n\n',
+                "more_body": True,
+            })
         await send({"type": "http.response.body", "body": b"", "more_body": False})

@@ -206,14 +206,20 @@ def _reserve_one_use(
         parent_mode = database_path.parent.stat().st_mode
         if parent_mode & 0o077:
             raise LingReceiptDenied("durable_receipt_directory_not_private")
-        if database_path.exists():
+        # Avoid time-of-check/time-of-use races when multiple workers
+        # initialize the same receipt store concurrently. The loser of
+        # O_EXCL must verify the existing file, not report storage failure.
+        try:
+            fd = os.open(
+                str(database_path),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except FileExistsError:
             db_mode = database_path.lstat().st_mode
             if not stat.S_ISREG(db_mode) or db_mode & 0o077:
                 raise LingReceiptDenied("durable_receipt_database_not_private")
         else:
-            # Create with restrictive permissions before SQLite first opens it,
-            # instead of relying on a process-global umask that can affect peers.
-            fd = os.open(str(database_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             os.close(fd)
     except OSError as exc:
         raise LingReceiptDenied("durable_receipt_file_unavailable") from exc

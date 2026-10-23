@@ -284,3 +284,102 @@ def test_wrong_principal_signed_receipt_denied_before_backend(tmp_path):
     sent,data=asyncio.run(invoke(verifier=deny_wrong_principal))
     assert status(sent)==401
     assert data["upstream_calls"]==0
+
+
+def test_truncated_sse_generates_generic_error_event_without_done():
+    async def truncated(body, receipt_):
+        yield b'data: {"partial": true}\n\n'
+    sent,info=asyncio.run(invoke(backend=truncated))
+    assert status(sent)==200
+    content=b"".join(reply_chunks(sent))
+    assert b'data: {"partial": true}' in content
+    assert b'event: error\ndata: {"error":"upstream_interrupted"}' in content
+    assert b"[DONE]" not in content
+    assert info["backend_closed"]
+
+
+def test_midstream_exception_fails_without_exposing_exception_or_done():
+    async def broken(body,receipt_):
+        yield b"data: first\n\n"
+        raise RuntimeError("private API token from model")
+    sent,info=asyncio.run(invoke(backend=broken))
+    content=b"".join(reply_chunks(sent))
+    assert status(sent)==200
+    assert b"event: error" in content
+    assert b"[DONE]" not in content
+    assert b"private" not in content
+    assert info["backend_closed"]
+
+
+def test_stream_timeout_cancels_mock_and_marks_interruption(monkeypatch):
+    monkeypatch.setattr(shadow,"_NEXT_CHUNK_TIMEOUT",0.03)
+    async def stalled(body,r):
+        yield b"data: first\n\n"
+        await asyncio.Event().wait()
+    sent,info=asyncio.run(invoke(backend=stalled))
+    content=b"".join(reply_chunks(sent))
+    assert status(sent)==200
+    assert b'event: error' in content
+    assert b"[DONE]" not in content
+    assert info["backend_closed"]
+
+
+def test_initial_timeout_fails_before_http_200_and_closes_mock(monkeypatch):
+    monkeypatch.setattr(shadow,"_FIRST_CHUNK_TIMEOUT",0.03)
+    async def stalled(body,r):
+        try:
+            await asyncio.Event().wait()
+            yield b"never"
+        finally:
+            pass
+    sent,info=asyncio.run(invoke(backend=stalled))
+    assert status(sent)==502
+    assert info["upstream_calls"]==1
+    assert info["backend_closed"]
+
+
+def test_nonstream_json_fully_validated_before_status_200():
+    body=json.dumps({
+        "model":"joyner-ling","stream":False,
+        "messages":[{"role":"user","content":"fixture"}],
+        "max_tokens":4
+    }).encode()
+    async def chunks(body,r):
+        yield b'{"choices":'
+        yield b'[]}'
+    sent,info=asyncio.run(invoke(body=body,backend=chunks))
+    assert status(sent)==200
+    assert b"".join(reply_chunks(sent))==b'{"choices":[]}'
+    assert info["backend_closed"]
+    assert (b"content-type",b"application/json") in sent[0]["headers"]
+
+
+def test_nonstream_invalid_json_returns_502_not_partial_200():
+    body=json.dumps({
+        "model":"joyner-ling","stream":False,
+        "messages":[{"role":"user","content":"fixture"}],
+        "max_tokens":4
+    }).encode()
+    async def malformed(body,r):
+        yield b'{"choices":'
+        yield b'{"partially-read":"bad"}'
+    sent,info=asyncio.run(invoke(body=body,backend=malformed))
+    assert status(sent)==502
+    assert b"upstream unavailable" in b"".join(reply_chunks(sent))
+    assert b"partially-read" not in b"".join(reply_chunks(sent))
+    assert info["backend_closed"]
+
+
+def test_nonstream_upstream_failure_does_not_return_200():
+    body=json.dumps({
+        "model":"joyner-ling","stream":False,
+        "messages":[{"role":"user","content":"fixture"}],
+        "max_tokens":4
+    }).encode()
+    async def broken(body,r):
+        yield b'{"choices":'
+        raise RuntimeError("private model exception")
+    sent,info=asyncio.run(invoke(body=body,backend=broken))
+    assert status(sent)==502
+    assert b"private" not in b"".join(reply_chunks(sent))
+    assert info["backend_closed"]
