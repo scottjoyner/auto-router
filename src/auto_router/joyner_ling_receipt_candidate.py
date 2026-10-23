@@ -213,8 +213,18 @@ def _reserve_one_use(
         else:
             # Create with restrictive permissions before SQLite first opens it,
             # instead of relying on a process-global umask that can affect peers.
-            fd = os.open(str(database_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            os.close(fd)
+            try:
+                fd = os.open(str(database_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                # A concurrent, authorized first writer may have created the
+                # restrictive DB between exists() and O_EXCL. Revalidate the
+                # file before attempting the atomic SQLite reservation; never
+                # treat a symlink or a public file as an acceptable winner.
+                raced_mode = database_path.lstat().st_mode
+                if not stat.S_ISREG(raced_mode) or raced_mode & 0o077:
+                    raise LingReceiptDenied("durable_receipt_database_not_private")
+            else:
+                os.close(fd)
     except OSError as exc:
         raise LingReceiptDenied("durable_receipt_file_unavailable") from exc
     connection: sqlite3.Connection | None = None

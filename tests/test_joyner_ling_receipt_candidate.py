@@ -253,3 +253,80 @@ def test_no_raw_request_body_or_token_saved_to_database(tmp_path):
     assert b'"content"' not in raw
     assert receipt.request_sha256.encode() in raw
     assert receipt.approved_for_proxy_cutover is False
+
+
+def test_create_exclusive_race_rechecks_private_winner(tmp_path, monkeypatch):
+    """A second legitimate writer must not mistake its lost O_EXCL for disk loss."""
+    f = fixture(tmp_path)
+    real_open = c.os.open
+    path = f[4]["database_path"]
+    observed = []
+
+    def simulate_other_writer(filename, flags, mode=0o777):
+        if str(filename) == str(path) and flags & c.os.O_EXCL:
+            fd = real_open(filename, flags, mode)
+            c.os.close(fd)
+            observed.append("other_created")
+            raise FileExistsError("synthetic competing create")
+        return real_open(filename, flags, mode)
+
+    monkeypatch.setattr(c.os, "open", simulate_other_writer)
+    assert submit(f).replay_reserved
+    assert observed == ["other_created"]
+    assert path.stat().st_mode & 0o077 == 0
+    deny("ling_receipt_replayed", f)
+
+
+def test_racing_create_of_public_file_rejected(tmp_path, monkeypatch):
+    """The O_EXCL race must never bless a file with group/other access."""
+    f = fixture(tmp_path)
+    path = f[4]["database_path"]
+    real_open = c.os.open
+
+    def untrusted_competitor(filename, flags, mode=0o777):
+        if str(filename) == str(path) and flags & c.os.O_EXCL:
+            fd = real_open(filename, flags, 0o600)
+            c.os.close(fd)
+            path.chmod(0o666)
+            raise FileExistsError("synthetic public-file race")
+        return real_open(filename, flags, mode)
+
+    monkeypatch.setattr(c.os, "open", untrusted_competitor)
+    deny("durable_receipt_database_not_private", f)
+    assert path.stat().st_mode & 0o077 != 0
+
+
+def test_racing_create_of_symlink_rejected(tmp_path, monkeypatch):
+    """A symlink placed by the competing writer cannot be adopted."""
+    f = fixture(tmp_path)
+    path = f[4]["database_path"]
+    real_open = c.os.open
+    target = tmp_path / "unrelated"
+    target.write_text("leave-this-unchanged")
+
+    def competing_symlink(filename, flags, mode=0o777):
+        if str(filename) == str(path) and flags & c.os.O_EXCL:
+            path.symlink_to(target)
+            raise FileExistsError("synthetic symlink race")
+        return real_open(filename, flags, mode)
+
+    monkeypatch.setattr(c.os, "open", competing_symlink)
+    deny("durable_receipt_database_not_private", f)
+    assert target.read_text() == "leave-this-unchanged"
+
+
+def test_many_two_writer_races_remain_atomic(tmp_path):
+    """Repeat clean one-use reservations to catch scheduler-dependent outcomes."""
+    for i in range(30):
+        directory = tmp_path / f"case-{i}"
+        directory.mkdir(mode=0o700)
+        f = fixture(directory)
+        def attempt(_):
+            try:
+                submit(f)
+                return "ok"
+            except c.LingReceiptDenied as exc:
+                return str(exc)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = sorted(pool.map(attempt, (0, 1)))
+        assert outcomes == ["ling_receipt_replayed", "ok"], (i, outcomes)
