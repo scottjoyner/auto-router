@@ -33,6 +33,7 @@ from auto_router.config import (
 )
 from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
 from auto_router.model_registry import ModelRegistryStore
+from auto_router.provider_circuit_diagnostics import annotate_health_with_open_model_circuits
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
@@ -1265,10 +1266,9 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
             report = health_result.model_dump()
         else:
             report = {"provider": provider.name, "ok": False, "detail": str(health_result), "metadata": {}}
-        provider_open = [owner for owner in open_owners if owner.startswith(f"{provider.name}/")]
-        if provider_open:
-            report["ok"] = False
-            report["detail"] = f"Circuit open: {', '.join(provider_open[:3])}"
+        report = annotate_health_with_open_model_circuits(
+            report, provider.name, open_owners
+        )
         node_state = _power_state_by_node().get(str(getattr(provider, "node_id", "") or "").lower())
         if node_state:
             _power_tier_apply(report, node_state["profile"], node_state["model_class"])
