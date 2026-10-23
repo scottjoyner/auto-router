@@ -45,6 +45,7 @@ from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.security import require_admin
+from auto_router.effective_provider_snapshot import effective_snapshot
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
 from auto_router.ui_pages import get_ui_page_sections
@@ -551,6 +552,12 @@ async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any
 @app.get("/admin/providers")
 async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
+
+
+@app.get("/admin/providers/effective")
+async def admin_effective_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
+    """Read-only, sanitized in-memory provider snapshot; no inference or probe."""
+    return effective_snapshot(state)
 
 
 @app.get("/admin/placement")

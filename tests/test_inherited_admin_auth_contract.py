@@ -20,6 +20,7 @@ REQUIRED = {
     "/admin/context",
     "/admin/context/graph",
     "/admin/providers",
+    "/admin/providers/effective",
     "/admin/placement",
     "/admin/load",
     "/admin/agent-workers",
