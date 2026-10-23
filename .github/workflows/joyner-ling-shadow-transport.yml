@@ -26,8 +26,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install minimum isolated tests
-        run: python -m pip install 'pytest>=8.3' 'cryptography>=43,<46'
+        run: python -m pip install 'pytest>=8.3' 'cryptography>=43,<46' 'httpx>=0.27,<0.29' 'uvicorn>=0.30,<0.39'
       - name: Mock ASGI, streaming and synthetic Ed25519 receipt tests
         run: |
           python -m py_compile src/auto_router/joyner_ling_shadow_transport.py
-          python -m pytest -o addopts= tests/test_joyner_ling_shadow_transport.py -q
+          python -m pytest -o addopts= tests/test_joyner_ling_shadow_transport.py tests/test_joyner_ling_receipt_candidate.py tests/test_joyner_ling_loopback_mock_http.py -q

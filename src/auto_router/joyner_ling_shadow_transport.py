@@ -14,6 +14,7 @@ from typing import Any
 from .joyner_ling_receipt_candidate import LingReceipt, LingReceiptDenied
 
 _MAX_BODY = 64 * 1024
+_BODY_TOTAL_TIMEOUT = 10.0
 _MAX_CHUNK = 1024 * 1024
 _MAX_STREAM = 2 * 1024 * 1024
 _FIRST_CHUNK_TIMEOUT = 8.0
@@ -56,8 +57,12 @@ async def _reply(send: Callable[..., Awaitable[None]], status: int, detail: byte
 
 async def _read_bounded_body(receive: Callable[..., Awaitable[dict[str, Any]]]) -> bytes | None:
     value = bytearray()
+    deadline = asyncio.get_running_loop().time() + _BODY_TOTAL_TIMEOUT
     while True:
-        message = await receive()
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("request body deadline exceeded")
+        message = await asyncio.wait_for(receive(), timeout=remaining)
         if message.get("type") != "http.request":
             return None
         part = message.get("body", b"")
@@ -107,9 +112,11 @@ class LingShadowTransport:
         if len(content_lengths) > 1 or transfers:
             await _reply(send, 400, b"bad request")
             return
+        declared_length: int | None = None
         if content_lengths:
             try:
-                if int(content_lengths[0]) > _MAX_BODY or int(content_lengths[0]) < 0:
+                declared_length = int(content_lengths[0])
+                if declared_length > _MAX_BODY or declared_length < 0:
                     await _reply(send, 413, b"request too large")
                     return
             except ValueError:
@@ -119,6 +126,12 @@ class LingShadowTransport:
             body = await _read_bounded_body(receive)
         except ValueError:
             await _reply(send, 413, b"request too large")
+            return
+        except (TimeoutError, asyncio.TimeoutError):
+            await _reply(send, 408, b"request timeout")
+            return
+        if body is not None and declared_length is not None and len(body) != declared_length:
+            await _reply(send, 400, b"bad request")
             return
         if not body:
             await _reply(send, 400, b"bad request")

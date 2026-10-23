@@ -90,3 +90,31 @@ races confirm one receipt succeeds and one is denied as replay.
 This remains library-only, with no real proxy listener, signing
 issuer, actual Ling model digest or routing permission. Tests are
 synthetic and do not replace a networked ASGI fault-injection trial.
+
+
+## Real loopback ASGI trial and request deadline (October 23)
+
+The isolated regression harness also starts a disposable Uvicorn HTTP/1.1
+server bound to 127.0.0.1 on a dynamically assigned ephemeral port on
+x1-370. It uses only synthetic Ed25519 identities and a mock async
+Ling producer, never connects to Joyner and shuts down the temporary
+listener after each scenario.
+
+Five actual HTTP-client tests verify signed SSE byte preservation,
+replay rejection before mock dispatch, truncated SSE error signaling,
+non-stream invalid JSON rejected as 502, unsupported routes, and
+client disconnect cancellation of the mock producer.
+
+A global 10-second deadline now guards slow/incomplete HTTP request
+bodies. Declared content-length must match the actual bounded body.
+Neither timeout nor content-length mismatch can consume a signed
+one-use receipt or dispatch to the fake backend. The mock-only tests
+cover slow first bytes and stalled multi-part uploads with a shortened
+disposable deadline.
+
+The dedicated workflow includes 29 receipt policy tests,
+29 shadow transport tests and 5 loopback HTTP tests. All new
+tests are safe for a hosted CI runner and have no real model, credential,
+GPU, NAS, service, LAN or Tailscale dependency. Production promotion
+remains NO-GO until a reviewed and deployed ingress, owner-bound model
+identity and independently fenced backend are established.

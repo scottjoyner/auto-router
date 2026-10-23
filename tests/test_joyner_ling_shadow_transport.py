@@ -383,3 +383,66 @@ def test_nonstream_upstream_failure_does_not_return_200():
     assert status(sent)==502
     assert b"private" not in b"".join(reply_chunks(sent))
     assert info["backend_closed"]
+
+
+@pytest.mark.parametrize("declared_length", [0, 3, 9999])
+def test_content_length_mismatch_denied_before_receipt_or_backend(declared_length):
+    headers=[
+        (b"authorization", b"Bearer synthetic-jwt"),
+        (b"content-length", str(declared_length).encode()),
+    ]
+    sent, info=asyncio.run(invoke(headers=headers))
+    assert status(sent)==400
+    assert info["upstream_calls"]==0
+    assert info["tokens"]==[]
+
+
+def test_stalled_request_body_times_out_without_reserving_token(monkeypatch):
+    monkeypatch.setattr(shadow, "_BODY_TOTAL_TIMEOUT", 0.03)
+    received=[]
+    sent=[]
+    async def receive():
+        await asyncio.Event().wait()
+    async def send(message):
+        sent.append(message)
+    def verifier(*args):
+        received.append("verifier reached")
+        raise AssertionError("body timeout must happen before receipt")
+    async def backend(*args):
+        received.append("backend reached")
+        yield b"never"
+    app=shadow.LingShadowTransport(verifier,backend)
+    asyncio.run(asyncio.wait_for(app(
+        {"type":"http","path":"/v1/chat/completions",
+         "method":"POST","headers":[(b"authorization",b"Bearer synthetic-jwt")]},
+        receive,send,
+    ),timeout=1))
+    assert status(sent)==408
+    assert received==[]
+
+
+def test_stalled_multi_chunk_body_deadline_is_global(monkeypatch):
+    monkeypatch.setattr(shadow,"_BODY_TOTAL_TIMEOUT",0.04)
+    sent=[]
+    event=asyncio.Event()
+    consumed=0
+    async def receive():
+        nonlocal consumed
+        consumed+=1
+        if consumed==1:
+            return {"type":"http.request","body":b'{"model":', "more_body":True}
+        await event.wait()
+    async def send(message):
+        sent.append(message)
+    def verifier(*args):
+        raise AssertionError("partial body must never reserve")
+    async def backend(*args):
+        raise AssertionError("partial body must never dispatch")
+        yield b"never"
+    app=shadow.LingShadowTransport(verifier,backend)
+    asyncio.run(asyncio.wait_for(app(
+        {"type":"http","path":"/v1/chat/completions",
+         "method":"POST","headers":[(b"authorization",b"Bearer synthetic-jwt")]},
+        receive,send,
+    ),timeout=1))
+    assert consumed>=2 and status(sent)==408
