@@ -175,7 +175,7 @@ def verify_signature_and_scope(
         raise LingReceiptDenied("signed_request_bytes_mismatch")
 
     payload = _json_object(request_body, "invalid_ling_request_json")
-    if payload.get("model") != _ALIAS or payload.get("stream") not in (True, False):
+    if payload.get("model") != _ALIAS or type(payload.get("stream")) is not bool:
         raise LingReceiptDenied("ling_request_model_or_stream_invalid")
     if not isinstance(payload.get("messages"), list) or not payload["messages"]:
         raise LingReceiptDenied("ling_messages_missing")
