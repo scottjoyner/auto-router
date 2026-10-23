@@ -5,6 +5,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -45,11 +46,13 @@ from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.security import require_admin
+from auto_router.effective_provider_snapshot import effective_snapshot
 from auto_router.settings import get_settings
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status, dispatch_outbox_cycle
 from auto_router.ui_pages import get_ui_page_sections
 
-templates = Jinja2Templates(directory="src/auto_router/templates")
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(_PACKAGE_ROOT / "templates"))
 
 _start_time = time.time()
 
@@ -370,10 +373,10 @@ setup_logging()
 install_logging_middleware(app)
 
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-static_dir = Path(__file__).resolve().parent / "static"
-static_dir.mkdir(exist_ok=True)
-(static_dir / "vendor").mkdir(exist_ok=True)
+
+# Static files are package assets, never directories created at import time.
+# Installed wheels must import on read-only filesystems.
+static_dir = _PACKAGE_ROOT / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
@@ -551,6 +554,12 @@ async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any
 @app.get("/admin/providers")
 async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
+
+
+@app.get("/admin/providers/effective")
+async def admin_effective_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
+    """Sanitized in-process provider snapshot, without serving admission evidence."""
+    return effective_snapshot(state)
 
 
 @app.get("/admin/placement")
