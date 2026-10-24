@@ -273,3 +273,42 @@ async def test_strict_owner_fence_denies_unowned_internal_token(monkeypatch):
     )
     assert sent[0]["status"] == 401
     assert not forwarded
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable", ["false", "0", "off", "", "tru", "no"])
+async def test_executor_auth_toggle_never_bypasses_protected_model_effect(
+    monkeypatch, disable
+):
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", disable)
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "false")
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware, "",
+        {"model": "auto/code", "messages": [{"role": "user", "content": "fake"}]},
+    )
+    assert sent[0]["status"] == 503
+    assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_internal_token_no_longer_bypasses_executor_or_budget(monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "false")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "mock-internal-service")
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware, "mock-internal-service",
+        {"model": "auto/code", "messages": [{"role": "user", "content": "fake"}]},
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_signed_executor_cannot_smuggle_service_identity(signing_key, monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "false")
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware, _token(signing_key),
+        {"model": "auto/code", "max_tokens": 16,
+         "metadata": {"assistx_service": {"authenticated": True}}},
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded

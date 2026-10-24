@@ -189,28 +189,38 @@ jobs:
           echo "unauthenticated inference: $unauth_code"
           test "$unauth_code" = "401"
 
-          # A dedicated AssistX service token crosses authentication, then fails
-          # at the expected empty/bootstrap routing state rather than auth.
+          # Broad service identity must now fail at the inference authentication
+          # boundary, before any quota reservation, provider attempt, or
+          # idempotency ledger mutation. Neither retry nor duplicate may run.
           service_code=$(curl -s -o /tmp/router-service-inference.json -w '%{http_code}' \
             -H 'Authorization: Bearer smoke-service-token' \
-            -H 'Idempotency-Key: authenticated-smoke-request' \
+            -H 'Idempotency-Key: unscoped-service-must-deny' \
             -H 'Content-Type: application/json' \
             -d '{"model":"auto/local","messages":[{"role":"user","content":"smoke"}],"max_tokens":8}' \
             http://127.0.0.1:8088/v1/chat/completions)
-          echo "authenticated service inference: $service_code"
-          case "$service_code" in
-            429|503|504) ;;
-            *) echo "unexpected authenticated service response"; cat /tmp/router-service-inference.json; exit 1 ;;
-          esac
+          echo "unscoped service inference: $service_code"
+          test "$service_code" = "401"
+          python - <<'PYSMOKE'
+          import json
+          with open("/tmp/router-service-inference.json", encoding="utf-8") as handle:
+              data = json.load(handle)
+          assert data.get("detail") == "internal service token cannot authorize inference", data
+          PYSMOKE
 
           duplicate_code=$(curl -s -o /tmp/router-duplicate-inference.json -w '%{http_code}' \
             -H 'Authorization: Bearer smoke-service-token' \
-            -H 'Idempotency-Key: authenticated-smoke-request' \
+            -H 'Idempotency-Key: unscoped-service-must-deny' \
             -H 'Content-Type: application/json' \
             -d '{"model":"auto/local","messages":[{"role":"user","content":"smoke"}],"max_tokens":8}' \
             http://127.0.0.1:8088/v1/chat/completions)
-          echo "duplicate authenticated inference: $duplicate_code"
-          test "$duplicate_code" = "409"
+          echo "unscoped duplicate inference: $duplicate_code"
+          test "$duplicate_code" = "401"
+          python - <<'PYSMOKE'
+          import json
+          with open("/tmp/router-duplicate-inference.json", encoding="utf-8") as handle:
+              data = json.load(handle)
+          assert data.get("detail") == "internal service token cannot authorize inference", data
+          PYSMOKE
 
           # Administrative status must require the local admin token.
           for path in /admin/quota /admin/admission /admin/runtime-projection; do
