@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from auto_router.assistx_tasks import AssistXTaskClient
 from auto_router.backlog_scheduler import (
@@ -11,6 +11,7 @@ from auto_router.backlog_scheduler import (
     dry_run_backlog_selection,
 )
 from auto_router.event_outbox import EventOutbox
+from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.service_routes import dispatch_outbox_cycle
 
@@ -19,7 +20,7 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
     if not hasattr(state, "event_outbox"):
         state.event_outbox = EventOutbox(get_settings().database_url)
 
-    @app.post("/admin/backlog/dry-run")
+    @app.post("/admin/backlog/dry-run", dependencies=[Depends(require_admin)])
     async def backlog_dry_run(
         payload: dict[str, Any],
         source: str = "manual",
@@ -54,7 +55,7 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
             "outbox_summary": state.event_outbox.summary(),
         }
 
-    @app.post("/admin/backlog/burn-down")
+    @app.post("/admin/backlog/burn-down", dependencies=[Depends(require_admin)])
     async def backlog_burn_down(
         payload: dict[str, Any],
         source: str = "manual",
@@ -93,7 +94,7 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
             "dispatch": dispatch_result,
         }
 
-    @app.get("/admin/backlog/assistx/config")
+    @app.get("/admin/backlog/assistx/config", dependencies=[Depends(require_admin)])
     async def backlog_assistx_config() -> dict[str, Any]:
         settings = get_settings()
         return {
