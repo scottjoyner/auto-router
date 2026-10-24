@@ -253,3 +253,52 @@ def test_no_raw_request_body_or_token_saved_to_database(tmp_path):
     assert b'"content"' not in raw
     assert receipt.request_sha256.encode() in raw
     assert receipt.approved_for_proxy_cutover is False
+
+
+def test_first_database_creation_race_preserves_one_use(tmp_path, monkeypatch):
+    """An O_EXCL loser verifies the winner's private DB, then denies replay."""
+    import os
+
+    f = fixture(tmp_path)
+    target = f[4]["database_path"]
+    original = os.open
+    collided = []
+
+    def another_thread_created_file(path, flags, mode=0o777):
+        if str(path) == str(target) and flags & os.O_EXCL and not collided:
+            fd = original(path, flags, 0o600)
+            os.close(fd)
+            collided.append(True)
+            raise FileExistsError("simulated concurrent first creator")
+        return original(path, flags, mode)
+
+    monkeypatch.setattr(c.os, "open", another_thread_created_file)
+    result = submit(f)
+    assert result.replay_reserved
+    assert collided == [True]
+    assert target.stat().st_mode & 0o077 == 0
+    deny("ling_receipt_replayed", f)
+
+
+def test_creation_race_refuses_nonregular_winning_inode(tmp_path, monkeypatch):
+    """A malicious symlink in an O_EXCL race must never become a receipt DB."""
+    import os
+
+    f = fixture(tmp_path)
+    target = f[4]["database_path"]
+    elsewhere = tmp_path / "elsewhere.sqlite"
+    elsewhere.write_bytes(b"not-a-receipt")
+    original = os.open
+    collided = []
+
+    def competing_symlink(path, flags, mode=0o777):
+        if str(path) == str(target) and flags & os.O_EXCL and not collided:
+            target.symlink_to(elsewhere)
+            collided.append(True)
+            raise FileExistsError("simulated path swap")
+        return original(path, flags, mode)
+
+    monkeypatch.setattr(c.os, "open", competing_symlink)
+    deny("durable_receipt_database_not_private", f)
+    assert collided == [True]
+    assert elsewhere.read_bytes() == b"not-a-receipt"
