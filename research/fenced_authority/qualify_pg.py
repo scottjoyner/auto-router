@@ -99,6 +99,17 @@ def run()->dict:
             " 'EXECUTE');"
         )
         assert untrusted=="f", "unsafe untrusted function EXECUTE privilege"
+        # A subsequent migration must not silently reopen PUBLIC EXECUTE.
+        # PostgreSQL IN SCHEMA default REVOKE would NOT fix the global
+        # built-in grant; create a future function as the migration role.
+        psql("CREATE FUNCTION fence_research.future_acl_probe() RETURNS integer "
+             "LANGUAGE SQL AS $$ SELECT 1 $$;")
+        future_acl=query_single(
+            "SELECT has_function_privilege('fence_untrusted',"
+            "'fence_research.future_acl_probe()','EXECUTE');"
+        )
+        assert future_acl=="f", "unsafe FUTURE public routine EXECUTE privilege"
+        psql("DROP FUNCTION fence_research.future_acl_probe();")
         expect_fail(
             "SET ROLE fence_untrusted; SELECT fence_research.grant_scope("
             f"'{SCOPE}','{OWNER_A}','{CLAIM_A}',81,"
@@ -284,6 +295,7 @@ def run()->dict:
             "revoked_epoch_late_terminal":"denied",
             "unspent_old_epoch_jti_reuse":"denied",
             "untrusted_sql_role_execute":"denied",
+            "future_function_public_execute":"denied",
             "replacement_epoch":2,
             "no_cross_host_consensus_proven":True,
             "elapsed_s":round(time.monotonic()-began,2),
