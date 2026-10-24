@@ -43,9 +43,17 @@ def healthy_subprocess(monkeypatch):
         "synthetic_credentials_only":True,
         "effective_snapshot":{"sanitized":True,"provider_count":0}
     }
+    surface={
+        "verdict":"DISPOSABLE_ALL_ADMIN_AUTH_NEGATIVES_PASS",
+        "mounted_admin_operations":20,"get_operations":16,"post_operations":4,
+        "checked_missing_and_wrong_credentials":True,
+        "authenticated_mutation_attempts":0,
+        "production_tested":False,"production_modified":False,
+    }
     def call(cmd,**kwargs):
         seen.append(tuple(cmd))
-        return SimpleNamespace(returncode=0,stdout=json.dumps(data),stderr="")
+        payload=surface if "verify_admin_surface_exhaustive.py" in str(cmd[-1]) else data
+        return SimpleNamespace(returncode=0,stdout=json.dumps(payload),stderr="")
     monkeypatch.setattr(m.subprocess,"run",call)
     return data,seen
 
@@ -55,12 +63,18 @@ def test_ci_exact_head_evidence_only(monkeypatch):
     assert result["source_commit"]=="a"*40
     assert result["ci_container_image_id"]=="sha256:"+"f"*64
     assert result["checked_admin_route_count"]==10
+    assert result["all_admin_operation_count"]==20
+    assert result["all_admin_get_count"]==16
+    assert result["all_admin_post_count"]==4
+    assert result["authenticated_admin_post_attempts"]==0
+    assert result["all_admin_missing_and_wrong_tokens_denied"] is True
     assert result["public_client_reads_preserved"] is True
     assert result["production_deployment_authorized"] is False
     assert result["rollback_proven"] is False
     assert result["independent_archival_custody_proven"] is False
     assert "smoke-admin-token" not in json.dumps(result)
     assert any("verify_admin_canary_ci.py" in " ".join(t) for t in seen)
+    assert any("verify_admin_surface_exhaustive.py" in " ".join(t) for t in seen)
 
 def test_non_ci_or_bad_sha_denied(monkeypatch):
     healthy_subprocess(monkeypatch)
@@ -96,4 +110,38 @@ def test_incomplete_canary_denied(monkeypatch):
                             {"result":"DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS",
                              "checked_routes":0}),stderr=""))
     with pytest.raises(m.EvidenceDenied,match="incomplete"):
+        m.build_evidence(fake_env())
+
+def test_failed_surface_canary_never_generates_receipt(monkeypatch):
+    healthy_subprocess(monkeypatch)
+    fake = m.subprocess.run
+    def fail_surface(cmd, **kwargs):
+        if "verify_admin_surface_exhaustive.py" in str(cmd[-1]):
+            return SimpleNamespace(returncode=2,stdout="",stderr="hold")
+        return fake(cmd, **kwargs)
+    monkeypatch.setattr(m.subprocess,"run",fail_surface)
+    with pytest.raises(m.EvidenceDenied,match="all-admin negative-auth canary failed"):
+        m.build_evidence(fake_env())
+
+
+@pytest.mark.parametrize("change", [
+    {"mounted_admin_operations":10},
+    {"get_operations":15},
+    {"post_operations":3},
+    {"authenticated_mutation_attempts":1},
+    {"checked_missing_and_wrong_credentials":False},
+    {"production_modified":True},
+])
+def test_forged_or_partial_surface_canary_denied(monkeypatch,change):
+    healthy_subprocess(monkeypatch)
+    original = m.subprocess.run
+    def spoof(cmd, **kwargs):
+        response=original(cmd, **kwargs)
+        if "verify_admin_surface_exhaustive.py" in str(cmd[-1]):
+            doc=json.loads(response.stdout)
+            doc.update(change)
+            return SimpleNamespace(returncode=0,stdout=json.dumps(doc),stderr="")
+        return response
+    monkeypatch.setattr(m.subprocess,"run",spoof)
+    with pytest.raises(m.EvidenceDenied,match="incomplete all-admin"):
         m.build_evidence(fake_env())
