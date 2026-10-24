@@ -16,6 +16,25 @@ jobs:
           python-version: '3.12'
       - name: Install
         run: python -m pip install -e '.[dev]'
+      - name: Test typed-decision evaluation (stub HTTP only, no model weights)
+        run: |
+          python -m unittest discover -s tests -p 'test_*shadow.py' -q
+          python -m unittest discover -s tests -p 'test_synthetic_decision_challenge.py' -q
+          ruff check \
+            experiments/typed_decision_shadow.py \
+            experiments/von_choice_shadow.py \
+            experiments/build_synthetic_decision_challenge.py \
+            tests/test_typed_decision_shadow.py \
+            tests/test_von_choice_shadow.py \
+            tests/test_synthetic_decision_challenge.py
+          python experiments/von_choice_shadow.py experiments/fixtures/von_choice_curated_synthetic.jsonl
+          challenge_dir=$(mktemp -d)
+          python experiments/build_synthetic_decision_challenge.py \
+            --cases-out "$challenge_dir/cases.jsonl" --oracle-out "$challenge_dir/oracle.jsonl"
+          python experiments/von_choice_shadow.py "$challenge_dir/cases.jsonl"
+          python experiments/typed_decision_shadow.py "$challenge_dir/oracle.jsonl" \
+            --baseline policy_oracle > "$challenge_dir/report.json"
+          python -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["models"]["policy_oracle"]["actionable_cases"] == 128; assert not d["promotion_approved"]' "$challenge_dir/report.json"
       - name: Compile reconciliation paths
         run: |
           python -m py_compile \
