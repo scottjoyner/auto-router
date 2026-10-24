@@ -35,6 +35,23 @@ class ResearchFenceContractTests(unittest.TestCase):
         self.assertIn("REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA fence_research FROM PUBLIC;",self.schema)
         self.assertIn("untrusted_sql_role_execute",self.runner)
 
+    def test_future_functions_cannot_reopen_public_execute(self):
+        # PostgreSQL default PUBLIC EXECUTE is global per *creating* role;
+        # an ineffective IN SCHEMA revoke does not remove this grant.
+        self.assertIn(
+            "ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;",
+            self.schema,
+        )
+        self.assertNotIn(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA fence_research "
+            "REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;",
+            self.schema,
+        )
+        self.assertIn("CREATE FUNCTION fence_research.future_acl_probe()", self.runner)
+        self.assertIn("DROP FUNCTION fence_research.future_acl_probe()", self.runner)
+        self.assertIn("unsafe FUTURE public routine EXECUTE privilege", self.runner)
+        self.assertIn('"future_function_public_execute":"denied"', self.runner)
+
     def test_shared_postgres_transactions_fence_revocation(self):
         self.assertIn("FOR UPDATE",self.schema)
         self.assertIn("WHERE scope_hash=p_scope AND epoch=p_epoch",self.schema)
