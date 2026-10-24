@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .owner_binding import OwnerBindingError, assert_claim_owner, owner_binding_required
+from .owner_binding import OwnerBindingError, assert_claim_owner
 
 
 class ExecutorClaimFenceError(RuntimeError):
