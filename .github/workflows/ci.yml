@@ -256,6 +256,59 @@ jobs:
           assert projection.get("current") is None, projection
           assert isinstance(projection.get("retired_generations"), list), projection
           PY
+      - name: Verify disposable full-ASGI admin auth and sanitized provider snapshot
+        env:
+          AUTO_ROUTER_CANARY_ENV: disposable-github-ci
+          AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN: smoke-admin-token
+        run: python3 scripts/write_ci_admin_release_evidence.py
+      - name: Upload non-secret exact-image canary evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-admin-auth-evidence-${{ github.sha }}
+          path: /tmp/auto-router-admin-ci-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Package tested Router image for offline, non-production handoff
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023'
+        env:
+          AUTO_ROUTER_CI_IMAGE_PACKAGE: unpromoted-disposable-only
+        run: python3 scripts/package_ci_router_image.py
+      - name: Independently verify packaged OCI archive without Docker import
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import zipfile
+
+          root = Path("/tmp/router-ci-image-handoff")
+          receipt = json.loads((root / "image-manifest.json").read_text())
+          target = root / "self-check.zip"
+          with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as bundle:
+              for name in ("image-manifest.json", "tested-router-image.tar.gz"):
+                  bundle.write(root / name, arcname=name)
+          try:
+              subprocess.run([
+                  sys.executable, "scripts/verify_router_handoff_offline.py",
+                  "--zip", str(target),
+                  "--expected-image", receipt["image_id"],
+                  "--expected-source", os.environ["GITHUB_SHA"],
+                  "--expected-archive-sha256", receipt["archive_sha256"],
+              ], check=True, timeout=80)
+          finally:
+              target.unlink(missing_ok=True)
+          PY
+      - name: Upload tested Router image and receipt (not a production deployment)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023'
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-image-handoff-${{ github.sha }}
+          path: /tmp/router-ci-image-handoff/
+          if-no-files-found: error
+          retention-days: 3
       - name: Capture diagnostics on failure
         if: failure()
         run: |
