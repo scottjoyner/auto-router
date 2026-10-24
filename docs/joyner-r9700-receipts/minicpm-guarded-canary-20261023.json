@@ -1,0 +1,56 @@
+{
+  "admission": {
+    "can_cutover": false,
+    "can_stop_service": false,
+    "functional_canary_gates_passed": false,
+    "reasons": [
+      "guarded_synthetic_task_failed",
+      "legacy_synthetic_task_failed",
+      "model_alias_mismatch"
+    ],
+    "remaining_gaps": [
+      "authorized_caller_acceptance",
+      "per_request_trace_custody",
+      "real_consumer_census",
+      "rollback_witness",
+      "performance_slo"
+    ],
+    "status": "DIAGNOSTIC_ONLY"
+  },
+  "anonymous_guarded_model_list_status": 401,
+  "authorized_guarded_model_list_status": 200,
+  "candidate_model_aliases_match": false,
+  "guarded": {
+    "answer_42_present": false,
+    "content_nonempty": true,
+    "generated_tokens": 16,
+    "http_status": 200,
+    "latency_ms": 102.87,
+    "text_not_persisted": true,
+    "text_sha256": "2625f4d7c1d12f8a5ab5d9b3beb79f3f6fdd7b9a844f1501b885c599442025f1"
+  },
+  "guarded_model_aliases": [
+    "/home/joyner/fleet-gpu/models/MiniCPM5-1B-Q4_K_M.gguf"
+  ],
+  "guarded_model_sha256": "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa",
+  "legacy": {
+    "answer_42_present": false,
+    "content_nonempty": true,
+    "generated_tokens": 16,
+    "http_status": 200,
+    "latency_ms": 492.03,
+    "text_not_persisted": true,
+    "text_sha256": "2625f4d7c1d12f8a5ab5d9b3beb79f3f6fdd7b9a844f1501b885c599442025f1"
+  },
+  "legacy_model_aliases": [
+    "joyner-toolcall"
+  ],
+  "model_request_is_synthetic": true,
+  "model_size_bytes": 688065920,
+  "no_secrets_or_content_logged": true,
+  "observed_utc": "2026-10-23T21:58:57.619969+00:00",
+  "read_only_service_configuration": true,
+  "schema": "joyner_minicpm_guarded_canary.v1",
+  "source_host": "joyner",
+  "verified_guarded_model_sha256_matches": true
+}
