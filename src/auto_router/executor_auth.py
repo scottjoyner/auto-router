@@ -231,19 +231,16 @@ class ExecutorInferenceAuthMiddleware:
         ):
             await self.app(scope, receive, send)
             return
+        # The legacy auth-disable toggle cannot authorize inference requests.
+        # A missing, false, or misspelled setting must not skip signature,
+        # model-scope, projection-generation or attempt-budget checks.
         if os.getenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true").strip().lower() not in {
-            "1",
-            "true",
-            "yes",
-            "on",
+            "1", "true", "yes", "on"
         }:
-            if owner_binding_required():
-                await JSONResponse(
-                    status_code=503,
-                    content={"detail": "strict owner fence requires executor authentication"},
-                )(scope, receive, send)
-                return
-            await self.app(scope, receive, send)
+            await JSONResponse(
+                status_code=503,
+                content={"detail": "executor inference authentication cannot be disabled"},
+            )(scope, receive, send)
             return
 
         body, replay = await _read_body(receive)
@@ -252,24 +249,16 @@ class ExecutorInferenceAuthMiddleware:
             if not isinstance(payload, dict):
                 raise ExecutorAuthError("inference request must be a JSON object")
             bearer = _bearer(list(scope.get("headers") or []))
+            # The broadly scoped internal-service bearer was never a signed,
+            # claim-owned inference grant. Even when strict owner binding is
+            # disabled, it may not bypass model scope, attempt budget or lease.
             service_token = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
             if service_token and hmac.compare_digest(bearer, service_token):
-                if owner_binding_required():
-                    raise ExecutorAuthError(
-                        "unowned internal-service bypass disabled by strict owner fence"
-                    )
-                metadata = payload.get("metadata")
-                if not isinstance(metadata, dict):
-                    metadata = {}
-                payload["metadata"] = {
-                    **metadata,
-                    "assistx_service": {
-                        "identity": "assistx-internal",
-                        "authenticated": True,
-                    },
-                }
-                await self.app(scope, _encoded_receive(payload, receive), send)
-                return
+                raise ExecutorAuthError("internal service token cannot authorize inference")
+
+            metadata = payload.get("metadata")
+            if isinstance(metadata, dict) and "assistx_service" in metadata:
+                raise ExecutorAuthError("caller-provided service identity is not authority")
 
             claims = decode_executor_token(bearer)
             owner = bound_principal(scope, claims)
