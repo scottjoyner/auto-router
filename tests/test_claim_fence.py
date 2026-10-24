@@ -135,16 +135,28 @@ async def test_revoked_or_replaced_claim_fails_closed():
 
 
 @pytest.mark.asyncio
-async def test_internal_assistx_service_bypasses_task_claim_lookup(monkeypatch):
+async def test_internal_assistx_service_metadata_cannot_bypass_claim_lookup(monkeypatch):
     monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL", raising=False)
-    monkeypatch.delenv(
-        "AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN",
-        raising=False,
-    )
-    await assert_executor_claim_current(
-        _request(assistx_service={"authenticated": True}),
-        _state(),
-    )
+    monkeypatch.delenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", raising=False)
+    with pytest.raises(ExecutorClaimFenceError, match="untrusted service identity"):
+        await assert_executor_claim_current(
+            _request(assistx_service={"authenticated": True}), _state()
+        )
+    assert _Client.observed == {}
+
+
+@pytest.mark.asyncio
+async def test_forged_service_metadata_denied_even_with_executor_claim():
+    with pytest.raises(ExecutorClaimFenceError, match="untrusted service identity"):
+        await assert_executor_claim_current(
+            _request(
+                assistx_service={"authenticated": True},
+                assistx_executor={
+                    "task_id": "task-1", "claim_id": "claim-1", "agent_id": "hermes",
+                    "projection_generation": 9,
+                },
+            ), _state()
+        )
     assert _Client.observed == {}
 
 
