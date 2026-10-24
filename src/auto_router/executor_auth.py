@@ -14,7 +14,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
-from .owner_binding import OwnerBindingError, bound_principal
+from .owner_binding import OwnerBindingError, bound_principal, owner_binding_required
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +286,22 @@ class ExecutorInferenceAuthMiddleware:
             token_generation = int(claims.get("projection_generation") or 0)
             if token_generation != int(current.generation):
                 raise ExecutorAuthError("executor token runtime projection generation is stale")
+            # Strict multi-owner routing requires *one* externally governed,
+            # monotonic attempt/spend authority shared by EVERY router replica.
+            # This module has only an in-process _ATTEMPTS ledger: a restarted
+            # process or another host could accept the same signed JTI again.
+            # A configured local SQLite path, caller env flag or verified owner
+            # alone does not establish cross-host, rollback-resistant fencing.
+            # Until a real broker is integrated and verified, strict owner
+            # inference is disabled BEFORE reserving even a local attempt.
+            if owner_binding_required():
+                await JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "shared_owner_attempt_authority_unverified",
+                    },
+                )(scope, replay, send)
+                return
             attempt = _ATTEMPTS.acquire(
                 str(claims["jti"]),
                 int(claims["exp"]),

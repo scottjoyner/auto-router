@@ -223,9 +223,10 @@ async def test_strict_owner_fence_matches_signed_and_authenticated_principal(
         ExecutorInferenceAuthMiddleware, _token(signing_key, **claims),
         request, verified_owner=principal
     )
-    assert sent[0]["status"] == 204
-    assert body["metadata"]["assistx_executor"]["owner_subject"] == "person-a"
-    assert body["metadata"]["assistx_executor"]["owner_issuer"] == "test-idp"
+    # Validly signed and independently bound owner is necessary but NOT
+    # sufficient for safe multi-host spend. Local _ATTEMPTS is not an issuer.
+    assert sent[0]["status"] == 503
+    assert not body
 
 
 @pytest.mark.asyncio
@@ -309,6 +310,53 @@ async def test_signed_executor_cannot_smuggle_service_identity(signing_key, monk
         ExecutorInferenceAuthMiddleware, _token(signing_key),
         {"model": "auto/code", "max_tokens": 16,
          "metadata": {"assistx_service": {"authenticated": True}}},
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fake_authority", [
+    {},
+    {"AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH": "/tmp/fake-attempts.sqlite"},
+    {"AUTO_ROUTER_SHARED_LEDGER_VERIFIED": "true"},
+    {"AUTO_ROUTER_OWNER_ATTEMPT_DB_PATH": "/tmp/fake-attempts.sqlite",
+     "AUTO_ROUTER_SHARED_LEDGER_VERIFIED": "true"},
+])
+async def test_strict_owner_no_local_or_environment_override_of_shared_spend(
+    signing_key, monkeypatch, fake_authority,
+):
+    from auto_router import executor_auth
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    for key, value in fake_authority.items():
+        monkeypatch.setenv(key, value)
+    # Would be a real local accounting side effect. Never consume it when
+    # global resource authority is unverified.
+    monkeypatch.setattr(executor_auth._ATTEMPTS, "acquire",
+                        lambda *args: pytest.fail("process-local ledger consulted"))
+    claim = {"owner_issuer": "test-idp", "owner_subject": "person-a"}
+    payload = {"model": "auto/code", "max_tokens": 3,
+               "messages": [{"role": "user", "content": "fixture only"}]}
+    token = _token(signing_key, **claim)
+    for _ in range(2):
+        sent, forwarded = await _invoke(
+            ExecutorInferenceAuthMiddleware, token, payload,
+            verified_owner={**claim, "authenticated": True},
+        )
+        assert sent[0]["status"] == 503
+        assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_strict_owner_wrong_principal_still_denied_before_global_hold(
+    signing_key, monkeypatch,
+):
+    monkeypatch.setenv("AUTO_ROUTER_REQUIRE_OWNER_BINDING", "true")
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key, owner_issuer="idp", owner_subject="person-a"),
+        {"model": "auto/code", "max_tokens": 3},
+        verified_owner={"owner_issuer": "idp", "owner_subject": "person-b",
+                        "authenticated": True},
     )
     assert sent[0]["status"] == 401
     assert not forwarded
