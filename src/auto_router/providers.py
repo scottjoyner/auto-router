@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from auto_router.models import ProviderConfig, ProviderHealth, ProviderResponse, RouterRequest
+from auto_router.provider_credential_file import ProviderCredentialHold, read_provider_token_file
 
 
 class ProviderError(RuntimeError):
@@ -61,11 +62,18 @@ class OpenAICompatibleProvider:
         return self.config.name
 
     def is_configured(self) -> bool:
-        if self.config.type == "lmstudio":
-            return True
-        if not self.config.api_key_env:
-            return True
-        return bool(os.getenv(self.config.api_key_env))
+        if self.config.api_key_file:
+            if self.config.api_key_env:
+                return False
+            try:
+                return bool(read_provider_token_file(self.config.api_key_file))
+            except ProviderCredentialHold:
+                return False
+        if self.config.api_key_env:
+            return bool(os.getenv(self.config.api_key_env))
+        # Existing tokenless LM Studio callers continue to work until
+        # their explicit per-provider required-token migration.
+        return True
 
     async def health(self) -> ProviderHealth:
         if not self.is_configured():
@@ -76,7 +84,9 @@ class OpenAICompatibleProvider:
                     f"{self.config.base_url.rstrip('/')}/models",
                     headers=self._headers(),
                 )
-            if response.status_code < 500:
+            # 401/403 mean denied credentials, not a healthy loaded model.
+            # Redirects and all other non-2xx codes also fail readiness.
+            if 200 <= response.status_code < 300:
                 return ProviderHealth(provider=self.name, ok=True, detail=f"HTTP {response.status_code}")
             return ProviderHealth(provider=self.name, ok=False, detail=f"HTTP {response.status_code}")
         except Exception as exc:  # pragma: no cover - network dependent
@@ -200,7 +210,15 @@ class OpenAICompatibleProvider:
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         headers.update(self.config.headers)
-        if self.config.api_key_env:
+        if self.config.api_key_file:
+            if self.config.api_key_env or any(k.casefold() == "authorization" for k in headers):
+                raise ProviderError("conflicting provider token sources", retryable=False)
+            try:
+                api_key = read_provider_token_file(self.config.api_key_file)
+            except ProviderCredentialHold as exc:
+                raise ProviderError(f"provider credentials unavailable: {exc}", retryable=False) from None
+            headers["Authorization"] = f"Bearer {api_key}"
+        elif self.config.api_key_env:
             api_key = os.getenv(self.config.api_key_env)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
