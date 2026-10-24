@@ -27,6 +27,9 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
     @app.get("/api/dashboard/ops-summary", response_class=HTMLResponse)
     async def dashboard_ops_summary(request: Request) -> Any:
         data = build_ops_summary(state, gateway_status=await build_agentgateway_status())
+        # Never pass sensitive configured URL values into anonymous HTML context.
+        # Preserve unredacted diagnostics only in the separately guarded admin JSON.
+        data = {**data, "assistx_tasks_url": None, "assistx_event_sink_url": None}
         return templates.TemplateResponse(
             request=request,
             name="fragments/ops_summary.html",
