@@ -16,9 +16,11 @@ class ExecutorClaimFenceError(RuntimeError):
 
 def _executor_metadata(request: Any) -> dict[str, Any] | None:
     metadata = request.metadata if isinstance(getattr(request, "metadata", None), dict) else {}
-    service = metadata.get("assistx_service")
-    if isinstance(service, dict) and service.get("authenticated") is True:
-        return None
+    # Caller-controlled model request metadata is not a trusted service
+    # identity. Do not interpret an "authenticated" boolean as a lease fence:
+    # upstream middleware must use a signed executor token instead.
+    if "assistx_service" in metadata:
+        raise ExecutorClaimFenceError("untrusted service identity cannot bypass claim fence")
     value = metadata.get("assistx_executor")
     if not isinstance(value, dict):
         raise ExecutorClaimFenceError("claim-scoped executor lineage is missing")
@@ -29,12 +31,6 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
     """Recheck AssistX authority after admission wait and before network dispatch."""
 
     identity = _executor_metadata(request)
-    if identity is None:
-        if owner_binding_required():
-            raise ExecutorClaimFenceError(
-                "unowned service execution disabled by strict owner fence"
-            )
-        return
     manager = getattr(state, "runtime_projection_manager", None)
     current = getattr(manager, "current", None)
     if current is None or not current.is_fresh():
