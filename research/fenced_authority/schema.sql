@@ -196,3 +196,13 @@ END $$;
 REVOKE ALL ON SCHEMA fence_research FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA fence_research FROM PUBLIC;
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA fence_research FROM PUBLIC;
+
+-- Existing-object REVOKE alone is NOT a forward-looking privilege policy.
+-- PostgreSQL grants PUBLIC EXECUTE to newly created functions by default.
+-- Only a *global* default REVOKE for the CURRENT CREATING ROLE removes that
+-- built-in grant. "IN SCHEMA fence_research" REVOKE cannot override it.
+-- The disposable research migration uses one creation role; production
+-- migration roles must each be configured and independently audited.
+-- This alters creation defaults for this role in the disposable DATABASE,
+-- not just this schema. NEVER run the research migration in production.
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
