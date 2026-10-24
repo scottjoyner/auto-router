@@ -21,19 +21,24 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from auto_router.model_value import build_value_matrix
+
 from auto_router.benchmark_planner import build_benchmark_plan
-from auto_router.quality_evidence import aggregate_quality
-from auto_router.loadout_optimizer import simulate_loadout
 from auto_router.fleet_health import build_health_plan
+from auto_router.loadout_optimizer import simulate_loadout
+from auto_router.model_value import build_value_matrix
+from auto_router.quality_evidence import aggregate_quality
 
 router = APIRouter(prefix="/api/fleet", tags=["fleet"])
 
 # In-process aggregation. One router process, so module-level state is fine.
 _node_reports: dict[str, dict[str, Any]] = {}
+# Untrusted GPU-presence observations are distinct from model inventory.
+_gpu_presence_reports: dict[str, dict[str, Any]] = {}
 _sse_subscribers: list[asyncio.Queue] = []
 _STALE_SECONDS = 180
 _PRUNE_SECONDS = 24 * 60 * 60
+_PRESENCE_RETENTION_SECONDS = 3600
+_PRESENCE_MAX_HOSTS = 128
 
 
 def _now_seconds() -> int:
@@ -46,6 +51,53 @@ def _prune_expired_reports(now: int) -> None:
         if now - int(report.get("received_at", 0)) > _PRUNE_SECONDS:
             _node_reports.pop(hostname, None)
 
+
+
+def _is_unadmitted_gpu_presence(body: Any) -> bool:
+    """Recognize the known R9700 guard heartbeat, never a model-bearing report.
+
+    This is an **untrusted shape classifier**, not a producer authentication.
+    Matching must be narrow to avoid redirecting ordinary model inventories.
+    """
+    if not isinstance(body, dict) or body.get("hostname") != "joyner":
+        return False
+    health = body.get("health")
+    specs = body.get("specs")
+    if not isinstance(health, dict) or not isinstance(specs, dict):
+        return False
+    return (
+        health.get("dispatch_admitted") is False
+        and health.get("toolcall_3b_unadmitted") is True
+        and type(health.get("gpu_canary_reachable_and_guarded")) is bool
+        and isinstance(specs.get("gpu_backend"), str)
+        and isinstance(specs.get("gpu_device"), str)
+        and body.get("library") == []
+        and body.get("loaded") == []
+        and body.get("capabilities") == []
+    )
+
+
+def _save_unadmitted_gpu_presence(
+    hostname: str, *, observed_at: int,
+) -> None:
+    """Retain bounded metadata only; never forward arbitrary heartbeat contents."""
+    _gpu_presence_reports[hostname] = {
+        "hostname": hostname,
+        "received_at": observed_at,
+        "status": "UNVERIFIED_GPU_PRESENCE",
+        "publisher_authenticated": False,
+        "model_inventory_updated": False,
+        "resident_model_attested": False,
+        "dispatch_admitted": False,
+    }
+    # In-memory telemetry only; entries expire even for dead nodes.
+    for name, report in list(_gpu_presence_reports.items()):
+        if observed_at - int(report.get("received_at", 0)) >= _PRESENCE_RETENTION_SECONDS:
+            del _gpu_presence_reports[name]
+    while len(_gpu_presence_reports) > _PRESENCE_MAX_HOSTS:
+        oldest = min(_gpu_presence_reports,
+                     key=lambda key: _gpu_presence_reports[key]["received_at"])
+        del _gpu_presence_reports[oldest]
 
 def _publish(report: dict[str, Any]) -> None:
     for q in list(_sse_subscribers):
@@ -92,7 +144,14 @@ def _merge_node_fields(body: dict[str, Any], hostname: str, src_ip: str | None) 
 async def node_report(request: Request) -> dict[str, Any]:
     raw = await request.json()
     body = raw if isinstance(raw, dict) else {}
-    hostname = str(body.get("hostname") or body.get("host_name") or body.get("node_id") or "unknown")
+    hostname = str(
+        body.get("hostname") or body.get("host_name") or body.get("node_id") or "unknown"
+    )
+    if _is_unadmitted_gpu_presence(body):
+        _save_unadmitted_gpu_presence(hostname, observed_at=_now_seconds())
+        # Separate diagnostic only: never mutate model-field timestamps, SSE,
+        # Redis or any value used for model admission and routing.
+        return {"ok": True, "hostname": hostname, "disposition": "gpu_presence_only"}
     # Prefer the real connection source IP (the node's tailscale IP) so consumers
     # can match reports to fleet nodes by IP, not just by (sometimes mismatched)
     # hostname. Fall back to an explicitly-sent ip for non-socket transports.
@@ -115,6 +174,19 @@ async def node_report(request: Request) -> dict[str, Any]:
         except Exception:
             pass
     return {"ok": True, "hostname": hostname}
+
+
+@router.get("/presence/{hostname}")
+async def unverified_gpu_presence(hostname: str) -> dict[str, Any]:
+    """Read-only bounded diagnostics; no model identity or raw health payload."""
+    report = _gpu_presence_reports.get(hostname)
+    if report is None:
+        return {"hostname": hostname, "status": "NO_RECENT_PRESENCE_OBSERVATION",
+                "dispatch_admitted": False, "publisher_authenticated": False}
+    if int(time.time()) - int(report.get("received_at", 0)) >= _PRESENCE_RETENTION_SECONDS:
+        return {"hostname": hostname, "status": "PRESENCE_OBSERVATION_EXPIRED",
+                "dispatch_admitted": False, "publisher_authenticated": False}
+    return dict(report)
 
 
 @router.get("/nodes")
