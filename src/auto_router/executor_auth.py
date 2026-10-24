@@ -14,7 +14,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
-from .owner_binding import OwnerBindingError, bound_principal, owner_binding_required
+from .owner_binding import OwnerBindingError, bound_principal
 
 logger = logging.getLogger(__name__)
 
