@@ -256,6 +256,11 @@ jobs:
           assert projection.get("current") is None, projection
           assert isinstance(projection.get("retired_generations"), list), projection
           PY
+      - name: Verify complete mounted admin GET and POST negative-auth surface
+        env:
+          AUTO_ROUTER_CANARY_ENV: disposable-github-ci
+          AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN: smoke-admin-token
+        run: python3 scripts/verify_admin_surface_exhaustive.py
       - name: Verify disposable full-ASGI admin auth and sanitized provider snapshot
         env:
           AUTO_ROUTER_CANARY_ENV: disposable-github-ci
