@@ -16,6 +16,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CANARY = ROOT / "scripts" / "verify_admin_canary_ci.py"
+SURFACE_CANARY = ROOT / "scripts" / "verify_admin_surface_exhaustive.py"
 
 class EvidenceDenied(RuntimeError):
     pass
@@ -68,6 +69,29 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
         or canary.get("production_tested") is not False
         or canary.get("synthetic_credentials_only") is not True):
         raise EvidenceDenied("incomplete canary proof")
+    # Re-run the complete source-pinned OpenAPI census against the very same
+    # disposable container, rather than inferring its success from a prior step.
+    surface_run=subprocess.run(["python3",str(SURFACE_CANARY)],cwd=ROOT,env=e,
+                               capture_output=True,text=True,timeout=45)
+    if surface_run.returncode!=0:
+        raise EvidenceDenied("all-admin negative-auth canary failed")
+    try:
+        surface=json.loads(surface_run.stdout.strip())
+    except (ValueError,TypeError) as exc:
+        raise EvidenceDenied("missing complete admin-surface proof") from exc
+    if (surface.get("verdict")!="DISPOSABLE_ALL_ADMIN_AUTH_NEGATIVES_PASS"
+        or type(surface.get("mounted_admin_operations")) is not int
+        or surface["mounted_admin_operations"]!=20
+        or type(surface.get("get_operations")) is not int
+        or surface["get_operations"]!=16
+        or type(surface.get("post_operations")) is not int
+        or surface["post_operations"]!=4
+        or surface.get("checked_missing_and_wrong_credentials") is not True
+        or type(surface.get("authenticated_mutation_attempts")) is not int
+        or surface["authenticated_mutation_attempts"]!=0
+        or surface.get("production_tested") is not False
+        or surface.get("production_modified") is not False):
+        raise EvidenceDenied("incomplete all-admin operation coverage")
     return {
         "schema":1,"status":"DISPOSABLE_CI_ADMIN_AUTH_EVIDENCE",
         "generated_utc":datetime.now(timezone.utc).isoformat(),
@@ -81,10 +105,17 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
                 "src/auto_router/security.py",
                 "src/auto_router/secure_live.py",
                 "scripts/verify_admin_canary_ci.py",
+                "scripts/verify_admin_surface_exhaustive.py",
             )
         },
         "canary_result":canary["result"],
         "checked_admin_route_count":canary["checked_routes"],
+        "all_admin_surface_verdict":surface["verdict"],
+        "all_admin_operation_count":surface["mounted_admin_operations"],
+        "all_admin_get_count":surface["get_operations"],
+        "all_admin_post_count":surface["post_operations"],
+        "all_admin_missing_and_wrong_tokens_denied":True,
+        "authenticated_admin_post_attempts":0,
         "missing_and_wrong_token_rejected":True,
         "public_client_reads_preserved":True,
         "synthetic_operator_auth_accepted":True,

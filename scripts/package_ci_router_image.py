@@ -38,6 +38,16 @@ def check_identity(env: dict[str, str], receipt: dict, image: str) -> None:
         raise PackageDenied("source/image evidence mismatch")
     if (receipt.get("canary_result") != "DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS"
         or receipt.get("checked_admin_route_count") != 10
+        or receipt.get("all_admin_surface_verdict") != "DISPOSABLE_ALL_ADMIN_AUTH_NEGATIVES_PASS"
+        or type(receipt.get("all_admin_operation_count")) is not int
+        or receipt["all_admin_operation_count"] != 20
+        or type(receipt.get("all_admin_get_count")) is not int
+        or receipt["all_admin_get_count"] != 16
+        or type(receipt.get("all_admin_post_count")) is not int
+        or receipt["all_admin_post_count"] != 4
+        or receipt.get("all_admin_missing_and_wrong_tokens_denied") is not True
+        or type(receipt.get("authenticated_admin_post_attempts")) is not int
+        or receipt["authenticated_admin_post_attempts"] != 0
         or receipt.get("missing_and_wrong_token_rejected") is not True
         or receipt.get("public_client_reads_preserved") is not True
         or receipt.get("sanitized_provider_response") is not True):
@@ -128,7 +138,11 @@ def main():
         "source_commit":receipt["source_commit"],
         "source_tree":receipt["git_source_tree"],
         "canary_result":receipt["canary_result"],
-        "tested_admin_routes":10,
+        "tested_admin_routes":receipt["all_admin_operation_count"],
+        "tested_admin_get_operations":receipt["all_admin_get_count"],
+        "tested_admin_post_operations":receipt["all_admin_post_count"],
+        "authenticated_admin_post_attempts":0,
+        "all_admin_surface_verdict":receipt["all_admin_surface_verdict"],
         "public_client_reads_preserved":True,
         "sanitized_provider_response":True,
         "archive_name":archive.name,
