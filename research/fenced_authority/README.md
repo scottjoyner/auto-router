@@ -45,8 +45,15 @@ Source: `research/fenced_authority/schema.sql`.
 - Terminal statuses distinguish completed, failed, cancelled, and
   possibly_accepted. Under revocation, *late terminal acceptance*
   fails, even if an earlier worker may physically keep generating.
-- PostgreSQL default PUBLIC execute privilege on functions is
+- PostgreSQL default PUBLIC execute privilege on existing functions is
   explicitly revoked, together with PUBLIC schema/table privileges.
+  **Future function safety:** the migration now also changes global default
+  function EXECUTE privileges for the *current creating role* (a per-schema
+  default REVOKE cannot cancel PostgreSQL's built-in global PUBLIC grant).
+  The disposable native harness creates a new research function and confirms
+  an untrusted role cannot execute it, then drops the probe. This is not a
+  fleet migration policy: every distinct future creating role needs its own
+  secure defaults and independent ACL readback.
   No operating broker role or credential is created by this research
   migration. Production would require explicit broker-only grants.
 
