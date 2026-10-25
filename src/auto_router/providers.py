@@ -104,11 +104,10 @@ class OpenAICompatibleProvider:
             raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(
-                f"provider {self.name} model discovery returned HTTP {response.status_code}: {response.text[:500]}",
+                f"provider {self.name} model discovery returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=response.status_code in {408, 409, 425, 429, 500, 502, 503, 504},
                 retry_after_seconds=parse_retry_after(response.headers),
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else None
@@ -163,11 +162,10 @@ class OpenAICompatibleProvider:
         if response.status_code >= 400:
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"provider {self.name} returned HTTP {response.status_code}: {response.text[:500]}",
+                f"provider {self.name} returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
                 retry_after_seconds=parse_retry_after(response.headers),
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         data = response.json()
         usage = _normalize_usage(data.get("usage") if isinstance(data, dict) else None)
@@ -185,16 +183,19 @@ class OpenAICompatibleProvider:
             await client.aclose()
             raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
         if response.status_code >= 400:
-            body = await response.aread()
-            await stream_cm.__aexit__(None, None, None)
-            await client.aclose()
+            # The upstream error body and arbitrary headers are untrusted and
+            # can echo prompts, secrets or credential material. Do not buffer
+            # or forward them into ProviderError / trace storage.
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            finally:
+                await client.aclose()
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"provider {self.name} returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}",
+                f"provider {self.name} returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
                 retry_after_seconds=parse_retry_after(response.headers),
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
 
         async def body_stream() -> AsyncIterator[bytes]:
@@ -559,10 +560,9 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         if response.status_code >= 400:
             retryable = response.status_code in {408, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"agentgateway returned HTTP {response.status_code}: {response.text[:500]}",
+                f"agentgateway returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         
         data = response.json()
@@ -653,15 +653,17 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             raise ProviderError(f"agentgateway streaming request failed: {exc}") from exc
         
         if response.status_code >= 400:
-            body = await response.aread()
-            await stream_cm.__aexit__(None, None, None)
-            await client.aclose()
+            # A streaming error can contain arbitrarily large untrusted content.
+            # Close transport without reading/copying the body to traces.
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            finally:
+                await client.aclose()
             retryable = response.status_code in {408, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"agentgateway returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}",
+                f"agentgateway returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         
         async def body_stream() -> AsyncIterator[bytes]:
