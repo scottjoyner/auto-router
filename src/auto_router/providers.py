@@ -4,7 +4,8 @@ import email.utils
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -197,12 +198,25 @@ class OpenAICompatibleProvider:
             )
 
         async def body_stream() -> AsyncIterator[bytes]:
+            # A client can close this generator mid-stream on revocation.
+            # Explicitly close the nested raw iterator before the HTTP
+            # context; nested finally blocks preserve client cleanup when
+            # either inner close fails. This does NOT prove remote inference
+            # stopped; it only bounds cleanup of this client connection.
+            raw_iterator = response.aiter_raw()
             try:
-                async for chunk in response.aiter_raw():
+                async for chunk in raw_iterator:
                     yield chunk
             finally:
-                await stream_cm.__aexit__(None, None, None)
-                await client.aclose()
+                try:
+                    close_iterator = getattr(raw_iterator, "aclose", None)
+                    if callable(close_iterator):
+                        await close_iterator()
+                finally:
+                    try:
+                        await stream_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
 
         headers = {key.lower(): value for key, value in response.headers.items()}
         return ProviderStreamResponse(provider=self.name, model=provider_model, status_code=response.status_code, headers=headers, body=body_stream())
@@ -475,7 +489,6 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         from auto_router.gateway import (
             build_gateway_headers,
             attach_gateway_metadata,
-            strip_gateway_metadata,
             generate_request_id,
         )
         
@@ -652,12 +665,25 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             )
         
         async def body_stream() -> AsyncIterator[bytes]:
+            # A client can close this generator mid-stream on revocation.
+            # Explicitly close the nested raw iterator before the HTTP
+            # context; nested finally blocks preserve client cleanup when
+            # either inner close fails. This does NOT prove remote inference
+            # stopped; it only bounds cleanup of this client connection.
+            raw_iterator = response.aiter_raw()
             try:
-                async for chunk in response.aiter_raw():
+                async for chunk in raw_iterator:
                     yield chunk
             finally:
-                await stream_cm.__aexit__(None, None, None)
-                await client.aclose()
+                try:
+                    close_iterator = getattr(raw_iterator, "aclose", None)
+                    if callable(close_iterator):
+                        await close_iterator()
+                finally:
+                    try:
+                        await stream_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
         
         headers_dict = {key.lower(): value for key, value in response.headers.items()}
         return ProviderStreamResponse(
