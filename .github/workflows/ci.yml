@@ -376,6 +376,112 @@ jobs:
           path: /tmp/router-ci-image-handoff/
           if-no-files-found: error
           retention-days: 3
+      # Only the same-repository guarded PR may rehearse a synthetic fallback.
+      # This is not a production image switch or an authorization to use live secrets.
+      - name: Fetch immutable guarded-main recovery source (disposable CI)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/checkout@v4
+        with:
+          repository: scottjoyner/auto-router
+          ref: bd2bc73e3d10ea549c03b6b8f35359c2dc8ea943
+          path: .ci-guarded-main-recovery
+          persist-credentials: false
+      - name: Rehearse security-preserving isolated Router fallback (CI-only)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          AUTO_ROUTER_CI_ROLLBACK_MODE: synthetic-disposable-no-prod
+        run: |
+          set -euo pipefail
+          test "$AUTO_ROUTER_CI_ROLLBACK_MODE" = "synthetic-disposable-no-prod"
+          test "$(git -C "$GITHUB_WORKSPACE/.ci-guarded-main-recovery" rev-parse HEAD)" = "bd2bc73e3d10ea549c03b6b8f35359c2dc8ea943"
+          CI_SOURCE_SHA="$(git rev-parse HEAD)"
+          test "$CI_SOURCE_SHA" = "$GITHUB_SHA"
+          ORIGINAL_IMAGE="$(docker inspect --format '{{.Image}}' auto-router-smoke)"
+          VERIFIED_IMAGE="$(python3 -c 'import json;print(json.load(open("/tmp/router-ci-image-handoff/image-manifest.json"))["image_id"])')"
+          test "$ORIGINAL_IMAGE" = "$VERIFIED_IMAGE"
+          ROOT="$GITHUB_WORKSPACE"
+          RECOVERY="$ROOT/.ci-guarded-main-recovery"
+          cleanup() {
+            ( cd "$RECOVERY" && docker compose -f docker-compose.yml -f docker-compose.integration.yml down -v ) >/dev/null 2>&1 || true
+            ( cd "$ROOT" && docker compose -f docker-compose.yml -f docker-compose.integration.yml down -v ) >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          # Candidate -> independently pinned guarded main, with throwaway Redis,
+          # container, networks, config and sqlite volume; no fleet mounts/secrets.
+          docker compose -f docker-compose.yml -f docker-compose.integration.yml down -v
+          cd "$RECOVERY"
+          docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
+          HEALTHY=0
+          for attempt in $(seq 1 25); do
+            if curl --silent --fail --output /dev/null --max-time 2 http://127.0.0.1:8088/health; then
+              HEALTHY=1
+              break
+            fi
+            sleep 2
+          done
+          test "$HEALTHY" = 1
+          RECOVERY_IMAGE="$(docker inspect --format '{{.Image}}' auto-router-smoke)"
+          test "$RECOVERY_IMAGE" != "$ORIGINAL_IMAGE"
+          # All mounted admin methods must deny missing/incorrect credentials.
+          # Only the public OpenAPI *schema* is read; no admin bodies or token
+          # values, and no authorized POST mutations, are ever collected.
+          python3 - <<'PY'
+          import json, urllib.request, urllib.error
+          base="http://127.0.0.1:8088"
+          with urllib.request.urlopen(base+"/openapi.json",timeout=4) as resp:
+              raw=resp.read(256001)
+          assert len(raw)<=256000
+          schema=json.loads(raw)
+          operations=set()
+          methods={"get","post","put","patch","delete","head","options","trace"}
+          for path,routes in schema["paths"].items():
+              if path.startswith("/admin/"):
+                  for method in routes:
+                      if method in methods:
+                          operations.add((method.upper(),path))
+          expected={("GET",p) for p in (
+              "/admin/quota","/admin/providers/health","/admin/context",
+              "/admin/context/graph","/admin/providers","/admin/placement",
+              "/admin/agent-workers","/admin/usage","/admin/circuits",
+              "/admin/agent-jobs","/admin/admission",
+              "/admin/runtime-projection","/admin/ops/summary",
+              "/admin/ops/preflight","/admin/memory")}
+          expected|={("POST",p) for p in (
+              "/admin/load","/admin/circuits/reset",
+              "/admin/circuits/reset/{owner}","/admin/runtime-projection")}
+          assert operations==expected,(len(operations),len(expected))
+          def code(method,path,token=None):
+              headers={"Accept":"application/json"}
+              if token is not None:headers["X-Admin-Token"]=token
+              real=path.replace("{owner}","ci-disposable-owner")
+              assert real.startswith("/admin/")
+              request=urllib.request.Request(base+real,headers=headers,
+                  data=b"{}" if method=="POST" else None,method=method)
+              try:
+                  with urllib.request.urlopen(request,timeout=4) as response:
+                      return response.status
+              except urllib.error.HTTPError as e:
+                  e.close()
+                  return e.code
+          for method,path in sorted(expected):
+              for token in (None,"ci-incorrect-admin-token"):
+                  assert code(method,path,token)==401,(method,path)
+          assert code("GET","/admin/providers","smoke-admin-token")==200
+          assert code("GET","/admin/admission","smoke-admin-token")==200
+          for path in ("/health","/v1/models"):
+              with urllib.request.urlopen(base+path,timeout=4) as response:
+                  assert response.status==200
+          print(json.dumps({"verdict":"DISPOSABLE_GUARDED_MAIN_ROLLBACK_AUTH_AND_HEALTH_PASS",
+              "mounted_admin_operations":len(expected),
+              "anonymous_and_wrong_denials":len(expected)*2,
+              "positive_admin_reads":2,"public_reads":2,
+              "initial_candidate_was_verified_by_OCI_receipt":True,
+              "fallback_git_commit":"bd2bc73e3d10ea549c03b6b8f35359c2dc8ea943",
+              "production_rollout_or_rollback_tested":False,
+              "no_real_model_requests":True,"no_real_credentials":True,
+              "release_authorized":False},sort_keys=True))
+          PY
+          test "$(docker inspect --format '{{.Image}}' auto-router-smoke)" = "$RECOVERY_IMAGE"
       - name: Capture diagnostics on failure
         if: failure()
         run: |
