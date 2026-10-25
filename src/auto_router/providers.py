@@ -100,8 +100,10 @@ class OpenAICompatibleProvider:
         try:
             async with httpx.AsyncClient(timeout=min(self.timeout_seconds, 30.0)) as client:
                 response = await client.get(url, headers=self._headers())
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
+        except httpx.HTTPError:
+            # Transport exceptions may echo query parameters or credential data.
+            # Preserve the failure category, never upstream exception text.
+            raise ProviderError(f"provider {self.name} model discovery failed") from None
         if response.status_code >= 400:
             raise ProviderError(
                 f"provider {self.name} model discovery returned HTTP {response.status_code}",
@@ -157,8 +159,8 @@ class OpenAICompatibleProvider:
         try:
             async with self._client() as client:
                 response = await client.post(url, headers=self._headers(), json=payload)
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
+        except httpx.HTTPError:
+            raise ProviderError(f"provider {self.name} request failed") from None
         if response.status_code >= 400:
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
@@ -179,9 +181,9 @@ class OpenAICompatibleProvider:
         stream_cm = client.stream("POST", url, headers=self._headers(), json=payload)
         try:
             response = await stream_cm.__aenter__()
-        except Exception as exc:
+        except Exception:
             await client.aclose()
-            raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
+            raise ProviderError(f"provider {self.name} request failed") from None
         if response.status_code >= 400:
             # The upstream error body and arbitrary headers are untrusted and
             # can echo prompts, secrets or credential material. Do not buffer
@@ -333,8 +335,10 @@ class LMStudioProvider(OpenAICompatibleProvider):
         try:
             async with httpx.AsyncClient(timeout=min(self.timeout_seconds, 30.0)) as client:
                 response = await client.get(f"{native_root}/api/v1/models", headers=self._headers())
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
+        except httpx.HTTPError:
+            # Transport exceptions may echo query parameters or credential data.
+            # Preserve the failure category, never upstream exception text.
+            raise ProviderError(f"provider {self.name} model discovery failed") from None
         if response.status_code >= 400:
             # A bare llama-server exposes no LM Studio native API (404). The
             # OpenAI-compatible listing still names the model being served, but it
@@ -551,11 +555,11 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         try:
             async with httpx.AsyncClient(timeout=gateway_config.timeout_seconds) as client:
                 response = await client.post(url, headers=headers, json=payload)
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             raise ProviderError(
-                f"agentgateway request failed: {exc}",
+                "agentgateway request failed",
                 retryable=True,
-            ) from exc
+            ) from None
         
         if response.status_code >= 400:
             retryable = response.status_code in {408, 429, 500, 502, 503, 504}
@@ -648,9 +652,9 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         
         try:
             response = await stream_cm.__aenter__()
-        except Exception as exc:
+        except Exception:
             await client.aclose()
-            raise ProviderError(f"agentgateway streaming request failed: {exc}") from exc
+            raise ProviderError("agentgateway streaming request failed") from None
         
         if response.status_code >= 400:
             # A streaming error can contain arbitrarily large untrusted content.
