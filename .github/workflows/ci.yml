@@ -482,6 +482,94 @@ jobs:
               "release_authorized":False},sort_keys=True))
           PY
           test "$(docker inspect --format '{{.Image}}' auto-router-smoke)" = "$RECOVERY_IMAGE"
+          # Preserve only the tested, security-patched fallback CI image.
+          # Never export any fleet image, private volume or production secret.
+          export RECOVERY_IMAGE
+          mkdir -p /tmp/router-guarded-main-rollback-ci
+          docker save "$RECOVERY_IMAGE" | gzip -n -1 > /tmp/router-guarded-main-rollback-ci/guarded-main-image.tar.gz
+          gzip -t /tmp/router-guarded-main-rollback-ci/guarded-main-image.tar.gz
+          python3 - <<'PY'
+          import hashlib,json,os,tarfile
+          from pathlib import Path
+          root=Path("/tmp/router-guarded-main-rollback-ci")
+          archive=root/"guarded-main-image.tar.gz"
+          image=os.environ["RECOVERY_IMAGE"]
+          assert image.startswith("sha256:") and len(image)==71
+          assert 0 < archive.stat().st_size < 500_000_000
+          def hash_file(path):
+              h=hashlib.sha256()
+              with open(path,"rb") as f:
+                  for block in iter(lambda:f.read(1024*1024),b""): h.update(block)
+              return h.hexdigest()
+          with tarfile.open(archive,mode="r:gz") as tf:
+              manifest=json.load(tf.extractfile("manifest.json"))
+              assert len(manifest)==1
+              item=manifest[0]
+              config_bytes=tf.extractfile(item["Config"]).read()
+              assert "sha256:"+hashlib.sha256(config_bytes).hexdigest()==image
+              config=json.loads(config_bytes)
+              layers=item["Layers"];diff_ids=config["rootfs"]["diff_ids"]
+              assert len(layers)==len(diff_ids) and len(layers)>=5
+              for name,expect in zip(layers,diff_ids):
+                  h=hashlib.sha256()
+                  with tf.extractfile(name) as layer:
+                      for block in iter(lambda:layer.read(1024*1024),b""):h.update(block)
+                  assert "sha256:"+h.hexdigest()==expect
+          receipt={
+              "schema":1,"verdict":"DISPOSABLE_PATCHED_MAIN_FALLBACK_IMAGE_INTEGRITY_PASS",
+              "source_git_commit":"bd2bc73e3d10ea549c03b6b8f35359c2dc8ea943",
+              "subject_ci_commit":os.environ["GITHUB_SHA"],
+              "tested_fallback_image":image,
+              "image_archive_sha256":hash_file(archive),
+              "image_archive_size_bytes":archive.stat().st_size,
+              "layer_diffid_count":len(layers),
+              "negative_admin_denials":38,
+              "positive_admin_get_reads":2,
+              "public_get_reads":2,
+              "synthetic_only":True,"production_image_replaced":False,
+              "physical_rollback_verified":False,
+              "operator_release_approved":False
+          }
+          (root/"guarded-main-fallback-receipt.json").write_text(json.dumps(receipt,sort_keys=True)+"\\n")
+          print(json.dumps({"verdict":receipt["verdict"],"image":image,
+              "layers":len(layers),"sha256":receipt["image_archive_sha256"],
+              "production_rollback_verified":False},sort_keys=True))
+          PY
+      # Staged guardrail only: a CI-signed fallback is not release authority.
+      - name: Attest CI-rehearsed security-patched fallback image (unpromoted)
+        id: attest_patched_fallback
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest@v4
+        with:
+          subject-path: /tmp/router-guarded-main-rollback-ci/guarded-main-image.tar.gz
+      - name: Verify patched fallback archive under GitHub Sigstore trust roots
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh attestation verify /tmp/router-guarded-main-rollback-ci/guarded-main-image.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$GITHUB_SHA" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+            --source-ref "refs/pull/${{ github.event.pull_request.number }}/merge" >/dev/null
+          echo 'GUARDED_MAIN_FALLBACK_SIGSTORE_CI_TRUST_PASS_NOT_PRODUCTION_SIGNOFF'
+      - name: Upload guarded-main fallback image and rollback witness (not deployed)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-guarded-main-fallback-${{ github.sha }}
+          path: /tmp/router-guarded-main-rollback-ci/
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload Sigstore fallback bundle (not production signer approval)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-guarded-main-sigstore-${{ github.sha }}
+          path: ${{ steps.attest_patched_fallback.outputs['bundle-path'] }}
+          if-no-files-found: error
+          retention-days: 14
       - name: Capture diagnostics on failure
         if: failure()
         run: |
