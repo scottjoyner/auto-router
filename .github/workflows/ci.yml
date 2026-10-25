@@ -530,10 +530,33 @@ jobs:
               "physical_rollback_verified":False,
               "operator_release_approved":False
           }
-          (root/"guarded-main-fallback-receipt.json").write_text(json.dumps(receipt,sort_keys=True)+"\\n")
+          (root/"guarded-main-fallback-receipt.json").write_text(json.dumps(receipt,sort_keys=True)+"\n")
           print(json.dumps({"verdict":receipt["verdict"],"image":image,
               "layers":len(layers),"sha256":receipt["image_archive_sha256"],
               "production_rollback_verified":False},sort_keys=True))
+          PY
+          # The receipt is a machine-readable security artifact: fail closed on
+          # malformed JSON, source drift, wrong image ID, or wrong archive bytes.
+          python3 -m json.tool /tmp/router-guarded-main-rollback-ci/guarded-main-fallback-receipt.json >/dev/null
+          python3 - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path("/tmp/router-guarded-main-rollback-ci")
+          report=json.loads((root/"guarded-main-fallback-receipt.json").read_text())
+          image=root/"guarded-main-image.tar.gz"
+          h=hashlib.sha256()
+          with image.open("rb") as src:
+              for block in iter(lambda:src.read(1048576),b""): h.update(block)
+          assert report["verdict"]=="DISPOSABLE_PATCHED_MAIN_FALLBACK_IMAGE_INTEGRITY_PASS"
+          assert report["source_git_commit"]=="bd2bc73e3d10ea549c03b6b8f35359c2dc8ea943"
+          assert report["subject_ci_commit"]==os.environ["GITHUB_SHA"]
+          assert report["image_archive_sha256"]==h.hexdigest()
+          assert report["image_archive_size_bytes"]==image.stat().st_size
+          assert report["negative_admin_denials"]==38
+          assert report["physical_rollback_verified"] is False
+          assert report["operator_release_approved"] is False
+          assert report["synthetic_only"] is True
+          print("STRICT_FALLBACK_JSON_CUSTODY_RECEIPT_PASS_NOT_PRODUCTION_APPROVAL")
           PY
       # Staged guardrail only: a CI-signed fallback is not release authority.
       - name: Attest CI-rehearsed security-patched fallback image (unpromoted)
