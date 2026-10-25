@@ -158,9 +158,48 @@ def test_status_remains_actionable_without_body_or_headers(
     assert SECRET not in str(exc)
 
 
-def test_no_network_synthetic_contract(fake_http):
-    # MockTransport is the only HTTP mechanism in this entire file. The
-    # no-inference, no-production-effect guarantee comes from using fake
-    # responses and synthetic requests; passing says nothing about remote
-    # cancellation, authorization or live quotas.
-    assert True
+@pytest.mark.parametrize("route", ["direct", "gateway"])
+def test_stream_http_error_closes_without_reading_upstream_body(route, monkeypatch):
+    reads = []
+
+    class ExplosiveBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            reads.append("read")
+            raise AssertionError("upstream error body must not be consumed")
+            yield b"unused"
+
+        async def aclose(self):
+            reads.append("closed")
+
+    def respond(request):
+        return httpx.Response(
+            403,
+            headers={"Set-Cookie": SECRET, "Retry-After": "30"},
+            stream=ExplosiveBody(),
+            request=request,
+        )
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        MOD["providers"].httpx, "AsyncClient",
+        lambda *a, **kw: original(*a, transport=httpx.MockTransport(respond), **kw),
+    )
+    provider = _gateway() if route == "gateway" else _provider()
+
+    async def exercise():
+        if route == "gateway":
+            await provider.stream_chat_completions(
+                _request(), "fake-model", gateway_config=_gateway_options()
+            )
+        else:
+            await provider.stream_chat_completions(_request(), "fake-model")
+
+    with patch.dict(sys.modules, {"auto_router.gateway": MOD["gateway"]}):
+        with pytest.raises(ProviderError) as caught:
+            asyncio.run(exercise())
+    assert caught.value.status_code == 403
+    assert caught.value.retryable is False
+    assert caught.value.headers == {}
+    assert SECRET not in str(caught.value)
+    assert "read" not in reads
+    assert "closed" in reads
