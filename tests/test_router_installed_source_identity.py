@@ -27,6 +27,11 @@ SAFE_CONFIG = b"# LMSTUDIO_XWING_API_KEY_FILE\n"
 
 class SourceIdentityTests(unittest.TestCase):
     def setUp(self):
+        # The fleet's isolated test shells can inherit an unusually permissive
+        # umask. Fixture files must be safe by construction; the separate
+        # group-writable test intentionally changes one file to 0664.
+        old_umask = os.umask(0o022)
+        self.addCleanup(os.umask, old_umask)
         temp = tempfile.TemporaryDirectory(prefix="router-id-test-")
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
