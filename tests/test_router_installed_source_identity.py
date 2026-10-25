@@ -164,6 +164,10 @@ class SourceIdentityTests(unittest.TestCase):
         self.assertEqual(obj["verdict"], "SOURCE_IDENTITY_MATCH_ONLY")
         self.assertFalse(obj["deployment_authorized"])
 
+    def test_image_dockerfile_normalizes_baked_config_mode(self):
+        content = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("RUN chmod 0644 /app/config/providers.yaml", content)
+
     def test_cli_returns_nonzero_for_drift(self):
         import io
         (self.pkg / "providers.py").write_bytes(SAFE_PROVIDER + b"#drift\n")
