@@ -79,6 +79,31 @@ quota/agent execution. Native Xwing anonymous/invalid-token catalogs
 were still HTTP 200 at the last physical verification. Correct client
 header construction alone is not proof that the server enforces it.
 
-**Keep draft / HOLD.** Do not merge/deploy or enable native Xwing auth based
-only on 9/9 synthetic tests. Hosted exact-head CI and full positive/negative
-server authentication acceptance remain separate release gates.
+**Source integration versus runtime authorization:** The original 9/9
+test-only gate was insufficient to claim rollout readiness. Subsequent
+integration review used the then-current `main` at
+`0ea10e076f135ed3067bf163983452b9ee8aeccd` plus this PR head
+`51fb42f8e9a73c2911f9ef630c76bd610818ef6a` in disposable
+three-way Git merges on **x1-370** and **Xwing**. Each independently passed
+**36/36** combined offline tests, including the already merged provider
+and durable event-outbox redaction controls. The original PR exact-head
+`CI` and `Fleet live discovery` workflows succeeded. Git readback
+confirmed no whitespace conflicts or production service deployment step
+in the reviewed main-branch GitHub Actions workflows.
+
+An independently checked source-only merge into `main` can be considered
+separately from **runtime deployment**; it must not implicitly authorize
+activating `LMSTUDIO_XWING_API_KEY_FILE`, issuing real tokens, or enabling
+LM Studio native authentication. The live x1 router container at
+2026-10-25T15:07Z still lacked the `LMSTUDIO_XWING_API_KEY_FILE`
+environment **key name** and had been running since October 22.
+The Xwing LM Studio server remained bound to `0.0.0.0:1234`,
+and the LAN nft guard remained active. The current running-router code,
+catalog permissions, token provisioning and client migration remain
+unverified for an authenticated production cutover.
+
+**P0 #198 remains OPEN / NO-GO** even after any source integration.
+Full legitimate-token positive checks, no-token/wrong-token/revoked-token
+denials on both catalogs, independent per-client readiness and rollback
+are still mandatory. Do NOT deploy this configuration or flip LM Studio
+`Require Authentication` on the strength of the source merge/tests alone.
