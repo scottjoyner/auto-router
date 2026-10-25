@@ -48,6 +48,18 @@ def sha(domain: str, text: str) -> str:
     return hashlib.sha256(canonical([domain, text])).hexdigest()
 
 
+def owner_identity_hash(issuer: str, subject: str) -> str:
+    """Hash two *separately framed* signed fields, not a separator-joined string.
+
+    Concatenating with "\\x00" lets ('idp\\x00a', 'b') alias ('idp', 'a\\x00b')
+    even though both owner assertions are different and correctly signed.
+    Use an explicitly versioned tuple so embedded delimiters cannot collide.
+    """
+    return hashlib.sha256(
+        canonical(["owner-issuer-subject-v2", issuer, subject])
+    ).hexdigest()
+
+
 def only_dict(raw: bytes) -> dict[str, Any]:
     try:
         value = json.loads(raw)
@@ -208,12 +220,11 @@ def propose_only(
     if end > exp:
         raise ResearchDeny("resource witness outlives executor grant")
 
-    owner_key = claims["owner_issuer"] + "\x00" + claims["owner_subject"]
     scope_hash = sha("scope-v1", account_scope)
     return {
         "decision": "VERIFIED_SIGNED_INPUTS_ONLY_NOT_RESOURCE_ADMISSION",
         "scope_hash": scope_hash,
-        "owner_hash": sha("owner-v1", owner_key),
+        "owner_hash": owner_identity_hash(claims["owner_issuer"], claims["owner_subject"]),
         "claim_hash": sha("claim-v1", claims["claim_id"]),
         "jti_hash": sha("jti-v1", claims["jti"]),
         "model_hash": sha("model-v1", requested_model),

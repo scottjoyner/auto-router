@@ -196,6 +196,52 @@ def test_request_bound_to_original_owner_across_distinct_accounts(fixture):
             account="different-tenant")
 
 
+def test_embedded_delimiter_cannot_alias_distinct_signed_owners(fixture):
+    issuer, resource, claims, base_witness, _ = fixture
+    # Both distinct identity pairs produced the same string under the old
+    # '\\x00'-joined owner-v1 hashing implementation.
+    left = ("idp\\x00alice", "bob")
+    right = ("idp", "alice\\x00bob")
+    assert left[0] + "\\x00" + left[1] == right[0] + "\\x00" + right[1]
+
+    outcomes = []
+    for idp, subject in (left, right):
+        signed = sign_jwt(issuer, {**claims,
+                                  "owner_issuer": idp, "owner_subject": subject})
+        witness = sign_witness(resource, {
+            **base_witness, "owner_issuer": idp, "owner_subject": subject,
+            "token_sha256": hashlib.sha256(signed.encode()).hexdigest(),
+        })
+        proposal = run(fixture, token=signed, witness=witness)
+        assert proposal["sql_executed"] is False
+        assert proposal["broker_admission_authorized"] is False
+        assert proposal["provider_execution_authorized"] is False
+        assert proposal["provider_calls"] == 0
+        outcomes.append(proposal)
+
+    assert outcomes[0]["owner_hash"] != outcomes[1]["owner_hash"]
+    # All other claim fields are held fixed except the separately signed
+    # owner identity and its token SHA binding.
+    assert outcomes[0]["scope_hash"] == outcomes[1]["scope_hash"]
+
+
+def test_delimiter_owner_requires_exact_independent_witness_match(fixture):
+    issuer, resource, claims, base_witness, _ = fixture
+    left = ("idp\\x00alice", "bob")
+    right = ("idp", "alice\\x00bob")
+    signed = sign_jwt(issuer, {**claims,
+                               "owner_issuer": left[0], "owner_subject": left[1]})
+    # This witness has the *same old separator-joined value* but a distinct
+    # signed owner assertion. It must not match.
+    witness = sign_witness(resource, {
+        **base_witness,
+        "owner_issuer": right[0], "owner_subject": right[1],
+        "token_sha256": hashlib.sha256(signed.encode()).hexdigest(),
+    })
+    with pytest.raises(ResearchDeny, match="resource witness disagrees"):
+        run(fixture, token=signed, witness=witness)
+
+
 def test_witness_cannot_add_unvetted_extension_fields(fixture):
     _, resource, _, signed_payload, _ = fixture
     payload={**signed_payload,"operator_override":True}
