@@ -136,7 +136,7 @@ async def test_strict_owner_fence_disallows_unowned_service_bypass():
         "identity":"assistx-internal","authenticated":True,
     }})
     state=SimpleNamespace(runtime_projection_manager=SimpleNamespace(current=_Projection()))
-    with pytest.raises(ExecutorClaimFenceError,match="unowned"):
+    with pytest.raises(ExecutorClaimFenceError,match="untrusted service identity"):
         await assert_executor_claim_current(req,state)
 
 

@@ -4,7 +4,8 @@ import email.utils
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -99,15 +100,16 @@ class OpenAICompatibleProvider:
         try:
             async with httpx.AsyncClient(timeout=min(self.timeout_seconds, 30.0)) as client:
                 response = await client.get(url, headers=self._headers())
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
+        except httpx.HTTPError:
+            # Transport exceptions may echo query parameters or credential data.
+            # Preserve the failure category, never upstream exception text.
+            raise ProviderError(f"provider {self.name} model discovery failed") from None
         if response.status_code >= 400:
             raise ProviderError(
-                f"provider {self.name} model discovery returned HTTP {response.status_code}: {response.text[:500]}",
+                f"provider {self.name} model discovery returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=response.status_code in {408, 409, 425, 429, 500, 502, 503, 504},
                 retry_after_seconds=parse_retry_after(response.headers),
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else None
@@ -157,16 +159,15 @@ class OpenAICompatibleProvider:
         try:
             async with self._client() as client:
                 response = await client.post(url, headers=self._headers(), json=payload)
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
+        except httpx.HTTPError:
+            raise ProviderError(f"provider {self.name} request failed") from None
         if response.status_code >= 400:
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"provider {self.name} returned HTTP {response.status_code}: {response.text[:500]}",
+                f"provider {self.name} returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
                 retry_after_seconds=parse_retry_after(response.headers),
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         data = response.json()
         usage = _normalize_usage(data.get("usage") if isinstance(data, dict) else None)
@@ -180,29 +181,45 @@ class OpenAICompatibleProvider:
         stream_cm = client.stream("POST", url, headers=self._headers(), json=payload)
         try:
             response = await stream_cm.__aenter__()
-        except Exception as exc:
+        except Exception:
             await client.aclose()
-            raise ProviderError(f"provider {self.name} request failed: {exc}") from exc
+            raise ProviderError(f"provider {self.name} request failed") from None
         if response.status_code >= 400:
-            body = await response.aread()
-            await stream_cm.__aexit__(None, None, None)
-            await client.aclose()
+            # The upstream error body and arbitrary headers are untrusted and
+            # can echo prompts, secrets or credential material. Do not buffer
+            # or forward them into ProviderError / trace storage.
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            finally:
+                await client.aclose()
             retryable = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"provider {self.name} returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}",
+                f"provider {self.name} returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
                 retry_after_seconds=parse_retry_after(response.headers),
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
 
         async def body_stream() -> AsyncIterator[bytes]:
+            # A client can close this generator mid-stream on revocation.
+            # Explicitly close the nested raw iterator before the HTTP
+            # context; nested finally blocks preserve client cleanup when
+            # either inner close fails. This does NOT prove remote inference
+            # stopped; it only bounds cleanup of this client connection.
+            raw_iterator = response.aiter_raw()
             try:
-                async for chunk in response.aiter_raw():
+                async for chunk in raw_iterator:
                     yield chunk
             finally:
-                await stream_cm.__aexit__(None, None, None)
-                await client.aclose()
+                try:
+                    close_iterator = getattr(raw_iterator, "aclose", None)
+                    if callable(close_iterator):
+                        await close_iterator()
+                finally:
+                    try:
+                        await stream_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
 
         headers = {key.lower(): value for key, value in response.headers.items()}
         return ProviderStreamResponse(provider=self.name, model=provider_model, status_code=response.status_code, headers=headers, body=body_stream())
@@ -318,8 +335,10 @@ class LMStudioProvider(OpenAICompatibleProvider):
         try:
             async with httpx.AsyncClient(timeout=min(self.timeout_seconds, 30.0)) as client:
                 response = await client.get(f"{native_root}/api/v1/models", headers=self._headers())
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"provider {self.name} model discovery failed: {exc}") from exc
+        except httpx.HTTPError:
+            # Transport exceptions may echo query parameters or credential data.
+            # Preserve the failure category, never upstream exception text.
+            raise ProviderError(f"provider {self.name} model discovery failed") from None
         if response.status_code >= 400:
             # A bare llama-server exposes no LM Studio native API (404). The
             # OpenAI-compatible listing still names the model being served, but it
@@ -475,7 +494,6 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         from auto_router.gateway import (
             build_gateway_headers,
             attach_gateway_metadata,
-            strip_gateway_metadata,
             generate_request_id,
         )
         
@@ -537,19 +555,18 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         try:
             async with httpx.AsyncClient(timeout=gateway_config.timeout_seconds) as client:
                 response = await client.post(url, headers=headers, json=payload)
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             raise ProviderError(
-                f"agentgateway request failed: {exc}",
+                "agentgateway request failed",
                 retryable=True,
-            ) from exc
+            ) from None
         
         if response.status_code >= 400:
             retryable = response.status_code in {408, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"agentgateway returned HTTP {response.status_code}: {response.text[:500]}",
+                f"agentgateway returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         
         data = response.json()
@@ -635,29 +652,44 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         
         try:
             response = await stream_cm.__aenter__()
-        except Exception as exc:
+        except Exception:
             await client.aclose()
-            raise ProviderError(f"agentgateway streaming request failed: {exc}") from exc
+            raise ProviderError("agentgateway streaming request failed") from None
         
         if response.status_code >= 400:
-            body = await response.aread()
-            await stream_cm.__aexit__(None, None, None)
-            await client.aclose()
+            # A streaming error can contain arbitrarily large untrusted content.
+            # Close transport without reading/copying the body to traces.
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            finally:
+                await client.aclose()
             retryable = response.status_code in {408, 429, 500, 502, 503, 504}
             raise ProviderError(
-                f"agentgateway returned HTTP {response.status_code}: {body.decode('utf-8', errors='replace')[:500]}",
+                f"agentgateway returned HTTP {response.status_code}",
                 status_code=response.status_code,
                 retryable=retryable,
-                headers={key.lower(): value for key, value in response.headers.items()},
             )
         
         async def body_stream() -> AsyncIterator[bytes]:
+            # A client can close this generator mid-stream on revocation.
+            # Explicitly close the nested raw iterator before the HTTP
+            # context; nested finally blocks preserve client cleanup when
+            # either inner close fails. This does NOT prove remote inference
+            # stopped; it only bounds cleanup of this client connection.
+            raw_iterator = response.aiter_raw()
             try:
-                async for chunk in response.aiter_raw():
+                async for chunk in raw_iterator:
                     yield chunk
             finally:
-                await stream_cm.__aexit__(None, None, None)
-                await client.aclose()
+                try:
+                    close_iterator = getattr(raw_iterator, "aclose", None)
+                    if callable(close_iterator):
+                        await close_iterator()
+                finally:
+                    try:
+                        await stream_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
         
         headers_dict = {key.lower(): value for key, value in response.headers.items()}
         return ProviderStreamResponse(
