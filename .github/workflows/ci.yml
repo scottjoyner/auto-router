@@ -98,6 +98,13 @@ jobs:
 
   integration-smoke:
     runs-on: ubuntu-latest
+    # Sigstore OIDC is used only by the guarded internal PR archive-attestation step.
+    # It never grants registry push, live deployment, or owner approval.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     # Job-level, not step-level: the teardown step runs `if: always()` and compose
     # interpolates on `down` exactly as it does on `up`, so a step-scoped value
     # left teardown failing on a missing variable after the build had passed.
@@ -321,6 +328,23 @@ jobs:
           finally:
               target.unlink(missing_ok=True)
           PY
+      # Authentication of CI-built archive bytes via GitHub OIDC + Sigstore.
+      # This is NOT independently governed production signer approval,
+      # not a reproducible-build proof, and not release/promotion authority.
+      - name: Attest exact verified Router OCI archive (CI-only, unpromoted)
+        id: attest_router
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest@v4
+        with:
+          subject-path: /tmp/router-ci-image-handoff/tested-router-image.tar.gz
+      - name: Upload public Sigstore CI provenance bundle (not release approval)
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-ci-sigstore-bundle-${{ github.sha }}
+          path: ${{ steps.attest_router.outputs['bundle-path'] }}
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload tested Router image and receipt (not a production deployment)
         if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023'
         uses: actions/upload-artifact@v4
