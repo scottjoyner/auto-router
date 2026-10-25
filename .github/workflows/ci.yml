@@ -337,6 +337,29 @@ jobs:
         uses: actions/attest@v4
         with:
           subject-path: /tmp/router-ci-image-handoff/tested-router-image.tar.gz
+      # GitHub CLI performs Sigstore trust-root, certificate and transparency
+      # validation independently from the action that generated the bundle.
+      # This remains a *CI build* receipt, not separate release authorization.
+      - name: Verify Sigstore archive attestation against trusted roots
+        if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          for attempt in 1 2 3; do
+            if gh attestation verify /tmp/router-ci-image-handoff/tested-router-image.tar.gz \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-digest "$GITHUB_SHA" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+              --source-ref "refs/pull/${{ github.event.pull_request.number }}/merge" \
+              >/dev/null 2>&1; then
+              echo 'SIGSTORE_TRUSTED_ROOT_CI_ARCHIVE_VERIFY_PASS_NOT_RELEASE_AUTHORITY'
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 3; fi
+          done
+          echo 'SIGSTORE_TRUSTED_ROOT_CI_ARCHIVE_VERIFY_HOLD'
+          exit 2
       - name: Upload public Sigstore CI provenance bundle (not release approval)
         if: github.event_name == 'pull_request' && github.head_ref == 'security/inherited-admin-exact-head-regression-20261023' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v4
