@@ -203,3 +203,71 @@ def test_stream_http_error_closes_without_reading_upstream_body(route, monkeypat
     assert SECRET not in str(caught.value)
     assert "read" not in reads
     assert "closed" in reads
+
+
+@pytest.mark.parametrize("route", [
+    "discovery", "chat", "stream", "lmstudio_native_discovery",
+    "gateway_chat", "gateway_stream",
+])
+def test_transport_exception_text_and_traceback_never_leak(route, monkeypatch):
+    """Six real transport catch sites reject hostile exception messages.
+
+    Uses only httpx.MockTransport; no live inference/network or secrets.
+    """
+    import traceback
+
+    def explode(request):
+        raise httpx.ConnectError(
+            "failed to connect to synthetic URL ?token=" + SECRET,
+            request=request,
+        )
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        MOD["providers"].httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: original(
+            *args, transport=httpx.MockTransport(explode), **kwargs
+        ),
+    )
+    if route.startswith("gateway"):
+        provider = _gateway()
+    elif route == "lmstudio_native_discovery":
+        provider = MOD["providers"].LMStudioProvider(
+            ProviderConfig(
+                name="local-native-fixture", type="lmstudio",
+                base_url="http://synthetic.invalid/v1", enabled=True,
+            )
+        )
+    else:
+        provider = _provider()
+
+    async def do_call():
+        if route in {"discovery", "lmstudio_native_discovery"}:
+            await provider.list_models()
+        elif route in {"chat", "gateway_chat"}:
+            if route == "gateway_chat":
+                await provider.chat_completions(
+                    _request(), "fake-model", gateway_config=_gateway_options()
+                )
+            else:
+                await provider.chat_completions(_request(), "fake-model")
+        elif route == "gateway_stream":
+            await provider.stream_chat_completions(
+                _request(), "fake-model", gateway_config=_gateway_options()
+            )
+        else:
+            await provider.stream_chat_completions(_request(), "fake-model")
+
+    with patch.dict(sys.modules, {"auto_router.gateway": MOD["gateway"]}):
+        with pytest.raises(ProviderError) as caught:
+            asyncio.run(do_call())
+    exc = caught.value
+    rendered = "".join(traceback.format_exception(exc))
+    assert SECRET not in str(exc)
+    assert SECRET not in repr(exc)
+    assert SECRET not in rendered
+    assert "failed" in str(exc)
+    assert exc.status_code is None
+    assert exc.headers == {}
+    assert exc.__suppress_context__ is True
