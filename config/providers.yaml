@@ -9,6 +9,10 @@ providers:
     node_id: xwing
     enabled: true
     base_url: ${LMSTUDIO_XWING_BASE_URL:-http://xwing.tailcb8954.ts.net:1234/v1}
+    # Optional owner-only credential path for a future coordinated native-auth cutover.
+    # Blank by default: preserves current behavior until operator provisions a token.
+    # When set, missing/unsafe file fails closed (no anonymous fallback).
+    api_key_file: ${LMSTUDIO_XWING_API_KEY_FILE:-}
     priority: 90
     quota_class: local
     models:
