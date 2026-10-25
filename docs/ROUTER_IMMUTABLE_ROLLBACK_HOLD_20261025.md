@@ -47,6 +47,45 @@ metadata comparison cannot confer release approval. A missing candidate image
 on x1 is recorded as an explicit precondition failure; do not silently
 substitute an Xwing-cached image or any old CI image.
 
+## Operator-scoped post-cutover readback (separate acceptance, never deployment)
+
+`scripts/verify_postcutover_router_auth_readonly.py` is an opt-in **GET-only
+post-cutover acceptance** tool, not a deployment script, rollback command, or
+authorization to turn on providers. It requires the full immutable candidate image
+ID, rejects the known old vulnerable image, confirms the new image is *already
+running*, and refuses all network and Docker-exec probes without the explicit
+`--authorize-readonly-check` flag. Without authorization or on the current old
+production image it exits **2/HOLD** without contacting the Tailnet or clients.
+
+After a separately approved and completed cutover, the operator may supply the
+full newly verified candidate image and explicitly authorize only the bounded
+readback. The checker performs:
+
+- Via strictly host-key-checked SSH to **Xwing**, direct HTTP GET status-only
+  reads of **four deliberately passive** administrative endpoints over the
+  x1 Tailnet address. Each must return 401 with no credentials. The more
+  active `/admin/providers/health` endpoint is deliberately *excluded*: it could
+  cause downstream provider health probes if authentication were broken.
+  Complete 20-operation protection has a **separate** disposable CI gate.
+- Two public GET status checks (`/health` and `/v1/models`) must return 200.
+  No HTTP bodies are read or returned.
+- From inside each running, allowlisted AssistX API, Worker and Hermes container,
+  three authorized GET status checks with its **own in-memory** admin token must
+  return 200 (`/admin/providers`, `/admin/context`, `/admin/admission`).
+  The token is never passed through host shell arguments or printed.
+- Image identity is read back repeatedly between remote and client requests
+  so an unobserved mid-check Router replacement causes HOLD. This is not
+  atomic fencing and cannot substitute for operator coordination.
+
+The script only accepts a pinned image with `sha256:` and 64 hex digits; it
+**does not independently verify an image signature** or authorize the initial
+deployment. Its strongest success verdict is
+`READONLY_POSTCUTOVER_AUTH_CHECKS_PASS_RELEASE_HOLD`; production authorization,
+rollback proof, trace custody, safe failover, and provider effects stay **false**.
+Review and approve any production use separately. Never use the old image as
+a newly approved candidate. The readback contains only sanitized boolean
+verdicts and blocker codes.
+
 ## Requirements before considering a production cutover
 
 1. **Independent custody of the old release.** An authorized operator must
