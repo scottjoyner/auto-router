@@ -17,6 +17,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 CANARY = ROOT / "scripts" / "verify_admin_canary_ci.py"
 SURFACE_CANARY = ROOT / "scripts" / "verify_admin_surface_exhaustive.py"
+CLIENT_CANARY = ROOT / "scripts" / "verify_router_legacy_client_ci.py"
 
 class EvidenceDenied(RuntimeError):
     pass
@@ -92,6 +93,35 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
         or surface.get("production_tested") is not False
         or surface.get("production_modified") is not False):
         raise EvidenceDenied("incomplete all-admin operation coverage")
+    # Require the legacy-client contract on the SAME disposable image.
+    # No real provider calls or authenticated mutations are permitted.
+    client_run=subprocess.run(["python3",str(CLIENT_CANARY)],cwd=ROOT,env=e,
+                              capture_output=True,text=True,timeout=45)
+    if client_run.returncode!=0:
+        raise EvidenceDenied("disposable legacy-client parity canary failed")
+    try:
+        client=json.loads(client_run.stdout.strip())
+    except (ValueError,TypeError) as exc:
+        raise EvidenceDenied("missing machine-readable legacy-client parity") from exc
+    if (client.get("verdict")!="DISPOSABLE_LEGACY_CLIENT_READ_PARITY_PASS"
+        or type(client.get("public_discovery_reads")) is not int
+        or client["public_discovery_reads"]!=2
+        or type(client.get("admin_missing_wrong_denials")) is not int
+        or client["admin_missing_wrong_denials"]!=8
+        or type(client.get("authorized_legacy_admin_reads")) is not int
+        or client["authorized_legacy_admin_reads"]!=4
+        or type(client.get("alternate_authorization_reads")) is not int
+        or client["alternate_authorization_reads"]!=2
+        or client.get("legacy_catalog_shape_verified") is not True
+        or client.get("sanitized_effective_providers") is not True
+        or type(client.get("model_requests")) is not int
+        or client["model_requests"]!=0
+        or type(client.get("authenticated_admin_mutations")) is not int
+        or client["authenticated_admin_mutations"]!=0
+        or client.get("production_tested") is not False
+        or client.get("production_modified") is not False
+        or client.get("cross_repo_real_clients_executed") is not False):
+        raise EvidenceDenied("legacy client parity incomplete or overstated")
     return {
         "schema":1,"status":"DISPOSABLE_CI_ADMIN_AUTH_EVIDENCE",
         "generated_utc":datetime.now(timezone.utc).isoformat(),
@@ -106,6 +136,7 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
                 "src/auto_router/secure_live.py",
                 "scripts/verify_admin_canary_ci.py",
                 "scripts/verify_admin_surface_exhaustive.py",
+                "scripts/verify_router_legacy_client_ci.py",
             )
         },
         "canary_result":canary["result"],
@@ -116,6 +147,14 @@ def build_evidence(env: dict[str, str] | None = None) -> dict:
         "all_admin_post_count":surface["post_operations"],
         "all_admin_missing_and_wrong_tokens_denied":True,
         "authenticated_admin_post_attempts":0,
+        "legacy_client_verdict":client["verdict"],
+        "public_client_discovery_reads":client["public_discovery_reads"],
+        "legacy_admin_denial_checks":client["admin_missing_wrong_denials"],
+        "legacy_authorized_admin_reads":client["authorized_legacy_admin_reads"],
+        "legacy_alt_auth_reads":client["alternate_authorization_reads"],
+        "legacy_catalog_shape_verified":True,
+        "synthetic_client_only":True,
+        "real_provider_requests":0,
         "missing_and_wrong_token_rejected":True,
         "public_client_reads_preserved":True,
         "synthetic_operator_auth_accepted":True,
