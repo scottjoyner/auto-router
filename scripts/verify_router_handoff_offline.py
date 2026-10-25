@@ -81,6 +81,19 @@ def verify(path: Path, expected_image: str, expected_source: str,
             type(receipt.get("authenticated_admin_post_attempts")) is not int or
             receipt["authenticated_admin_post_attempts"] != 0 or
             receipt.get("all_admin_surface_verdict") != "DISPOSABLE_ALL_ADMIN_AUTH_NEGATIVES_PASS" or
+            receipt.get("legacy_client_verdict") != "DISPOSABLE_LEGACY_CLIENT_READ_PARITY_PASS" or
+            type(receipt.get("public_client_discovery_reads")) is not int or
+            receipt["public_client_discovery_reads"] != 2 or
+            type(receipt.get("legacy_admin_denial_checks")) is not int or
+            receipt["legacy_admin_denial_checks"] != 8 or
+            type(receipt.get("legacy_authorized_admin_reads")) is not int or
+            receipt["legacy_authorized_admin_reads"] != 4 or
+            type(receipt.get("legacy_alt_auth_reads")) is not int or
+            receipt["legacy_alt_auth_reads"] != 2 or
+            receipt.get("legacy_catalog_shape_verified") is not True or
+            receipt.get("synthetic_client_only") is not True or
+            type(receipt.get("real_provider_requests")) is not int or
+            receipt["real_provider_requests"] != 0 or
             receipt.get("public_client_reads_preserved") is not True or
             receipt.get("sanitized_provider_response") is not True or
             receipt.get("canary_result") != "DISPOSABLE_FULL_ASGI_ADMIN_AUTH_PASS" or

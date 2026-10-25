@@ -261,6 +261,11 @@ jobs:
           AUTO_ROUTER_CANARY_ENV: disposable-github-ci
           AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN: smoke-admin-token
         run: python3 scripts/verify_admin_surface_exhaustive.py
+      - name: Verify disposable legacy Router admin and discovery client parity
+        env:
+          AUTO_ROUTER_CANARY_ENV: disposable-github-ci
+          AUTO_ROUTER_CANARY_SYNTHETIC_ADMIN_TOKEN: smoke-admin-token
+        run: python3 scripts/verify_router_legacy_client_ci.py
       - name: Verify disposable full-ASGI admin auth and sanitized provider snapshot
         env:
           AUTO_ROUTER_CANARY_ENV: disposable-github-ci

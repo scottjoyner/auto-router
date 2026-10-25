@@ -48,6 +48,19 @@ def check_identity(env: dict[str, str], receipt: dict, image: str) -> None:
         or receipt.get("all_admin_missing_and_wrong_tokens_denied") is not True
         or type(receipt.get("authenticated_admin_post_attempts")) is not int
         or receipt["authenticated_admin_post_attempts"] != 0
+        or receipt.get("legacy_client_verdict") != "DISPOSABLE_LEGACY_CLIENT_READ_PARITY_PASS"
+        or type(receipt.get("public_client_discovery_reads")) is not int
+        or receipt["public_client_discovery_reads"] != 2
+        or type(receipt.get("legacy_admin_denial_checks")) is not int
+        or receipt["legacy_admin_denial_checks"] != 8
+        or type(receipt.get("legacy_authorized_admin_reads")) is not int
+        or receipt["legacy_authorized_admin_reads"] != 4
+        or type(receipt.get("legacy_alt_auth_reads")) is not int
+        or receipt["legacy_alt_auth_reads"] != 2
+        or receipt.get("legacy_catalog_shape_verified") is not True
+        or receipt.get("synthetic_client_only") is not True
+        or type(receipt.get("real_provider_requests")) is not int
+        or receipt["real_provider_requests"] != 0
         or receipt.get("missing_and_wrong_token_rejected") is not True
         or receipt.get("public_client_reads_preserved") is not True
         or receipt.get("sanitized_provider_response") is not True):
@@ -143,6 +156,14 @@ def main():
         "tested_admin_post_operations":receipt["all_admin_post_count"],
         "authenticated_admin_post_attempts":0,
         "all_admin_surface_verdict":receipt["all_admin_surface_verdict"],
+        "legacy_client_verdict":receipt["legacy_client_verdict"],
+        "public_client_discovery_reads":receipt["public_client_discovery_reads"],
+        "legacy_admin_denial_checks":receipt["legacy_admin_denial_checks"],
+        "legacy_authorized_admin_reads":receipt["legacy_authorized_admin_reads"],
+        "legacy_alt_auth_reads":receipt["legacy_alt_auth_reads"],
+        "legacy_catalog_shape_verified":True,
+        "synthetic_client_only":True,
+        "real_provider_requests":0,
         "public_client_reads_preserved":True,
         "sanitized_provider_response":True,
         "archive_name":archive.name,
