@@ -126,7 +126,13 @@ class TestReadOnlyOutboxFreshness(unittest.TestCase):
         new = old.with_name(old.name+"-other")
         old.rename(new)
         old.symlink_to(new, target_is_directory=True)
-        self.assert_hold("database_symlink_component")
+        try:
+            self.assert_hold("database_symlink_component")
+        finally:
+            # Restore the original real directory before TemporaryDirectory
+            # tries to recursively remove it. Never leave a scratch symlink.
+            old.unlink()
+            new.rename(old)
 
     def test_directory_not_a_database_is_hold(self):
         self.path.unlink()
