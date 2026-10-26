@@ -62,11 +62,16 @@ full newly verified candidate image and explicitly authorize only the bounded
 readback. The checker performs:
 
 - Via strictly host-key-checked SSH to **Xwing**, direct HTTP GET status-only
-  reads of **four deliberately passive** administrative endpoints over the
-  x1 Tailnet address. Each must return 401 with no credentials. The more
-  active `/admin/providers/health` endpoint is deliberately *excluded*: it could
-  cause downstream provider health probes if authentication were broken.
-  Complete 20-operation protection has a **separate** disposable CI gate.
+  reads of **12 fixed passive** administrative endpoints over the
+  x1 Tailnet address. All 12 must return 401 with no credentials. The remote
+  route list and the checked receipt count are tied together by a separate
+  fail-closed unit test. The potentially active `/admin/providers/health`
+  and `/admin/ops/preflight` endpoints and expanded
+  `/admin/context/graph` backend view are deliberately *excluded* from
+  this minimal-risk physical probe; current old Router exposes some excluded
+  routes anonymously too, so these exclusions are **not release waivers**.
+  Complete 20-operation protection has a **separate** disposable CI gate,
+  and a separately reviewed comprehensive live acceptance remains necessary.
 - Two public GET status checks (`/health` and `/v1/models`) must return 200.
   No HTTP bodies are read or returned.
 - From inside each running, allowlisted AssistX API, Worker and Hermes container,
