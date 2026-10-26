@@ -21,8 +21,15 @@ CLIENTS = ("assistx-api", "assistx-worker", "assistx-hermes-adapter")
 # These known passive GET routes are safe to probe without a token, even if
 # authentication is accidentally missing. Do NOT call providers/health here:
 # it may trigger downstream provider probes before an auth bypass is detected.
-ADMIN_READS = ("/admin/providers", "/admin/circuits",
-               "/admin/usage", "/admin/context")
+# Bounded passive admin reads only. Deliberately exclude provider-health,
+# ops-preflight and graph-expanded views: these may trigger downstream probes
+# or expensive backend reads when legacy authentication is broken.
+ADMIN_READS = (
+    "/admin/providers", "/admin/circuits", "/admin/usage", "/admin/context",
+    "/admin/placement", "/admin/agent-workers", "/admin/agent-jobs",
+    "/admin/quota", "/admin/admission", "/admin/runtime-projection",
+    "/admin/ops/summary", "/admin/memory",
+)
 PUBLIC_READS = ("/health", "/v1/models")
 
 # Source delivered over trusted SSH stdin. It uses Python's no-proxy opener,
@@ -33,7 +40,10 @@ ip=ipaddress.ip_address(sys.argv[1])
 if ip.version!=4 or ip not in ipaddress.ip_network("100.64.0.0/10"):
     raise SystemExit(2)
 # Candidate safety check: only passive, side-effect-free administrative GETs.
-paths=("/admin/providers","/admin/circuits","/admin/usage","/admin/context")
+paths=("/admin/providers","/admin/circuits","/admin/usage","/admin/context",
+       "/admin/placement","/admin/agent-workers","/admin/agent-jobs",
+       "/admin/quota","/admin/admission","/admin/runtime-projection",
+       "/admin/ops/summary","/admin/memory")
 public=("/health","/v1/models")
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
