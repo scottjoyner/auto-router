@@ -13,7 +13,7 @@ CANDIDATE = "sha256:" + "a" * 64
 def synthetic_remote():
     return {
         "direct_tailnet_admin_denied": True, "public_gets_ok": True,
-        "admin_get_count": 4, "public_get_count": 2,
+        "admin_get_count": len(m.ADMIN_READS), "public_get_count": 2,
         "body_read": False, "credentials_sent": False, "provider_calls_requested": 0,
     }
 
@@ -141,6 +141,27 @@ def test_bad_client_report_denied(tamper):
 def test_unparseable_or_failed_report_denied(raw,rc):
     with pytest.raises(m.PostCutoverDenied):
         m.checked_result(raw,rc,synthetic_remote())
+
+
+def test_exact_passive_tailnet_route_inventory_is_fixed_and_safe():
+    import ast
+
+    code = ast.parse(m.REMOTE_CHECK)
+    route_assignment = next(
+        node for node in code.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "paths"
+                for target in node.targets)
+    )
+    assert tuple(ast.literal_eval(route_assignment.value)) == m.ADMIN_READS
+    assert len(m.ADMIN_READS) == 12
+    assert len(set(m.ADMIN_READS)) == 12
+    assert all(route.startswith("/admin/") for route in m.ADMIN_READS)
+    assert "/admin/providers/health" not in m.ADMIN_READS
+    assert "/admin/ops/preflight" not in m.ADMIN_READS
+    assert "/admin/context/graph" not in m.ADMIN_READS
+    assert "POST" not in m.REMOTE_CHECK
+    assert "read(" not in m.REMOTE_CHECK
 
 
 def test_remote_probe_uses_known_host_and_fixed_source(monkeypatch):
