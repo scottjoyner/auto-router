@@ -400,6 +400,7 @@ async def test_spoofed_metadata_digest_is_overwritten_from_signed_token(signing_
         _token(signing_key),
         {
             "model": "auto/code",
+            "max_tokens": 64,
             "messages": [{"role": "user", "content": "synthetic"}],
             "metadata": {
                 "assistx_executor": {
