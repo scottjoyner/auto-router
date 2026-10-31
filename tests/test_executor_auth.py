@@ -29,6 +29,9 @@ def _token(private: Ed25519PrivateKey, **overrides) -> str:
         "task_id": "task-1",
         "claim_id": "claim-1",
         "agent_id": "hermes-test",
+        "agent_session_id": "session-1",
+        "execution_attempt": 3,
+        "task_payload_digest": "sha256:" + "a" * 64,
         "projection_generation": 4,
         "scopes": ["inference"],
         "allowed_model_aliases": ["auto/code"],
@@ -145,6 +148,9 @@ async def test_inference_token_injects_nonsecret_execution_lineage(signing_key):
     lineage = captured["metadata"]["assistx_executor"]
     assert lineage["task_id"] == "task-1"
     assert lineage["claim_id"] == "claim-1"
+    assert lineage["agent_session_id"] == "session-1"
+    assert lineage["execution_attempt"] == 3
+    assert lineage["task_payload_digest"] == "sha256:" + "a" * 64
     assert lineage["projection_generation"] == 4
     assert lineage["attempt"] == 1
 
@@ -360,3 +366,51 @@ async def test_strict_owner_wrong_principal_still_denied_before_global_hold(
     )
     assert sent[0]["status"] == 401
     assert not forwarded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutate", [
+    {"task_payload_digest": None},
+    {"task_payload_digest": "sha256:" + "A" * 64},
+    {"task_payload_digest": "sha256:" + "f" * 63},
+    {"agent_session_id": ""},
+    {"agent_session_id": None},
+    {"execution_attempt": None},
+    {"execution_attempt": 0},
+    {"execution_attempt": True},
+    {"execution_attempt": "3"},
+    {"projection_generation": True},
+])
+async def test_signed_token_missing_revision_digest_is_denied_before_downstream(
+    signing_key, mutate,
+):
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key, **mutate),
+        {"model": "auto/code", "messages": [{"role": "user", "content": "synthetic"}]},
+    )
+    assert sent[0]["status"] == 401
+    assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_spoofed_metadata_digest_is_overwritten_from_signed_token(signing_key):
+    sent, forwarded = await _invoke(
+        ExecutorInferenceAuthMiddleware,
+        _token(signing_key),
+        {
+            "model": "auto/code",
+            "messages": [{"role": "user", "content": "synthetic"}],
+            "metadata": {
+                "assistx_executor": {
+                    "task_payload_digest": "sha256:" + "0" * 64,
+                    "execution_attempt": 999,
+                },
+            },
+        },
+    )
+    assert sent[0]["status"] == 204
+    assert forwarded["metadata"]["assistx_executor"]["task_payload_digest"] == (
+        "sha256:" + "a" * 64
+    )
+    assert forwarded["metadata"]["assistx_executor"]["execution_attempt"] == 3
