@@ -16,7 +16,7 @@ class ExecutorClaimFenceError(RuntimeError):
     pass
 
 
-def _executor_metadata(request: Any) -> dict[str, Any] | None:
+def _executor_metadata(request: Any) -> dict[str, Any]:
     metadata = request.metadata if isinstance(getattr(request, "metadata", None), dict) else {}
     # Caller-controlled model request metadata is not a trusted service
     # identity. Do not interpret an "authenticated" boolean as a lease fence:
@@ -60,6 +60,9 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
         or re.fullmatch(r"sha256:[a-f0-9]{64}", digest) is None
     ):
         raise ExecutorClaimFenceError("executor claim revision or digest is incomplete")
+    # Also give type-checkers the post-validation evidence; do not coerce an
+    # invalid task ID to a string and accidentally admit it.
+    assert isinstance(task_id, str)
 
     base_url = os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL", "").strip().rstrip("/")
     service_token = os.getenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", "").strip()
