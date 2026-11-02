@@ -56,7 +56,9 @@ def test_runtime_sample_never_promotes_quota_estimate(
     status, usage, error, expected_counts, expected_rate
 ):
     request = RouterRequest(request_id="req", route="chat_completions", model="auto/test")
-    estimate = SimpleNamespace(input_tokens=700, total_tokens=900, dimensions={"estimated_tpm": 900})
+    estimate = SimpleNamespace(
+        input_tokens=700, total_tokens=900, dimensions={"estimated_tpm": 900}
+    )
     sample = _build_runtime_sample(
         request, "local", "model", "final", estimate,
         status, 1000, usage, error, None, 1_000, 2_000
