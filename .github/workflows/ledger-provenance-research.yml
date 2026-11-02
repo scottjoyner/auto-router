@@ -21,9 +21,11 @@ jobs:
       - name: Install Python test dependencies
         run: python -m pip install -e '.[dev]'
       - name: Compile changed source
-        run: python -m py_compile src/auto_router/ledger.py src/auto_router/main.py
+        run: |
+          python -m py_compile src/auto_router/ledger.py src/auto_router/main.py             scripts/audit-ledger-provenance-rollback.py
       - name: Strict lint new migration tests
-        run: ruff check tests/test_ledger_usage_provenance.py
+        run: |
+          ruff check tests/test_ledger_usage_provenance.py             tests/test_ledger_rollback_audit.py             scripts/audit-ledger-provenance-rollback.py
       - name: Existing migration and integration compatibility lint
         run: |
           ruff check --ignore I001,E501,UP012,UP018,E402,F401,UP031 \
@@ -34,6 +36,7 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_ledger_usage_provenance.py \
+            tests/test_ledger_rollback_audit.py \
             tests/test_ledger.py \
             tests/test_provider_usage_accounting.py \
             tests/test_runtime_telemetry.py \
