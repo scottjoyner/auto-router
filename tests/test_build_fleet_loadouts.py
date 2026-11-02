@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from scripts import build_fleet_loadouts as builder
 from scripts.build_fleet_loadouts import Candidate, LoadoutPlan, NodeInfo, build_report, plan_loadout
 
 
@@ -79,3 +82,31 @@ def test_build_report_returns_one_loadout_per_profile() -> None:
     assert report["loadouts"]
     assert len(plans) == 2
     assert {item["task_profile_id"] for item in report["loadouts"]} == {"summary_extraction", "planning_strategy"}
+
+
+def test_multilane_discovery_does_not_overwrite_same_physical_graph_identity() -> None:
+    # A user can inspect many lanes of one machine, but a graph state keyed by
+    # that machine cannot safely store duplicate node rows without reconciliation.
+    node_rows = [
+        {"name": "xwing", "provider_name": "xwing-main", "online": True,
+         "inventory_authoritative": True, "loaded_models": ["model-a"]},
+        {"name": "xwing", "provider_name": "xwing-bonsai", "online": True,
+         "inventory_authoritative": True, "loaded_models": ["model-b"]},
+    ]
+    with pytest.raises(builder.UnsafeFleetSnapshotError, match="duplicate physical node identities: xwing"):
+        builder._validate_snapshot_for_persistence(
+            node_rows, builder._authoritative_model_rows(node_rows), [],
+            allow_empty_snapshot=True,
+        )
+
+    class NeverTouchDriver:
+        def execute_query(self, *args, **kwargs):
+            raise AssertionError("graph write/setup was reached before collision rejection")
+        def session(self, *args, **kwargs):
+            raise AssertionError("database session was reached before collision rejection")
+
+    with pytest.raises(builder.UnsafeFleetSnapshotError, match="lane-aware graph reconciliation"):
+        builder.persist_to_neo4j(
+            NeverTouchDriver(), {"nodes": node_rows}, [], [],
+            allow_empty_snapshot=True, allow_degraded_snapshot=True,
+        )

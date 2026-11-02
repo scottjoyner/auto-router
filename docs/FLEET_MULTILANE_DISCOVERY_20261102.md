@@ -8,6 +8,8 @@
 
 Allow several named providers on one `node_id`, while retaining **unique provider names**, existing private-host endpoint validation, no URL-embedded credentials, and disabled-provider exclusion. CLI results remain one row per provider lane and keep the old `node_count` (lane-count) for backward compatibility, with explicit `physical_node_count`, `online_physical_nodes`, and `authoritative_physical_nodes` added. Source imports are pinned to the checkout rather than an unrelated editable package path.
 
+**Graph write interlock:** Existing `FleetNodeState` is keyed by physical `node_name` rather than serving-lane ID. A multi-lane probe must be diagnostic-only for that writer: `build_fleet_loadouts.persist_to_neo4j` now rejects duplicate physical node rows **before any database access**, even with `--allow-empty-snapshot` or `--allow-degraded-snapshot`. A distinct, reviewed lane-aware model/endpoint reconciliation is required before persisting these observations.
+
 `/v1/models` visibility is *catalog only*, not signed residency or permission to dispatch. A 401 on a protected model lane is not proof the model is offline. This code never edits the live provider registry, admits models, loads runtimes, or runs tasks.
 
 ## Live read-only validation
