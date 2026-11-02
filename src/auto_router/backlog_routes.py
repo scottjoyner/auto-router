@@ -53,6 +53,13 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
             "summary": backlog_summary(decisions),
             "decisions": [decision.to_dict() for decision in decisions],
             "outbox_summary": state.event_outbox.summary(),
+            # Planning and event delivery are not proof of model execution.
+            "execution": {
+                "mode": "selection_only",
+                "model_attempts_verified_by_router": 0,
+                "task_completions_verified_by_router": 0,
+                "status": "not_executed_by_this_endpoint",
+            },
         }
 
     @app.post("/admin/backlog/burn-down", dependencies=[Depends(require_admin)])
@@ -92,6 +99,15 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
             "decisions": [decision.to_dict() for decision in decisions],
             "outbox_summary": state.event_outbox.summary(),
             "dispatch": dispatch_result,
+            # This route dispatches *selection events*, not claimed AssistX
+            # tasks and not provider inference. The outbox's delivered count
+            # must never be presented as generated tokens or finished jobs.
+            "execution": {
+                "mode": "selection_event_dispatch_only",
+                "model_attempts_verified_by_router": 0,
+                "task_completions_verified_by_router": 0,
+                "status": "not_executed_by_this_endpoint",
+            },
         }
 
     @app.get("/admin/backlog/assistx/config", dependencies=[Depends(require_admin)])

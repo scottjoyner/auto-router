@@ -11,6 +11,7 @@ from auto_router.event_outbox import EventOutbox
 from auto_router.models import ModelConfig, PolicyProfile, PolicyStage, ProviderConfig, StagePurpose
 from auto_router.policy import PolicyEngine
 from auto_router.quota import InMemoryQuotaManager
+from auto_router.security import require_admin
 
 class _FakePolicyState:
     def __init__(self, event_outbox: EventOutbox) -> None:
@@ -95,3 +96,33 @@ def test_backlog_burn_down_uses_real_dispatch_path(monkeypatch, tmp_path) -> Non
     assert body["decisions"][0]["event_id"] is not None
     assert body["decisions"][0]["reason"] == "candidate available without reserving quota"
     assert body["dispatch"]["summary"]["delivered"] == 1
+    assert body["execution"] == {
+        "mode": "selection_event_dispatch_only",
+        "model_attempts_verified_by_router": 0,
+        "task_completions_verified_by_router": 0,
+        "status": "not_executed_by_this_endpoint",
+    }
+    # A delivered event is not a completed inference job.
+    assert body["execution"]["task_completions_verified_by_router"] != body["dispatch"]["summary"]["delivered"]
+
+
+def test_dry_run_reports_no_model_execution(tmp_path) -> None:
+    state = _FakePolicyState(EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}"))
+    app = FastAPI()
+    # Exercise a successful authorized response; do not relax the deployed guard.
+    app.dependency_overrides[require_admin] = lambda: None
+    register_backlog_routes(app, state)
+    client = TestClient(app)
+    response = client.post(
+        "/admin/backlog/dry-run",
+        json={"tasks": [{"task_id": "candidate-2", "title": "Summarize permitted corpus", "prompt": "Summarize."}]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["selected"] == 1
+    assert body["execution"] == {
+        "mode": "selection_only",
+        "model_attempts_verified_by_router": 0,
+        "task_completions_verified_by_router": 0,
+        "status": "not_executed_by_this_endpoint",
+    }
