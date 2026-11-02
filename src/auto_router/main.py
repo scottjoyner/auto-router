@@ -32,6 +32,7 @@ from auto_router.config import (
     _project_live_models,
 )
 from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
+from auto_router.usage_accounting import provider_reported_usage
 from auto_router.model_registry import ModelRegistryStore
 from auto_router.provider_circuit_diagnostics import annotate_health_with_open_model_circuits
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
@@ -1165,16 +1166,22 @@ def _build_runtime_sample(
     ended_at_ms = _coerce_ms(ended_at_ms)
     queue_wait_ms = _derive_queue_wait_ms(metadata, started_at_ms)
     load_time_ms = _derive_load_time_ms(metadata, gateway_metadata)
-    input_tokens = int(usage.get("prompt_tokens") or getattr(estimate, "input_tokens", 0) or 0)
-    output_tokens = int(usage.get("completion_tokens") or 0)
-    total_tokens = int(usage.get("total_tokens") or getattr(estimate, "total_tokens", 0) or 0)
+    # Quota estimates reserve budget; they do not prove an upstream generation.
+    input_tokens, output_tokens, total_tokens, reported = provider_reported_usage(usage)
     elapsed_ms = latency_ms if latency_ms is not None else None
     if elapsed_ms is None and started_at_ms is not None and ended_at_ms is not None:
         elapsed_ms = max(ended_at_ms - started_at_ms, 0)
     elapsed_seconds = max((elapsed_ms or 0) / 1000.0, 0.001)
-    tokens_per_second = round(total_tokens / elapsed_seconds, 3) if total_tokens else 0.0
-    value_units = output_tokens or total_tokens
-    value_per_second = round(value_units / elapsed_seconds, 3) if value_units else 0.0
+    # Decode throughput is never derived from quoted prompt or quota tokens.
+    completed = error is None and status_code is not None and 200 <= status_code < 300
+    tokens_per_second = (
+        round(output_tokens / elapsed_seconds, 3)
+        if reported and completed and output_tokens > 0 else None
+    )
+    value_units = output_tokens if reported and completed else 0
+    value_per_second = (
+        round(value_units / elapsed_seconds, 3) if value_units else None
+    )
     return RuntimeSample(
         request_id=request.request_id,
         provider_id=provider,
