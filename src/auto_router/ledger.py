@@ -209,13 +209,18 @@ class UsageLedger:
                 fallback = "{}" if field == "chosen_json" else "[]"
                 item[field.removesuffix("_json")] = json.loads(raw or fallback)
             items.append(item)
-        completed = [row for row in items if row["status"] in {"completed", "failed"}]
+        # A terminal *failure* is not a completed generation. Keeping these
+        # disjoint prevents utilization dashboards from counting outages as work.
+        completed = [row for row in items if row["status"] == "completed"]
+        failed = [row for row in items if row["status"] == "failed"]
         regrets = [float(row["realized_regret"]) for row in completed if row["realized_regret"] is not None]
         return {
             "summary": {
                 "decisions": len(items),
                 "completed": len(completed),
-                "failed": sum(row["status"] == "failed" for row in completed),
+                "failed": len(failed),
+                "terminal": len(completed) + len(failed),
+                "pending": len(items) - len(completed) - len(failed),
                 "avg_realized_regret": round(mean(regrets), 3) if regrets else None,
                 "zero_regret_rate": (
                     round(sum(regret <= 0 for regret in regrets) / len(regrets), 3)
@@ -431,12 +436,21 @@ class UsageLedger:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT AVG(latency_ms) AS latency_ms,
-                       AVG(value_per_second) * 3600.0 AS value_per_hour,
-                       AVG(CASE WHEN error_type IS NULL
-                                 AND (status_code IS NULL OR status_code < 400)
+                SELECT AVG(CASE WHEN error_type IS NULL AND error_message IS NULL
+                                      AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
+                                      AND latency_ms > 0 THEN latency_ms END) AS latency_ms,
+                       AVG(CASE WHEN error_type IS NULL AND error_message IS NULL
+                                      AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
+                                      AND latency_ms > 0 AND value_per_second > 0
+                                    THEN value_per_second END) * 3600.0 AS value_per_hour,
+                       AVG(CASE WHEN error_type IS NULL AND error_message IS NULL
+                                 AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
                                 THEN 1.0 ELSE 0.0 END) AS success_rate,
-                       COUNT(*) AS samples
+                       COUNT(*) AS samples,
+                       COUNT(CASE WHEN error_type IS NULL AND error_message IS NULL
+                                      AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
+                                      AND latency_ms > 0 AND value_per_second > 0
+                                    THEN 1 END) AS qualified_value_samples
                 FROM runtime_samples
                 WHERE provider_id=? AND model_id=?
                 """,
@@ -448,6 +462,7 @@ class UsageLedger:
             "predicted_value_per_hour": round(float(row["value_per_hour"]), 3) if row and row["value_per_hour"] is not None else None,
             "predicted_success_rate": round(float(row["success_rate"]), 3) if row and row["success_rate"] is not None else None,
             "prediction_samples": int(row["samples"] or 0) if row else 0,
+            "qualified_value_samples": int(row["qualified_value_samples"] or 0) if row else 0,
         })
         return result
 
@@ -470,14 +485,18 @@ class UsageLedger:
             for item in candidates
             if item.get("predicted_value_per_hour") is not None
         ]
-        realized = (
-            float(sample.value_per_second) * 3600.0
-            if sample.value_per_second is not None else None
-        )
-        regret = max(alternatives) - realized if alternatives and realized is not None else None
-        ok = not sample.error_type and (
+        ok = not sample.error_type and not sample.error_message and (
             sample.status_code is None or 200 <= int(sample.status_code) < 400
         )
+        # A transport failure with a spurious/nonzero value counter cannot
+        # realize useful work, and zero-duration samples have no valid rate.
+        realized = (
+            float(sample.value_per_second) * 3600.0
+            if ok and sample.latency_ms is not None and sample.latency_ms > 0
+            and sample.value_per_second is not None and sample.value_per_second >= 0
+            else None
+        )
+        regret = max(alternatives) - realized if alternatives and realized is not None else None
         conn.execute(
             """
             UPDATE counterfactual_decisions
