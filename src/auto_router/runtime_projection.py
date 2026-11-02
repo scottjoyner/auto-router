@@ -492,16 +492,39 @@ async def projection_poll_task(
     username = os.getenv("AUTO_ROUTER_ASSISTX_BASIC_AUTH_USER", "").strip()
     password = os.getenv("AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS", "").strip()
     auth = httpx.BasicAuth(username, password) if username or password else None
+    # A down/expired canonical AssistX projection cannot be made valid by
+    # polling every five seconds. Back off only on trusted upstream 503s;
+    # never synthesize projection admission or reuse expired authority.
+    max_unavailable_interval = max(
+        interval,
+        min(300.0, float(os.getenv("AUTO_ROUTER_RUNTIME_PROJECTION_503_MAX_INTERVAL_SECONDS", "60"))),
+    )
+    unavailable_streak = 0
     while True:
+        sleep_interval = interval
         try:
             async with httpx.AsyncClient(timeout=timeout, auth=auth) as client:
                 response = await client.get(url)
                 response.raise_for_status()
                 payload = response.json()
             await manager.apply(payload)
+            unavailable_streak = 0
         except asyncio.CancelledError:
             raise
+        except httpx.HTTPStatusError as exc:
+            manager.last_error = f"{type(exc).__name__}: {exc}"[:1000]
+            manager.last_attempt_at_ms = int(time.time() * 1000)
+            if exc.response.status_code == 503:
+                unavailable_streak += 1
+                sleep_interval = min(
+                    max_unavailable_interval, interval * (2 ** min(unavailable_streak, 8))
+                )
+            else:
+                # Auth failure, rate limiting, and other errors must keep
+                # their own original semantics, not inherit stale 503 delay.
+                unavailable_streak = 0
         except Exception as exc:
             manager.last_error = f"{type(exc).__name__}: {exc}"[:1000]
             manager.last_attempt_at_ms = int(time.time() * 1000)
-        await asyncio.sleep(interval)
+            unavailable_streak = 0
+        await asyncio.sleep(sleep_interval)
