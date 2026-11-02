@@ -16,6 +16,7 @@ from auto_router import runtime_projection as projection
         ([503, 503, 503, 503, 503], [10.0, 20.0, 40.0, 60.0, 60.0], 0),
         ([503, 200, 503, 200], [10.0, 5.0, 10.0, 5.0], 2),
         ([503, 401, 503, 429], [10.0, 5.0, 10.0, 5.0], 0),
+        ([503, 500, 503, 502], [10.0, 5.0, 10.0, 5.0], 0),
     ],
 )
 def test_projection_503_backoff_preserves_auth_and_requires_apply(
