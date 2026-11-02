@@ -138,3 +138,59 @@ def test_counterfactual_decision_is_completed_by_runtime_sample(tmp_path):
     assert item["realized_value_per_hour"] == 7200.0
     assert item["realized_regret"] == 28800.0
     assert result["summary"]["avg_realized_regret"] == 28800.0
+
+
+def test_runtime_recent_excludes_stale_and_future_rows(tmp_path):
+    import sqlite3
+    import time
+    db = tmp_path / "router.sqlite3"
+    ledger = UsageLedger(f"sqlite:///{db}")
+    for name in ("old", "current", "future"):
+        ledger.record_runtime_sample(RuntimeSample(
+            request_id=name, provider_id="local", model_id="local/model",
+            route="chat_completions", priority="background", stage="final",
+            output_tokens=50, total_tokens=60,
+            started_at_ms=1_000, ended_at_ms=2_000,
+            tokens_per_second=50.0, status_code=200, latency_ms=1000,
+        ))
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "update runtime_samples set created_at=? where request_id='old'",
+            (int(time.time()) - 100_000,),
+        )
+        connection.execute(
+            "update runtime_samples set created_at=? where request_id='future'",
+            (int(time.time()) + 100_000,),
+        )
+    samples = ledger.recent_runtime_samples()
+    assert [x["request_id"] for x in samples] == ["current"]
+    assert samples[0]["throughput_valid"] is True
+    assert ledger.runtime_summary()["avg_tokens_per_second"] == 50.0
+
+
+def test_zero_output_and_impossible_rates_do_not_count_as_throughput(tmp_path):
+    db=tmp_path / "router.sqlite3"
+    ledger=UsageLedger(f"sqlite:///{db}")
+    for name,output,rate in [
+        ("zero",0,523720.0),
+        ("implausible",20,100000.0),
+        ("valid",50,50.0),
+    ]:
+        ledger.record_runtime_sample(RuntimeSample(
+            request_id=name,provider_id="local",model_id="local/model",
+            route="chat_completions",priority="background",stage="final",
+            output_tokens=output,total_tokens=output+10,
+            started_at_ms=1000,ended_at_ms=2000,
+            tokens_per_second=rate,status_code=200,latency_ms=1000
+        ))
+    samples=ledger.recent_runtime_samples()
+    by_id={s["request_id"]:s for s in samples}
+    assert by_id["zero"]["throughput_valid"] is False
+    assert by_id["implausible"]["throughput_valid"] is False
+    assert by_id["zero"]["tokens_per_second"] is None
+    assert by_id["implausible"]["tokens_per_second"] is None
+    assert by_id["valid"]["throughput_valid"] is True
+    result=ledger.runtime_summary()
+    assert result["samples"]==3
+    assert result["throughput_observed_samples"]==1
+    assert result["avg_tokens_per_second"]==50.0

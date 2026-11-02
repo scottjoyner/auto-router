@@ -275,14 +275,34 @@ class UsageLedger:
                        value_units, value_per_second, status_code, latency_ms,
                        error_type, error_message, created_at
                 FROM runtime_samples
+                WHERE created_at >= ? AND created_at <= ?
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (int(time.time()) - 86400, int(time.time()) + 60, limit),
             ).fetchall()
         samples = [dict(row) for row in rows]
         for sample in samples:
             sample["elapsed_ms"] = self._elapsed_ms(sample)
+            # A zero-output sample with a near-zero latency previously
+            # contaminated the reported token/sec gauge with huge numbers.
+            # Freshness and observed output are both mandatory. Keep the
+            # outcome sample for failure statistics, not rate estimation.
+            rate = sample.get("tokens_per_second")
+            try:
+                rate = float(rate) if rate is not None else None
+            except (TypeError, ValueError):
+                rate = None
+            rate_ok = bool(
+                self._runtime_ok(sample)
+                and int(sample.get("output_tokens") or 0) > 0
+                and (sample["elapsed_ms"] or 0) >= 10
+                and rate is not None and 0 < rate <= 10000
+            )
+            sample["throughput_valid"] = rate_ok
+            if not rate_ok:
+                sample["tokens_per_second"] = None
+                sample["value_per_second"] = None
         return samples
 
     def runtime_summary(self, limit: int = 100) -> dict[str, object]:
@@ -299,6 +319,9 @@ class UsageLedger:
             "avg_elapsed_ms": self._runtime_avg(samples, "elapsed_ms"),
             "avg_queue_wait_ms": self._runtime_avg(samples, "queue_wait_ms"),
             "avg_load_time_ms": self._runtime_avg(samples, "load_time_ms"),
+            "throughput_observed_samples": sum(
+                bool(s.get("throughput_valid")) for s in samples
+            ),
             "avg_tokens_per_second": self._runtime_avg(samples, "tokens_per_second"),
             "avg_value_per_second": self._runtime_avg(samples, "value_per_second"),
             "avg_value_units": self._runtime_avg(samples, "value_units"),

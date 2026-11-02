@@ -399,6 +399,13 @@ def build_swarm_state_summary(state: Any, provider_health_summary: list[dict[str
     resolved_provider_health_summary: list[dict[str, Any]] = provider_health_summary if provider_health_summary is not None else (state.model_registry.provider_health_reports() if hasattr(state, "model_registry") else [])
     recent_snapshots = state.model_registry.recent_snapshots(limit=24) if hasattr(state, "model_registry") and hasattr(state.model_registry, "recent_snapshots") else []
     recent_runtime_samples = state.ledger.recent_runtime_samples(limit=48) if hasattr(state, "ledger") and hasattr(state.ledger, "recent_runtime_samples") else []
+    # Samples from the real ledger expose throughput_valid. A failed,
+    # zero-output or implausible record may be retained for diagnostics but
+    # must not enter node/provider performance rankings.
+    ranking_samples = [
+        sample for sample in recent_runtime_samples
+        if sample.get("throughput_valid") is not False
+    ]
 
     canonical_provider = getattr(context, "canonical_provider_name", lambda value: str(value).strip().lower()) if context is not None else (lambda value: str(value).strip().lower())
     canonical_model_id = getattr(context, "canonical_model_id", lambda value: str(value).strip().lower()) if context is not None else (lambda value: str(value).strip().lower())
@@ -431,8 +438,8 @@ def build_swarm_state_summary(state: Any, provider_health_summary: list[dict[str
         if service.node_id:
             service_nodes[service.node_id].append(service)
 
-    runtime_by_provider = _runtime_throughput_by_provider(recent_runtime_samples)
-    runtime_by_model = _runtime_throughput_by_model(recent_runtime_samples)
+    runtime_by_provider = _runtime_throughput_by_provider(ranking_samples)
+    runtime_by_model = _runtime_throughput_by_model(ranking_samples)
 
     node_map: list[dict[str, Any]] = []
     for node in nodes:
