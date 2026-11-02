@@ -441,7 +441,7 @@ class UsageLedger:
                                       AND latency_ms > 0 THEN latency_ms END) AS latency_ms,
                        AVG(CASE WHEN error_type IS NULL AND error_message IS NULL
                                       AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
-                                      AND latency_ms > 0 AND value_per_second > 0
+                                      AND latency_ms > 0 AND value_per_second >= 0
                                     THEN value_per_second END) * 3600.0 AS value_per_hour,
                        AVG(CASE WHEN error_type IS NULL AND error_message IS NULL
                                  AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
@@ -449,13 +449,15 @@ class UsageLedger:
                        COUNT(*) AS samples,
                        COUNT(CASE WHEN error_type IS NULL AND error_message IS NULL
                                       AND (status_code IS NULL OR (status_code >= 200 AND status_code < 400))
-                                      AND latency_ms > 0 AND value_per_second > 0
+                                      AND latency_ms > 0 AND value_per_second >= 0
                                     THEN 1 END) AS qualified_value_samples
                 FROM runtime_samples
                 WHERE provider_id=? AND model_id=?
                 """,
                 (provider, model),
             ).fetchone()
+        # Zero-rate successes are valid negative evidence for model value.
+        # Excluding them would bias predictions toward only productive samples.
         result = dict(candidate)
         result.update({
             "predicted_latency_ms": round(float(row["latency_ms"]), 1) if row and row["latency_ms"] is not None else None,
