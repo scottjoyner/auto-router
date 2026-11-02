@@ -9,8 +9,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+# Use the script's checked-out source even when a different editable
+# Auto-Router installation has injected its own src directory into sys.path.
+# Checking only for membership is insufficient when it appears *after* that
+# editable location; the CLI would then probe using the wrong implementation.
+if str(SRC_ROOT) in sys.path:
+    sys.path.remove(str(SRC_ROOT))
+sys.path.insert(0, str(SRC_ROOT))
 
 from auto_router.fleet_task_dispatcher import DiscoveryConfigError, probe_all_nodes
 
@@ -67,11 +72,19 @@ def main() -> int:
     elif degraded or len(online) != len(nodes):
         status = "degraded"
 
+    # The `nodes` array is one row per configured provider lane. Do not
+    # mistake multiple runtimes on xwing/destroyer for multiple computers.
+    physical_node_count = len({node.name for node in nodes})
+    online_physical_nodes = len({node.name for node in online})
+    authoritative_physical_nodes = len({node.name for node in authoritative})
     summary = {
         "status": status,
         "nodes": [asdict(node) for node in nodes],
-        "node_count": len(nodes),
-        "online_nodes": len(online),
+        "node_count": len(nodes),  # Backward-compatible provider-lane count.
+        "physical_node_count": physical_node_count,
+        "online_physical_nodes": online_physical_nodes,
+        "authoritative_physical_nodes": authoritative_physical_nodes,
+        "online_nodes": len(online),  # Legacy: this is online lanes.
         "authoritative_nodes": len(authoritative),
         "degraded_nodes": len(degraded),
         "loaded_models": loaded_count,
@@ -83,7 +96,8 @@ def main() -> int:
             state = "ONLINE" if node.online else "OFFLINE"
             authority = "authoritative" if node.inventory_authoritative else "non-authoritative"
             print(
-                f"{state:7} {node.name:36} {node.latency_ms:8.1f}ms "
+                f"{state:7} {node.name:28} lane={node.provider_name:30} "
+                f"{node.latency_ms:8.1f}ms "
                 f"loaded={len(node.loaded_models):2} observed={len(node.all_models):2} "
                 f"inventory={authority} source={node.discovery_source}"
             )
@@ -94,8 +108,9 @@ def main() -> int:
             if node.error:
                 print("         error: " + node.error)
         print(
-            f"STATUS {status} online={len(online)}/{len(nodes)} "
-            f"authoritative={len(authoritative)} loaded={loaded_count}"
+            f"STATUS {status} online_lanes={len(online)}/{len(nodes)} "
+            f"physical_nodes={physical_node_count} online_physical={online_physical_nodes} "
+            f"authoritative_lanes={len(authoritative)} loaded={loaded_count}"
         )
 
     if len(online) < args.require_online:

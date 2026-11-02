@@ -85,7 +85,7 @@ def test_provider_registry_rejects_malformed_yaml(tmp_path: Path) -> None:
         discovery._provider_rows(path)
 
 
-def test_provider_registry_rejects_duplicate_nodes(tmp_path: Path) -> None:
+def test_provider_registry_accepts_multi_lane_physical_nodes(tmp_path: Path) -> None:
     path = tmp_path / "providers.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -111,7 +111,24 @@ def test_provider_registry_rejects_duplicate_nodes(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(discovery.DiscoveryConfigError, match="duplicate LM Studio node_id"):
+    rows = discovery._provider_rows(path)
+    assert [row["name"] for row in rows] == ["first", "second"]
+    assert {row["node_id"] for row in rows} == {"node-a"}
+    # Same hardware, distinct named serving endpoints.
+    assert {row["base_url"] for row in rows} == {
+        "http://node-a:1234/v1", "http://node-b:1234/v1"
+    }
+
+
+def test_provider_registry_rejects_duplicate_provider_names(tmp_path: Path) -> None:
+    path = tmp_path / "providers.yaml"
+    rows = [
+        {"name": "same", "type": "lmstudio", "node_id": node,
+         "base_url": f"http://{node}:1234/v1", "models": []}
+        for node in ("node-a", "node-b")
+    ]
+    path.write_text(yaml.safe_dump({"providers": rows}), encoding="utf-8")
+    with pytest.raises(discovery.DiscoveryConfigError, match="duplicate LM Studio provider name"):
         discovery._provider_rows(path)
 
 
