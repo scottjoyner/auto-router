@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from auto_router.usage_accounting import provider_reported_usage
+
 import uuid
 from typing import Any
 
@@ -76,7 +78,7 @@ def enqueue_route_execution_event(
     """Queue routing provenance without storing prompt or response bodies."""
 
     outbox = ensure_event_outbox(state)
-    usage = usage or {}
+    measured_input, measured_output, measured_total, usage_reported = provider_reported_usage(usage)
     error_type = type(error).__name__ if error else None
     error_message = str(error)[:1000] if error else None
     context = getattr(state, "context", None)
@@ -185,15 +187,10 @@ def enqueue_route_execution_event(
         "tokens_per_second": tokens_per_second,
         "value_units": value_units,
         "value_per_second": value_per_second,
-        "input_tokens": int(
-            usage.get("prompt_tokens")
-            or getattr(estimate, "input_tokens", 0)
-        ),
-        "output_tokens": int(usage.get("completion_tokens") or 0),
-        "total_tokens": int(
-            usage.get("total_tokens")
-            or getattr(estimate, "total_tokens", 0)
-        ),
+        "input_tokens": measured_input,
+        "output_tokens": measured_output,
+        "total_tokens": measured_total,
+        "token_usage_source": "provider_reported" if usage_reported else "unknown",
         "quota_units": getattr(estimate, "dimensions", {}),
         "local_only": request.local_only,
         "allow_cloud": request.allow_cloud,
