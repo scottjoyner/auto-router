@@ -84,3 +84,48 @@ migration on the live database as part of code review.
   from a successful completion.
 
 No production SQLite database was opened or modified for these tests.
+
+## Read-only live-schema rollback rehearsal (Nov 2, 2026)
+
+New review-only script:
+
+    python3 scripts/audit-ledger-provenance-rollback.py --source-db /path/to/sqlite.db
+
+The auditor opens the source SQLite database with URI mode=ro and
+PRAGMA query_only=ON. It rejects symlink input, oversize files and
+insufficient available memory before connecting. It creates two
+anonymous in-memory backups, with no on-disk backup or source writes.
+One is an unchanged baseline snapshot. The second is migrated with
+the additive DDL, checked, migrated again (idempotent no-op), then
+restored from the baseline in-memory snapshot.
+
+This is a restore REHEARSAL, not an operational production rollback.
+The actual rollback must be coordinated with traffic fencing and a
+durable, independently verified pre-migration SQLite backup that
+includes committed WAL contents. Restoring a previous snapshot may
+lose writes committed afterward. Do not automatically roll back
+a live database or attempt an in-place column drop.
+
+On the real running git-router-1 database, the audit piped its
+script into Python inside the existing container. It did not create
+a new container, deployment, disk snapshot, model invocation or
+router write. The database was 1,782,984,704 bytes; both relevant
+tables held 5,000 rows and two indexes. All nine checks passed:
+
+- New columns present on migrated in-memory candidate
+- All original rows conservatively labeled legacy_unverified
+- Original ID/input/output/total token tuples preserved
+- Schema changed only in the migrated candidate
+- Reapplying migration was a no-op
+- Restore fully recovered original schema and counters
+- Restore removed the added columns
+- Read-only source connection confirmed
+- Source schema and counter fingerprints unchanged
+
+Seven isolated tests also check WAL snapshot contents, immutability, unrelated records, source
+size/memory guards, symlink rejection, already-migrated schema
+and invalid table-name rejection.
+
+No token values were printed or persisted to audit outputs.
+A successful in-memory rehearsal is not a production backup
+and cannot establish fleet-wide actual generated-token totals.
