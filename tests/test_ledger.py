@@ -21,6 +21,7 @@ def test_usage_ledger_records_runtime_samples(tmp_path):
             output_tokens=5,
             total_tokens=15,
             tokens_per_second=60.0,
+            token_usage_source="provider_reported",
             value_units=5,
             value_per_second=20.0,
             status_code=200,
@@ -102,6 +103,7 @@ def test_counterfactual_decision_is_completed_by_runtime_sample(tmp_path):
                 priority="interactive",
                 stage="final",
                 value_per_second=value,
+                token_usage_source="provider_reported",
                 status_code=200,
                 latency_ms=100,
             )
@@ -127,6 +129,7 @@ def test_counterfactual_decision_is_completed_by_runtime_sample(tmp_path):
             priority="interactive",
             stage="final",
             value_per_second=2.0,
+            token_usage_source="provider_reported",
             status_code=200,
             latency_ms=500,
         )

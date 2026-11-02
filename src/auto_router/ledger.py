@@ -21,6 +21,7 @@ class UsageEvent:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    token_usage_source: str = "unknown"
     quota_units: dict | None = None
     status_code: int | None = None
     latency_ms: int | None = None
@@ -43,6 +44,7 @@ class RuntimeSample:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    token_usage_source: str = "unknown"
     tokens_per_second: float | None = None
     value_units: int = 0
     value_per_second: float | None = None
@@ -71,9 +73,10 @@ class UsageLedger:
                 """
                 INSERT INTO usage_events (
                     request_id, provider_id, model_id, route, priority, stage,
-                    input_tokens, output_tokens, total_tokens, quota_units_json,
-                    status_code, latency_ms, error_type, error_message, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    input_tokens, output_tokens, total_tokens, token_usage_source,
+                    quota_units_json, status_code, latency_ms, error_type,
+                    error_message, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.request_id,
@@ -85,6 +88,7 @@ class UsageLedger:
                     event.input_tokens,
                     event.output_tokens,
                     event.total_tokens,
+                    self._validate_usage_source(event.token_usage_source),
                     json.dumps(event.quota_units or {}, sort_keys=True),
                     event.status_code,
                     event.latency_ms,
@@ -102,10 +106,10 @@ class UsageLedger:
                 INSERT INTO runtime_samples (
                     request_id, provider_id, model_id, route, priority, stage,
                     started_at_ms, ended_at_ms, queue_wait_ms, load_time_ms,
-                    input_tokens, output_tokens, total_tokens, tokens_per_second,
-                    value_units, value_per_second, status_code, latency_ms,
-                    error_type, error_message, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    input_tokens, output_tokens, total_tokens, token_usage_source,
+                    tokens_per_second, value_units, value_per_second, status_code,
+                    latency_ms, error_type, error_message, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sample.request_id,
@@ -121,6 +125,7 @@ class UsageLedger:
                     sample.input_tokens,
                     sample.output_tokens,
                     sample.total_tokens,
+                    self._validate_usage_source(sample.token_usage_source),
                     sample.tokens_per_second,
                     sample.value_units,
                     sample.value_per_second,
@@ -230,8 +235,9 @@ class UsageLedger:
             rows = conn.execute(
                 """
                 SELECT request_id, provider_id, model_id, route, priority, stage,
-                       input_tokens, output_tokens, total_tokens, status_code,
-                       latency_ms, error_type, error_message, created_at
+                       input_tokens, output_tokens, total_tokens,
+                       token_usage_source, status_code, latency_ms,
+                       error_type, error_message, created_at
                 FROM usage_events
                 ORDER BY id DESC
                 LIMIT ?
@@ -241,20 +247,40 @@ class UsageLedger:
         return [dict(row) for row in rows]
 
     def summary(self) -> dict:
+        """Retained rows only; token counts include provider-reported rows only.
+
+        Existing rows before this schema change are *legacy_unverified*.
+        Their quotas/estimates must never be backfilled as measured usage.
+        """
         with self._connect() as conn:
             totals = conn.execute(
                 """
                 SELECT
                   COUNT(*) AS requests,
-                  COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                  COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                  COALESCE(SUM(total_tokens), 0) AS total_tokens
+                  COALESCE(SUM(CASE WHEN token_usage_source='provider_reported'
+                    THEN input_tokens ELSE 0 END), 0) AS input_tokens,
+                  COALESCE(SUM(CASE WHEN token_usage_source='provider_reported'
+                    THEN output_tokens ELSE 0 END), 0) AS output_tokens,
+                  COALESCE(SUM(CASE WHEN token_usage_source='provider_reported'
+                    THEN total_tokens ELSE 0 END), 0) AS total_tokens,
+                  COALESCE(SUM(CASE WHEN token_usage_source='provider_reported'
+                    THEN 1 ELSE 0 END), 0) AS measured_requests,
+                  COALESCE(SUM(CASE WHEN token_usage_source='unknown'
+                    THEN 1 ELSE 0 END), 0) AS unknown_usage_requests,
+                  COALESCE(SUM(CASE WHEN token_usage_source='legacy_unverified'
+                    THEN 1 ELSE 0 END), 0) AS legacy_unverified_requests
                 FROM usage_events
                 """
             ).fetchone()
             by_provider = conn.execute(
                 """
-                SELECT provider_id, COUNT(*) AS requests, COALESCE(SUM(total_tokens), 0) AS tokens
+                SELECT provider_id, COUNT(*) AS requests,
+                  COALESCE(SUM(CASE WHEN token_usage_source='provider_reported'
+                    THEN total_tokens ELSE 0 END), 0) AS tokens,
+                  COALESCE(SUM(CASE WHEN token_usage_source='provider_reported'
+                    THEN 1 ELSE 0 END), 0) AS measured_requests,
+                  COALESCE(SUM(CASE WHEN token_usage_source='legacy_unverified'
+                    THEN 1 ELSE 0 END), 0) AS legacy_unverified_requests
                 FROM usage_events
                 GROUP BY provider_id
                 ORDER BY requests DESC
@@ -263,6 +289,8 @@ class UsageLedger:
         return {
             "totals": dict(totals) if totals else {},
             "by_provider": [dict(row) for row in by_provider],
+            "token_measurement_basis": "provider_reported_only",
+            "window": "retained_sqlite_rows_not_fleet_24h",
         }
 
     def recent_runtime_samples(self, limit: int = 50) -> list[dict]:
@@ -271,8 +299,9 @@ class UsageLedger:
                 """
                 SELECT request_id, provider_id, model_id, route, priority, stage,
                        started_at_ms, ended_at_ms, queue_wait_ms, load_time_ms,
-                       input_tokens, output_tokens, total_tokens, tokens_per_second,
-                       value_units, value_per_second, status_code, latency_ms,
+                       input_tokens, output_tokens, total_tokens,
+                       token_usage_source, tokens_per_second, value_units,
+                       value_per_second, status_code, latency_ms,
                        error_type, error_message, created_at
                 FROM runtime_samples
                 ORDER BY id DESC
@@ -291,6 +320,18 @@ class UsageLedger:
         for sample in samples:
             provider = str(sample.get("provider_id") or "unknown")
             by_provider.setdefault(provider, []).append(sample)
+        # Historical runtime samples may contain quota-estimate throughput.
+        # Only provider-verified, successful measurements can form a
+        # throughput/value average or be used to rank future candidates.
+        measured = [row for row in samples if
+                    row.get("token_usage_source") == "provider_reported"
+                    and self._runtime_ok(row)]
+        by_provider_measured = {
+            name: [row for row in rows
+                   if row.get("token_usage_source") == "provider_reported"
+                   and self._runtime_ok(row)]
+            for name, rows in by_provider.items()
+        }
         return {
             "samples": len(samples),
             "successful": sum(1 for sample in samples if self._runtime_ok(sample)),
@@ -299,9 +340,11 @@ class UsageLedger:
             "avg_elapsed_ms": self._runtime_avg(samples, "elapsed_ms"),
             "avg_queue_wait_ms": self._runtime_avg(samples, "queue_wait_ms"),
             "avg_load_time_ms": self._runtime_avg(samples, "load_time_ms"),
-            "avg_tokens_per_second": self._runtime_avg(samples, "tokens_per_second"),
-            "avg_value_per_second": self._runtime_avg(samples, "value_per_second"),
-            "avg_value_units": self._runtime_avg(samples, "value_units"),
+            "avg_tokens_per_second": self._verified_avg(measured, "tokens_per_second"),
+            "avg_value_per_second": self._verified_avg(measured, "value_per_second"),
+            "avg_value_units": self._verified_avg(measured, "value_units"),
+            "verified_throughput_samples": len(measured),
+            "unknown_or_legacy_throughput_samples": len(samples) - len(measured),
             "by_provider": [
                 {
                     "provider": provider,
@@ -313,8 +356,9 @@ class UsageLedger:
                     "avg_elapsed_ms": self._runtime_avg(rows, "elapsed_ms"),
                     "avg_queue_wait_ms": self._runtime_avg(rows, "queue_wait_ms"),
                     "avg_load_time_ms": self._runtime_avg(rows, "load_time_ms"),
-                    "avg_tokens_per_second": self._runtime_avg(rows, "tokens_per_second"),
-                    "avg_value_per_second": self._runtime_avg(rows, "value_per_second"),
+                    "avg_tokens_per_second": self._verified_avg(by_provider_measured[provider], "tokens_per_second"),
+                    "avg_value_per_second": self._verified_avg(by_provider_measured[provider], "value_per_second"),
+                    "verified_throughput_samples": len(by_provider_measured[provider]),
                 }
                 for provider, rows in sorted(by_provider.items())
             ],
@@ -335,6 +379,7 @@ class UsageLedger:
                     input_tokens INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
+                    token_usage_source TEXT NOT NULL DEFAULT 'legacy_unverified',
                     quota_units_json TEXT DEFAULT '{}',
                     status_code INTEGER,
                     latency_ms INTEGER,
@@ -344,6 +389,7 @@ class UsageLedger:
                 )
                 """
             )
+            self._migrate_token_provenance(conn, "usage_events")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_events(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage_events(provider_id, model_id)")
             conn.execute(
@@ -363,6 +409,7 @@ class UsageLedger:
                     input_tokens INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
+                    token_usage_source TEXT NOT NULL DEFAULT 'legacy_unverified',
                     tokens_per_second REAL,
                     value_units INTEGER DEFAULT 0,
                     value_per_second REAL,
@@ -374,6 +421,7 @@ class UsageLedger:
                 )
                 """
             )
+            self._migrate_token_provenance(conn, "runtime_samples")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_created_at ON runtime_samples(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_provider ON runtime_samples(provider_id, model_id)")
             conn.execute(
@@ -404,6 +452,26 @@ class UsageLedger:
                 "ON counterfactual_decisions(request_id, created_at)"
             )
 
+    @staticmethod
+    def _validate_usage_source(source: str) -> str:
+        # Callers cannot label new writes "legacy" to evade audit.
+        if source not in {"provider_reported", "unknown"}:
+            raise ValueError("invalid token usage provenance")
+        return source
+
+    @staticmethod
+    def _migrate_token_provenance(conn: sqlite3.Connection, table: str) -> None:
+        if table not in {"usage_events", "runtime_samples"}:
+            raise ValueError("invalid ledger table")
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "token_usage_source" not in existing:
+            # SQLite adds this label without rewriting or attributing historical
+            # quota estimates to actual generation. Safe on repeated startup.
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN "
+                "token_usage_source TEXT NOT NULL DEFAULT 'legacy_unverified'"
+            )
+
     def prune(self, keep: int = 5000) -> None:
         """Bound the usage/runtime history so the tables can't grow without
         limit (every routed request writes a row; unbounded growth makes each
@@ -432,7 +500,10 @@ class UsageLedger:
             row = conn.execute(
                 """
                 SELECT AVG(latency_ms) AS latency_ms,
-                       AVG(value_per_second) * 3600.0 AS value_per_hour,
+                       AVG(CASE WHEN token_usage_source='provider_reported'
+                                  AND error_type IS NULL
+                                  AND status_code BETWEEN 200 AND 299
+                                THEN value_per_second END) * 3600.0 AS value_per_hour,
                        AVG(CASE WHEN error_type IS NULL
                                  AND (status_code IS NULL OR status_code < 400)
                                 THEN 1.0 ELSE 0.0 END) AS success_rate,
@@ -472,7 +543,11 @@ class UsageLedger:
         ]
         realized = (
             float(sample.value_per_second) * 3600.0
-            if sample.value_per_second is not None else None
+            if sample.token_usage_source == "provider_reported"
+            and sample.value_per_second is not None
+            and not sample.error_type and sample.status_code is not None
+            and 200 <= int(sample.status_code) < 300
+            else None
         )
         regret = max(alternatives) - realized if alternatives and realized is not None else None
         ok = not sample.error_type and (
@@ -522,6 +597,12 @@ class UsageLedger:
             return False
         status_code = self._coerce_int(sample.get("status_code"))
         return status_code is None or 200 <= status_code < 400
+
+    def _verified_avg(self, rows: list[dict[str, Any]], field: str) -> int | float | None:
+        # Unlike diagnostic latency averages, absent verified throughput
+        # must be unknown (null), never a fabricated 0 tokens/second.
+        actual = [row for row in rows if row.get(field) is not None]
+        return self._runtime_avg(actual, field) if actual else None
 
     def _runtime_avg(self, rows: list[dict[str, Any]], field: str) -> int | float:
         values: list[float] = []
