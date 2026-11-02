@@ -192,3 +192,32 @@ def test_selected_decisions_are_pending_not_completed(tmp_path):
     )
     result = ledger.counterfactual_summary()["summary"]
     assert (result["decisions"], result["completed"], result["failed"], result["pending"]) == (1, 0, 0, 1)
+
+
+def test_successful_zero_rate_is_counted_in_model_value_prediction(tmp_path):
+    ledger = UsageLedger(f"sqlite:///{tmp_path / 'ledger.sqlite3'}")
+    ledger.record_runtime_sample(RuntimeSample(
+        request_id="seed-zero", provider_id="zero", model_id="model-0",
+        route="chat_completions", priority="background", stage="final",
+        status_code=200, latency_ms=50, value_per_second=0.0,
+    ))
+    candidate = {"provider": "zero", "provider_model": "model-0"}
+    prediction = ledger._candidate_prediction(candidate)
+    assert prediction["prediction_samples"] == 1
+    assert prediction["qualified_value_samples"] == 1
+    assert prediction["predicted_value_per_hour"] == 0.0
+    # Transport completion does not prove task quality. A zero-output
+    # attempt must still depress predicted model value rather than vanish.
+    ledger.record_counterfactual_decision(
+        decision_id="decision-zero", request_id="zero-run", stage="final",
+        chosen=candidate, candidates=[candidate], rejections=[],
+    )
+    ledger.record_runtime_sample(RuntimeSample(
+        request_id="zero-run", provider_id="zero", model_id="model-0",
+        route="chat_completions", priority="background", stage="final",
+        status_code=200, latency_ms=50, value_per_second=0.0,
+    ))
+    report = ledger.counterfactual_summary()
+    assert report["summary"]["completed"] == 1
+    assert report["items"][0]["realized_value_per_hour"] == 0.0
+    assert report["items"][0]["realized_regret"] == 0.0
