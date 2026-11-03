@@ -46,12 +46,14 @@ params = og.GeneratorParams(model)
 params.set_search_options(max_length=len(prompt) + requested, do_sample=False)
 generator = og.Generator(model, params)
 generator.append_tokens(prompt)
+os.write(2, b"RYZENAI_GENERATION_BEGIN\\n")
 t0 = time.monotonic()
 steps = 0
 while steps < requested and not generator.is_done():
     generator.generate_next_token()
     steps += 1
 elapsed_s = time.monotonic() - t0
+os.write(2, b"RYZENAI_GENERATION_END\\n")
 sequence = generator.get_sequence(0)
 generated = [int(x) for x in sequence[len(prompt):]]
 npu_fds = 0
@@ -282,6 +284,32 @@ def _check_host() -> None:
         raise ResearchGateError("NPU occupied or holder check uncertain")
 
 
+def _generation_phase_npu_ioctls(lines: list[str]) -> int:
+    """Require a genuine NPU ioctl during the bounded synthetic decode loop.
+
+    A successful device initialization alone must never count as generation proof.
+    Strace -f -y records write(2<...>, "RYZENAI_GENERATION_...") boundaries.
+    """
+    begin = [
+        index
+        for index, line in enumerate(lines)
+        if "write(2" in line and '"RYZENAI_GENERATION_BEGIN' in line
+    ]
+    end = [
+        index
+        for index, line in enumerate(lines)
+        if "write(2" in line and '"RYZENAI_GENERATION_END' in line
+    ]
+    if len(begin) != 1 or len(end) != 1 or begin[0] >= end[0]:
+        raise ResearchGateError("decode-phase evidence missing or ambiguous")
+    count = sum(
+        "/dev/accel/accel0" in line and "= 0" in line for line in lines[begin[0] + 1 : end[0]]
+    )
+    if count < 1:
+        raise ResearchGateError("no successful NPU ioctl during decode")
+    return count
+
+
 def _venv_paths(venv: Path) -> tuple[Path, Path, list[str]]:
     if not venv.is_absolute() or venv.is_symlink():
         raise ResearchGateError("absolute runtime required")
@@ -357,7 +385,7 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
             "-f",
             "-y",
             "-e",
-            "trace=ioctl",
+            "trace=ioctl,write",
             "-o",
             str(trace),
             str(python),
@@ -395,9 +423,11 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
         if trace.stat().st_size > 10 * 1024**2:
             raise ResearchGateError("NPU ioctl evidence exceeds bound")
         with trace.open() as handle:
-            npu_ioctl_success = sum(
-                "/dev/accel/accel0" in line and "= 0" in line for line in handle
-            )
+            trace_lines = handle.readlines()
+        npu_ioctl_success = sum(
+            "/dev/accel/accel0" in line and "= 0" in line for line in trace_lines
+        )
+        generation_phase_npu_ioctls = _generation_phase_npu_ioctls(trace_lines)
         if (
             type(tokens.get("generated_tokens")) is not int
             or tokens["generated_tokens"] != requested_tokens
@@ -412,6 +442,7 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
             "actual_generated_tokens": tokens["generated_tokens"],
             "npu_device_fds": tokens["npu_fds"],
             "successful_npu_ioctls": npu_ioctl_success,
+            "generation_phase_npu_ioctls": generation_phase_npu_ioctls,
             "first_four_sha256": tokens["first_four_sha256"],
             "model_init_seconds": tokens["model_init_seconds"],
             "decode_seconds": tokens["decode_seconds"],
