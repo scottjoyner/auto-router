@@ -98,23 +98,45 @@ def build_outbox_dispatch_status(state: Any) -> dict[str, Any]:
 
 
 def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
-    """Classify outbox pressure with hysteresis so a live telemetry trickle
-    (a few events per minute, always draining) never flips health to degraded.
+    """Classify live outbox pressure without hiding scheduled batching.
 
-    - ``ok``: nothing queued, or a modest drain below ``warning_threshold``.
-    - ``warning``: a visible-but-settling backlog below ``critical_threshold``.
-    - ``critical``: a genuine sustained backlog (>= ``critical_threshold``).
-      Dead-letter rows are terminal history and are reported separately.
+    A current live queue is authoritative over last_dispatch summaries. A
+    healthy, bounded batch awaiting its next scheduled drain is not an error;
+    retries, dead letters, overdue runs and large backlogs still warn/fail.
+    Neither delivered events nor pending queue count prove model inference.
     """
     settings = get_settings()
     dispatch_status = build_outbox_dispatch_status(state)
-    summary = dispatch_status.get("last_summary") or {}
-    pending = int(dispatch_status.get("pending") or summary.get("pending") or 0)
-    retry = int(dispatch_status.get("retry") or summary.get("retry") or 0)
-    dead_letter = int(dispatch_status.get("dead_letter") or summary.get("dead_letter") or 0)
+    # Do not resurrect historical last_summary rows when the *live* queue is
+    # empty. A few legacy/status-only callers have no event_outbox object;
+    # retain their summary fallback without conflating it with live state.
+    live_queue_observed = hasattr(state, "event_outbox")
+    counts = (dispatch_status if live_queue_observed
+              else dispatch_status.get("last_summary") or {})
+    pending = int(counts.get("pending") or 0)
+    retry = int(counts.get("retry") or 0)
+    dead_letter = int(counts.get("dead_letter") or 0)
     total = pending + retry
     warning_threshold = int(getattr(settings, "assistx_outbox_warning_threshold", 25))
     critical_threshold = int(getattr(settings, "assistx_outbox_critical_threshold", 200))
+    interval = dispatch_status.get("interval_seconds")
+    age = dispatch_status.get("last_completed_age_seconds")
+    next_in = dispatch_status.get("next_run_in_seconds")
+    # A bounded batch of fresh events naturally accumulates between a
+    # healthy five-minute dispatch. This is queued *telemetry*, NOT model
+    # generations or accepted Tasks. Count it without claiming a delivery
+    # regression or hiding real retries, dead letters, overdue dispatches.
+    scheduled_drain_expected = bool(
+        live_queue_observed and pending > 0 and retry == 0 and dead_letter == 0
+        and pending <= min(max(critical_threshold - 1, 0), max(warning_threshold * 4, warning_threshold))
+        and dispatch_status.get("configured") is True
+        and dispatch_status.get("enabled") is True
+        and dispatch_status.get("last_outcome") == "success"
+        and dispatch_status.get("last_dry_run") is False
+        and type(interval) in (int, float) and 0 < interval <= 86400
+        and type(age) is int and 0 <= age <= interval + 30
+        and type(next_in) is int and 0 <= next_in <= interval
+    )
     if total == 0 and dead_letter == 0:
         level = "ok"
         headline = "Outbox pressure is clear"
@@ -128,6 +150,14 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
             "waiting to move through the AssistX sink path."
         )
         action = "Inspect /admin/outbox and /admin/outbox/dispatch before treating restart health as green."
+    elif scheduled_drain_expected:
+        level = "ok"
+        headline = "Outbox awaiting scheduled drain"
+        detail = (
+            f"{pending} newly queued telemetry event(s) are within the expected "
+            "scheduled dispatch window; this is not verified inference."
+        )
+        action = "Monitor the next scheduled drain; no manual replay is warranted."
     elif total > 0 or dead_letter > 0:
         level = "warning"
         headline = "Outbox pressure is present"
@@ -145,7 +175,14 @@ def build_outbox_pressure_status(state: Any) -> dict[str, Any]:
         action = "No action required."
     return {
         **dispatch_status,
+        # Keep the pressure interpretation self-consistent. A status-only
+        # fallback is explicitly labeled historical, never silently 0 live.
+        "pending": pending,
+        "retry": retry,
+        "dead_letter": dead_letter,
         "pressure_total": total,
+        "pressure_count_source": "live_outbox" if live_queue_observed else "last_dispatch_snapshot",
+        "scheduled_drain_expected": scheduled_drain_expected,
         "level": level,
         "active": level != "ok",
         "critical_threshold": critical_threshold,
