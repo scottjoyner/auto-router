@@ -238,7 +238,46 @@ class AdmissionShadowTests(unittest.TestCase):
 
     def test_timeout_classification(self):
         self.assertEqual(shadow.classify_failure("", exit_code=124), "TIMEOUT")
-        self.assertEqual(shadow.classify_failure("", exit_code=137), "TIMEOUT")
+
+    def test_sigkill_exit_is_not_unverified_timeout(self):
+        self.assertEqual(
+            shadow.classify_failure("", exit_code=137), "PROCESS_KILLED_UNVERIFIED"
+        )
+
+    def test_ryzenai_provider_crash_has_distinct_sanitized_class(self):
+        message = (
+            "python segfault at 410 in /private/secret/"
+            "libonnxruntime_providers_ryzenai.so"
+        )
+        self.assertEqual(
+            shadow.classify_failure(message, exit_code=139), "NPU_PROVIDER_SEGFAULT"
+        )
+        self.assertNotIn("/private", shadow.classify_failure(message, exit_code=139))
+        self.assertEqual(shadow.classify_failure("", exit_code=139), "PROCESS_SEGFAULT")
+
+    def test_missing_peano_dependency_is_not_compute_failure(self):
+        message = (
+            "libpeano-lib.so.21.0git: cannot open shared object file: "
+            "No such file or directory"
+        )
+        self.assertEqual(
+            shadow.classify_failure(message, exit_code=1),
+            "VITISAI_DEPENDENCY_MISSING",
+        )
+
+    def test_sanitized_session_config_flags(self):
+        config = fixture()
+        session = config["model"]["decoder"]["session_options"]
+        session["custom_ops_library"] = "/private/secret/provider.so"
+        session["vaip_config"] = "/private/secret/vaip_config.json"
+        raw = json.dumps(config).encode()
+        report = shadow.parse_config(raw)
+        self.assertTrue(report["custom_ops_library_declared"])
+        self.assertTrue(report["vaip_config_declared"])
+        self.assertNotIn("/private", str(report))
+        baseline = shadow.parse_config(payload())
+        self.assertFalse(baseline["custom_ops_library_declared"])
+        self.assertFalse(baseline["vaip_config_declared"])
 
     def test_zero_exit_code_not_verified(self):
         self.assertEqual(shadow.classify_failure("PASS", exit_code=0), "NO_ATTEMPT")
