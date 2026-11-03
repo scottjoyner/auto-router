@@ -134,3 +134,30 @@ def test_registry_with_only_disabled_nodes_does_not_resurrect_cache(
     monkeypatch.setattr(discovery, "DEFAULT_REPORT_PATH", report)
 
     assert discovery.probe_all_nodes(provider_config=config) == []
+
+
+def test_two_active_lanes_on_same_host_are_independently_probed(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "providers.yaml"
+    write_config(config, [
+        {"name": "xwing-main", "type": "lmstudio", "node_id": "xwing", "enabled": True,
+         "base_url": "http://node-a:1234/v1", "models": []},
+        {"name": "xwing-specialist", "type": "lmstudio", "node_id": "xwing", "enabled": True,
+         "base_url": "http://node-a:1238/v1", "models": []},
+        {"name": "xwing-disabled", "type": "lmstudio", "node_id": "xwing", "enabled": False,
+         "base_url": "https://example.com/v1", "models": []},
+    ])
+    visited = []
+    def probe(provider, *, timeout_seconds):
+        visited.append(provider["name"])
+        return discovery.NodeInfo(
+            name=provider["node_id"], ip="node-a", online=True,
+            provider_name=provider["name"],
+            discovery_source="live", inventory_authoritative=False,
+        )
+    monkeypatch.setattr(discovery, "_probe_provider", probe)
+    nodes = discovery.probe_all_nodes(provider_config=config)
+    assert {node.name for node in nodes} == {"xwing"}
+    assert {node.provider_name for node in nodes} == {"xwing-main", "xwing-specialist"}
+    assert set(visited) == {"xwing-main", "xwing-specialist"}
+    assert len(nodes) == 2
+    assert all(not node.inventory_authoritative for node in nodes)
