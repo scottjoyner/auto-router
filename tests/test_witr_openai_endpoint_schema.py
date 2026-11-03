@@ -68,7 +68,7 @@ def _joyner_response():
                 "capabilities": [],
                 "parameters": {},
             }
-        ]
+        ],
         "object": "list",
         "data": [
             {"id": "local-placeholder", "object": "model", "meta": {}},
