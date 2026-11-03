@@ -15,15 +15,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-EXPECTED_4K_CONFIG_SHA256 = (
-    "5dec97a007abb3aab6cd4bd48df0c06ad217e4a2c872c0dcc72241019334f184"
-)
-EXPECTED_ONNX_GRAPH_SHA256 = (
-    "14b6de9461b38c00898788da3efed93a3ea5aa8ef597a43cd409cea8de86cbbf"
-)
-EXPECTED_ONNX_DATA_SHA256 = (
-    "8e3104b796839b77c57d59cc5cabce0b2bae189f74452c564bd2fb207686eee1"
-)
+EXPECTED_4K_CONFIG_SHA256 = "5dec97a007abb3aab6cd4bd48df0c06ad217e4a2c872c0dcc72241019334f184"
+EXPECTED_ONNX_GRAPH_SHA256 = "14b6de9461b38c00898788da3efed93a3ea5aa8ef597a43cd409cea8de86cbbf"
+EXPECTED_ONNX_DATA_SHA256 = "8e3104b796839b77c57d59cc5cabce0b2bae189f74452c564bd2fb207686eee1"
 MAX_CONFIG_BYTES = 16_384
 MAX_PACKAGE_BYTES = 6 * 1024**3
 MIN_AVAILABLE_KIB = 25_000_000
@@ -124,10 +118,7 @@ def inspect(
         fd = os.open(config_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             info = os.fstat(fd)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or not 2 <= info.st_size <= MAX_CONFIG_BYTES
-            ):
+            if not stat.S_ISREG(info.st_mode) or not 2 <= info.st_size <= MAX_CONFIG_BYTES:
                 raise ResearchGateError("invalid bounded configuration")
             raw = os.read(fd, MAX_CONFIG_BYTES + 1)
         finally:
@@ -197,9 +188,7 @@ def _check_host() -> None:
         raise ResearchGateError("NPU character device unavailable")
     if not shutil.which("strace") or not shutil.which("fuser"):
         raise ResearchGateError("required NPU evidence instrumentation unavailable")
-    probe = subprocess.run(
-        ["fuser", str(DEVICE)], capture_output=True, timeout=5, check=False
-    )
+    probe = subprocess.run(["fuser", str(DEVICE)], capture_output=True, timeout=5, check=False)
     if probe.returncode != 1:
         raise ResearchGateError("NPU occupied or holder check uncertain")
 
@@ -235,11 +224,7 @@ def _venv_paths(venv: Path) -> tuple[Path, Path, list[str]]:
         site / "onnxruntime/capi",
         site / "voe/lib",
     ]
-    if (
-        not python.exists()
-        or not provider.is_file()
-        or any(not d.is_dir() for d in paths)
-    ):
+    if not python.exists() or not provider.is_file() or any(not d.is_dir() for d in paths):
         raise ResearchGateError("RyzenAI library paths incomplete")
     return python, provider, [str(d) for d in paths]
 
@@ -256,15 +241,9 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
             raise ResearchGateError("insufficient scratch disk headroom")
         staged_model = staging / "model"
         shutil.copytree(model_dir, staged_model, symlinks=False)
-        if (
-            _hash_regular_file(staged_model / "model.onnx")
-            != EXPECTED_ONNX_GRAPH_SHA256
-        ):
+        if _hash_regular_file(staged_model / "model.onnx") != EXPECTED_ONNX_GRAPH_SHA256:
             raise ResearchGateError("staged ONNX graph identity drift")
-        if (
-            _hash_regular_file(staged_model / "model.onnx.data")
-            != EXPECTED_ONNX_DATA_SHA256
-        ):
+        if _hash_regular_file(staged_model / "model.onnx.data") != EXPECTED_ONNX_DATA_SHA256:
             raise ResearchGateError("staged external tensor identity drift")
         config_path = staged_model / "genai_config.json"
         config = json.loads(config_path.read_text(), object_pairs_hook=_strict_pairs)
@@ -368,12 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ack-research-npu-execution", action="store_true")
     parser.add_argument("--tokens", type=int, default=4)
     args = parser.parse_args(argv)
-    if args.run_canary and (
-        not args.ack_research_npu_execution or args.venv_dir is None
-    ):
-        parser.error(
-            "--run-canary requires --ack-research-npu-execution and --venv-dir"
-        )
+    if args.run_canary and (not args.ack_research_npu_execution or args.venv_dir is None):
+        parser.error("--run-canary requires --ack-research-npu-execution and --venv-dir")
     try:
         report = inspect(args.model_dir)
         if args.run_canary:
@@ -385,9 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         TypeError,
         subprocess.SubprocessError,
     ):
-        print(
-            "RyzenAI research preflight refused; production unchanged", file=sys.stderr
-        )
+        print("RyzenAI research preflight refused; production unchanged", file=sys.stderr)
         return 3
     print(json.dumps(report, sort_keys=True))
     return 0
@@ -395,4 +368,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
