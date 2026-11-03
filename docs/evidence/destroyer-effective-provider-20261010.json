@@ -1,0 +1,33 @@
+{
+  "actual_inference_routes_witnessed": false,
+  "asgi_entrypoint_observed": "auto_router.secure_live:app",
+  "authenticated_admin_snapshot_not_deployed": true,
+  "captured_at_utc": "2026-10-10T20:53:21.168042+00:00",
+  "claim_about_misrouted_completed_requests": false,
+  "deployed_providers_yaml_sha256": "eb8b3a91f56f3d9fe772eacefcba1145e5e5542a152efdb9b059648c7efcf7c2",
+  "entrypoint_source_sha256": "3f4c56b51a6428bf40c6738741ac44849ca66b8bd100f15cd2363158c0db8537",
+  "health_enabled_provider_count": 1,
+  "health_http_status": 200,
+  "in_memory_destroyer_provider_count": 0,
+  "in_memory_provider_count": 1,
+  "in_memory_provider_evidence": [
+    {
+      "actual_model_health_or_props_proved": false,
+      "configured_model_aliases": [
+        "ornith-1.5-35b-a3b-apex-mtp"
+      ],
+      "effective_host": "192.168.1.237",
+      "effective_port": 1234,
+      "enabled_in_memory": true,
+      "node_id": "x1-370",
+      "provider_id": "assistx-x1-370-x1-lmstudio-1234"
+    }
+  ],
+  "inherited_admin_providers_http_status_without_credentials": 200,
+  "kind": "OBSERVED_AUTO_ROUTER_MEMORY_CONFIG_DISAGREEMENT",
+  "no_live_mutations": true,
+  "result_scope": "read_only_single_time_current_state_observation",
+  "schema_version": 1,
+  "source_configuration_identity_does_not_prove_in_memory_admission": true,
+  "source_host": "x1-370"
+}

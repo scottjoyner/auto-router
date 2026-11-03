@@ -1,0 +1,47 @@
+{
+  "schema": "router.remote-six-route-precutover-status-only-v1",
+  "observed_date_utc": "2026-10-11",
+  "origin_host": "x1-370",
+  "target": "running_unpatched_x1-370_router_private_tailnet_port_8088",
+  "method": "read-only remote Python urllib via SSH from x1, strict host-key checking enabled, no SSH verification downgrade",
+  "remote_peers": [
+    "destroyer",
+    "lenovo"
+  ],
+  "http_status_only": {
+    "destroyer": {
+      "/admin/providers": 200,
+      "/admin/providers/effective": 404,
+      "/admin/providers/health": 200,
+      "/admin/context": 200,
+      "/admin/circuits": 200,
+      "/admin/agent-workers": 200
+    },
+    "lenovo": {
+      "/admin/providers": 200,
+      "/admin/providers/effective": 404,
+      "/admin/providers/health": 200,
+      "/admin/context": 200,
+      "/admin/circuits": 200,
+      "/admin/agent-workers": 200
+    }
+  },
+  "six_route_anonymous_denial_pass": false,
+  "pre_cutover_decision": "HOLD_LIVE_REMOTE_ADMIN_AUTH",
+  "credentials_sent_to_router": false,
+  "redirects_followed": false,
+  "response_bodies_read": false,
+  "unreviewed_urls_or_addresses_disclosed": false,
+  "ssh_strict_host_key_verification": true,
+  "ssh_batch_mode": true,
+  "writes_performed": false,
+  "service_or_firewall_modified": false,
+  "router_candidate_deployed": false,
+  "production_release_authorized": false,
+  "limitations": [
+    "private Tailnet reachability only, no claim of public-WAN reachability",
+    "HTTP 200 alone does not prove secret-bearing content was returned",
+    "no authorized client/token rotation or physical postcutover acceptance performed"
+  ],
+  "required_postcutover": "Separately capture six HTTP 401 anonymous statuses from x1, Destroyer and Lenovo after approved supervised exact-image cutover, plus successful legitimate authenticated consumers."
+}

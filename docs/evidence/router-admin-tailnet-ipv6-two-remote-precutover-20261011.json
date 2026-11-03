@@ -1,0 +1,43 @@
+{
+  "schema": "router.pre_cutover_dual_stack_tailnet_admin_status_only_v1",
+  "observed_date_utc": "2026-10-11",
+  "target": "unpatched router x1-370 TCP 8088 on its private Tailnet IPv6 address",
+  "initiator": "read-only Fleet Commander command on x1-370",
+  "remotely_executed_on": [
+    "destroyer",
+    "lenovo"
+  ],
+  "method": "strict-host-key authenticated SSH to each peer; urllib GET without credentials, redirects, or response-body reads",
+  "ipv6_target_scope": "unique_local_fc00_7",
+  "ipv6_address_values_saved_or_printed": false,
+  "observations": {
+    "destroyer": {
+      "/admin/providers": 200,
+      "/admin/providers/effective": 404,
+      "/admin/providers/health": 200,
+      "/admin/context": 200,
+      "/admin/circuits": 200,
+      "/admin/agent-workers": 200
+    },
+    "lenovo": {
+      "/admin/providers": 200,
+      "/admin/providers/effective": 404,
+      "/admin/providers/health": 200,
+      "/admin/context": 200,
+      "/admin/circuits": 200,
+      "/admin/agent-workers": 200
+    }
+  },
+  "both_remote_peers_anonymous_admin_access": true,
+  "pre_cutover_decision": "HOLD_DUAL_STACK_ADMIN_EXPOSURE",
+  "ipv4_same_status_pattern": "docs/evidence/router-admin-two-remote-six-route-precutover-20261011.json",
+  "actual_public_wan_reachability_verified": false,
+  "actual_sensitive_content_disclosed": false,
+  "credentials_or_hashes_transmitted_to_router": false,
+  "redirects_followed": false,
+  "response_bodies_read": false,
+  "firewall_changes": false,
+  "candidate_deployed": false,
+  "production_release_authorized": false,
+  "next_required_action": "Security owner must account for both IPv4 and IPv6 Tailnet reachability in any reversible ingress containment; later physical router cutover must produce six HTTP 401s independently on both intended address families with legitimate client continuity."
+}

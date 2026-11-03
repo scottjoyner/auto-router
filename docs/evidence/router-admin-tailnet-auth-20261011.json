@@ -1,0 +1,157 @@
+{
+  "schema": "auto-router-admin-remote-auth-witness.v1",
+  "observation_date_utc": "2026-10-11",
+  "target": "running git-router-1 via x1-370 private Tailnet interface, port 8088",
+  "current_deployment": "UNPATCHED",
+  "clients": [
+    {
+      "node": "destroyer",
+      "route": "GET /admin/providers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "destroyer",
+      "route": "GET /admin/runtime-projection",
+      "credentials_sent": false,
+      "http_status": 401,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/providers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/runtime-projection",
+      "credentials_sent": false,
+      "http_status": 401,
+      "body_read": false
+    },
+    {
+      "node": "assistx-api container",
+      "route": "GET /admin/runtime-projection",
+      "credentials_sent": true,
+      "credential_source": "existing AUTO_ROUTER_ADMIN_TOKEN environment",
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "destroyer",
+      "route": "GET /admin/circuits",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "destroyer",
+      "route": "GET /admin/agent-workers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/circuits",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    },
+    {
+      "node": "lenovo",
+      "route": "GET /admin/agent-workers",
+      "credentials_sent": false,
+      "http_status": 200,
+      "body_read": false
+    }
+  ],
+  "separate_lan_probe": {
+    "via": "Destroyer and Lenovo to x1 LAN address",
+    "outcome": "TCP_UNREACHABLE_OR_TIMEOUT",
+    "interpretable_as_safe": false
+  },
+  "effective_router_snapshot": {
+    "via": "read-only GET /admin/providers within x1",
+    "provider_count": 1,
+    "provider_name": "assistx-x1-370-x1-lmstudio-1234",
+    "node_id": "x1-370",
+    "target_port": 1234,
+    "models_declared": [
+      "ornith-1.5-35b-a3b-apex-mtp"
+    ],
+    "signing_authority_fresh": false,
+    "actual_model_loaded": false
+  },
+  "safety": {
+    "claims_public_internet_reachability": false,
+    "claims_secret_disclosure": false,
+    "actual_inference_executed": false,
+    "admin_post_performed": false,
+    "credentials_logged": false,
+    "production_route_changed": false
+  },
+  "rollout_gate": {
+    "expected_anonymous_admin_status": 401,
+    "expected_authorized_assistx_admin_status": 200,
+    "require_production_client_inventory": true,
+    "require_deployment_rollback": true,
+    "ready_for_operator_exposure": false,
+    "inherited_paths_verified_accessible_without_auth": [
+      "/admin/providers",
+      "/admin/circuits",
+      "/admin/agent-workers"
+    ]
+  },
+  "canonical_verifier_receipt": {
+    "captured_at_utc": "2026-10-11T15:54:19Z",
+    "reviewed_draft_sha": "0e2f7a9588f3fb60a6876788b27b6190d0a12ad3",
+    "local_script": "scripts/verify_admin_cutover_readonly.py",
+    "local_script_sha256": "da590f6ebfd0a45f663dcadcac4028c1e317ef6d1aa571a669e0ef04e3103553",
+    "remote_script": "scripts/verify_remote_admin_auth_readonly.py",
+    "remote_script_sha256": "f15dff85c31dc682b0007f7006a859c0c2e8779b6274b1b33bc13d80a6320f68",
+    "local_anonymous_only": {
+      "decision": "ANONYMOUS_ADMIN_NOT_DENIED",
+      "exit_code": 1,
+      "admin_token_provided": false
+    },
+    "physical_remote_checks": [
+      {
+        "source_node": "destroyer",
+        "decision": "HOLD_REMOTE_ADMIN_AUTH",
+        "exit_code": 1,
+        "status_codes": {
+          "/admin/providers": 200,
+          "/admin/context": 200,
+          "/admin/circuits": 200,
+          "/admin/agent-workers": 200
+        }
+      },
+      {
+        "source_node": "lenovo",
+        "decision": "HOLD_REMOTE_ADMIN_AUTH",
+        "exit_code": 1,
+        "status_codes": {
+          "/admin/providers": 200,
+          "/admin/context": 200,
+          "/admin/circuits": 200,
+          "/admin/agent-workers": 200
+        }
+      }
+    ],
+    "exact_head_portable_tests": 43,
+    "http_methods": [
+      "GET"
+    ],
+    "response_bodies_read": false,
+    "credentials_sent_to_remote_nodes": false,
+    "admin_token_logged": false,
+    "script_writes_to_nodes": false,
+    "production_service_mutated": false,
+    "admission_proven": false,
+    "deployment_authorized": false
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "router.local-admin-precutover-status-only.v1",
+  "observed_at_utc": "2026-10-11T16:53:58Z",
+  "node": "x1-370",
+  "transport": "http://127.0.0.1:8088",
+  "source": "Fleet Commander user-authorized read-only local Python urllib",
+  "candidate_pr": 41,
+  "candidate_deployed": false,
+  "response_bodies_read": false,
+  "request_credentials_sent": false,
+  "redirects_followed": false,
+  "writes_performed": false,
+  "http_status_only": {
+    "/admin/providers": 200,
+    "/admin/providers/effective": 404,
+    "/admin/providers/health": 200,
+    "/admin/context": 200,
+    "/admin/circuits": 200,
+    "/admin/agent-workers": 200
+  },
+  "decision": "HOLD_ANONYMOUS_ADMIN_EXPOSURE",
+  "release_authorized": false,
+  "interpretation": "Old running router still permits anonymous 200 on five inherited local administrative GET routes; effective route 404 indicates candidate route is not deployed. Does not establish WAN reachability or sensitive response disclosure.",
+  "next_observation": "After authorized client-first and supervised router cutover, each local/Destroyer/Lenovo six-route anonymous GET must return 401; preserve independently verified authorized-client behavior."
+}
