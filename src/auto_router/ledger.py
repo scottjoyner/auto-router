@@ -217,7 +217,13 @@ class UsageLedger:
         return {
             "summary": {
                 "decisions": len(items),
-                "completed": len(completed),
+                # A successful transport is not a claim-fenced, independently
+                # accepted useful Task completion. No durable Task receipt is
+                # joined to the counterfactual ledger, so do not assert one.
+                "completed": len(completed),  # compatibility: transport only
+                "transport_completed": len(completed),
+                "accepted_task_completions": None,
+                "task_receipt_verification": "NOT_CHECKED",
                 "failed": len(failed),
                 "terminal": len(completed) + len(failed),
                 "pending": len(items) - len(completed) - len(failed),
