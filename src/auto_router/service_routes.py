@@ -223,7 +223,9 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
         state.event_outbox = EventOutbox(get_settings().database_url)
 
     @app.get("/admin/services")
-    async def admin_services(limit: int = 50) -> dict[str, Any]:
+    async def admin_services(
+        limit: int = 50, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         services = merged_services(state)
         return {
             "services": [service.model_dump() for service in services],
@@ -265,7 +267,9 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
         }
 
     @app.get("/admin/outbox")
-    async def admin_outbox(limit: int = 100) -> dict[str, Any]:
+    async def admin_outbox(
+        limit: int = 100, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         return {
             "summary": state.event_outbox.summary(),
             "pending": state.event_outbox.pending(limit=limit),
@@ -277,12 +281,19 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
         return await dispatch_outbox_cycle(state, limit=limit, dry_run=dry_run, reason="manual")
 
     @app.post("/admin/outbox/{event_id}/delivered")
-    async def mark_outbox_delivered(event_id: str) -> dict[str, Any]:
+    async def mark_outbox_delivered(
+        event_id: str, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         state.event_outbox.mark_delivered(event_id)
         return {"event_id": event_id, "status": "delivered", "summary": state.event_outbox.summary()}
 
     @app.post("/admin/outbox/{event_id}/failed")
-    async def mark_outbox_failed(event_id: str, error: str = "manual failure", retry: bool = True) -> dict[str, Any]:
+    async def mark_outbox_failed(
+        event_id: str,
+        error: str = "manual failure",
+        retry: bool = True,
+        _: None = Depends(require_admin),
+    ) -> dict[str, Any]:
         state.event_outbox.mark_failed(event_id, error=error, retry=retry)
         return {"event_id": event_id, "status": "retry" if retry else "dead_letter", "summary": state.event_outbox.summary()}
 

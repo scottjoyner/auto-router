@@ -1,0 +1,64 @@
+name: Optional Admin Registrar Security (Research)
+
+on:
+  push:
+    branches:
+      - "security/optional-admin-registrars-20261103"
+    paths:
+      - "src/auto_router/backlog_routes.py"
+      - "src/auto_router/cli_routes.py"
+      - "src/auto_router/live_model_routes.py"
+      - "src/auto_router/service_routes.py"
+      - "tests/test_optional_admin_auth_static.py"
+      - "tests/test_optional_admin_auth_runtime.py"
+      - ".github/workflows/optional-admin-registrars-research.yml"
+  pull_request:
+    paths:
+      - "src/auto_router/backlog_routes.py"
+      - "src/auto_router/cli_routes.py"
+      - "src/auto_router/live_model_routes.py"
+      - "src/auto_router/service_routes.py"
+      - "tests/test_optional_admin_auth_static.py"
+      - "tests/test_optional_admin_auth_runtime.py"
+      - ".github/workflows/optional-admin-registrars-research.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-synthetic-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project tests without live services
+        run: python -m pip install -e '.[dev]'
+      - name: Compile and correctness-lint touched paths
+        run: |
+          python -m py_compile \
+            src/auto_router/backlog_routes.py \
+            src/auto_router/cli_routes.py \
+            src/auto_router/live_model_routes.py \
+            src/auto_router/service_routes.py \
+            tests/test_optional_admin_auth_static.py \
+            tests/test_optional_admin_auth_runtime.py
+          ruff check --select F,I \
+            src/auto_router/backlog_routes.py \
+            src/auto_router/cli_routes.py \
+            src/auto_router/live_model_routes.py \
+            src/auto_router/service_routes.py \
+            tests/test_optional_admin_auth_static.py \
+            tests/test_optional_admin_auth_runtime.py
+      - name: Test optional route denial before handler and existing admin contract
+        run: |
+          python -m pytest -q \
+            tests/test_optional_admin_auth_static.py \
+            tests/test_optional_admin_auth_runtime.py \
+            tests/test_admin_cutover_readonly.py \
+            tests/test_effective_provider_security.py \
+            tests/test_backlog_routes.py \
+            tests/test_remote_admin_auth_readonly.py \
+            tests/test_ops_admin_auth_cutover.py
