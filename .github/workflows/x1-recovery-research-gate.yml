@@ -1,0 +1,42 @@
+name: x1 Recovery Research Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'research/x1_*.py'
+      - 'research/xdna_driver_staging_preflight.py'
+      - 'tests/test_x1_*.py'
+      - 'tests/test_xdna_driver_staging_preflight.py'
+      - 'research/X1_*.md'
+      - '.github/workflows/x1-recovery-research-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-recovery-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned lint tool
+        run: python -m pip install ruff==0.15.15
+      - name: Static syntax check
+        run: |
+          python -m py_compile research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py
+      - name: Ruff safety research lint
+        run: |
+          ruff check --config pyproject.toml research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py tests/test_x1_offline_imaging_preflight.py tests/test_xdna_driver_staging_preflight.py tests/test_x1_apt_repair_plan_audit.py tests/test_x1_offline_pkg_bundle_audit.py
+          ruff format --check --config pyproject.toml research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py tests/test_x1_offline_imaging_preflight.py tests/test_xdna_driver_staging_preflight.py tests/test_x1_apt_repair_plan_audit.py tests/test_x1_offline_pkg_bundle_audit.py
+      - name: Run 56 isolated offline negative and fail-closed tests
+        run: |
+          python -m unittest discover -s tests -p 'test_x1_*.py' -q
+          python -m unittest discover -s tests -p 'test_xdna_driver_staging_preflight.py' -q
+      - name: Verify no production access required
+        run: |
+          echo "Static tests only; no Fleet Commander, disk imaging, apt/dpkg install, model serving or deployment."
