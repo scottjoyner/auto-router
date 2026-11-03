@@ -5,15 +5,16 @@ This is NOT a model runner, NPU repair tool, route admission token, production
 health check, or cryptographic witness. It only characterizes a local model
 configuration and coarse error fingerprints from independently run experiments.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import stat
 import sys
+from pathlib import Path
 from typing import Any
 
 FORMAT = "ort_ryzenai_admission_shadow_v1"
@@ -21,14 +22,16 @@ UPSTREAM_SOURCE_SHA = "82a4438b88febf4dd1762506d6cd5f50c5231ee3"
 MAX_CONFIG_BYTES = 16_384
 PROVIDERS = frozenset({"RyzenAI", "CPU", "CUDA", "DML", "OpenVINO", "QNN"})
 ARCHITECTURES = frozenset({"qwen2", "lfm2", "lfm3"})
-ERROR_CODES = frozenset({
-    "NPU_PROVIDER_LIBRARY_NOT_FOUND",
-    "NPU_IOCTL_BAD_ADDRESS",
-    "CPU_INVALID_GRAPH",
-    "TIMEOUT",
-    "OTHER_FAILURE",
-    "NO_ATTEMPT",
-})
+ERROR_CODES = frozenset(
+    {
+        "NPU_PROVIDER_LIBRARY_NOT_FOUND",
+        "NPU_IOCTL_BAD_ADDRESS",
+        "CPU_INVALID_GRAPH",
+        "TIMEOUT",
+        "OTHER_FAILURE",
+        "NO_ATTEMPT",
+    }
+)
 
 
 class AdmissionShadowError(ValueError):
@@ -49,9 +52,13 @@ def parse_config(payload: bytes) -> dict[str, Any]:
     if type(payload) is not bytes or not (2 <= len(payload) <= MAX_CONFIG_BYTES):
         raise AdmissionShadowError("invalid config byte length")
     try:
-        cfg = json.loads(payload.decode("utf-8", "strict"), object_pairs_hook=_strict_pairs,
-                         parse_constant=lambda _: (_ for _ in ()).throw(AdmissionShadowError(
-                             "nonfinite JSON constant")))
+        cfg = json.loads(
+            payload.decode("utf-8", "strict"),
+            object_pairs_hook=_strict_pairs,
+            parse_constant=lambda _: (_ for _ in ()).throw(
+                AdmissionShadowError("nonfinite JSON constant")
+            ),
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AdmissionShadowError("invalid UTF-8 JSON") from exc
     if type(cfg) is not dict or type(cfg.get("model")) is not dict:
@@ -103,13 +110,19 @@ def parse_config(payload: bytes) -> dict[str, Any]:
 
 
 def safe_config_read(path: Path) -> bytes:
-    if not isinstance(path, Path) or not path.is_absolute() or path.name != "genai_config.json":
+    if (
+        not isinstance(path, Path)
+        or not path.is_absolute()
+        or path.name != "genai_config.json"
+    ):
         raise AdmissionShadowError("absolute genai_config.json required")
     if any(component.is_symlink() for component in (path, *path.parents)):
         raise AdmissionShadowError("symlink config directory or file")
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
-                     getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
     except OSError as exc:
         raise AdmissionShadowError("cannot read config") from exc
     try:
@@ -151,8 +164,11 @@ def classify_failure(error_text: Any, *, exit_code: int | None) -> str:
     return "OTHER_FAILURE"
 
 
-def device_hints(*, accel_device: Path = Path("/dev/accel/accel0"),
-                 driver: Path = Path("/sys/module/amdxdna")) -> dict:
+def device_hints(
+    *,
+    accel_device: Path = Path("/dev/accel/accel0"),
+    driver: Path = Path("/sys/module/amdxdna"),
+) -> dict:
     """Device presence is a *hint* only, not proof of a working runtime."""
     try:
         mode = accel_device.lstat().st_mode
@@ -163,52 +179,71 @@ def device_hints(*, accel_device: Path = Path("/dev/accel/accel0"),
         driver_present = driver.is_dir() and not driver.is_symlink()
     except OSError:
         driver_present = False
-    return {"amdxdna_module_present":driver_present,
-            "accel_character_device_present":char_present,
-            "npu_ioctl_functional":None}
+    return {
+        "amdxdna_module_present": driver_present,
+        "accel_character_device_present": char_present,
+        "npu_ioctl_functional": None,
+    }
 
 
-def summarize(config: bytes, *, failure: str = "NO_ATTEMPT",
-              hints: dict | None = None) -> dict:
+def summarize(
+    config: bytes, *, failure: str = "NO_ATTEMPT", hints: dict | None = None
+) -> dict:
     if failure not in ERROR_CODES or type(failure) is not str:
         raise AdmissionShadowError("invalid classified failure code")
-    report=parse_config(config)
-    report["observed_failure_class"]=failure
+    report = parse_config(config)
+    report["observed_failure_class"] = failure
     if hints is None:
-        hints={"amdxdna_module_present":False,
-               "accel_character_device_present":False,
-               "npu_ioctl_functional":None}
+        hints = {
+            "amdxdna_module_present": False,
+            "accel_character_device_present": False,
+            "npu_ioctl_functional": None,
+        }
     if type(hints) is not dict or set(hints) != {
-        "amdxdna_module_present","accel_character_device_present","npu_ioctl_functional"
+        "amdxdna_module_present",
+        "accel_character_device_present",
+        "npu_ioctl_functional",
     }:
         raise AdmissionShadowError("invalid device hints")
-    if (type(hints["amdxdna_module_present"]) is not bool or
-        type(hints["accel_character_device_present"]) is not bool or
-        hints["npu_ioctl_functional"] is not None):
+    if (
+        type(hints["amdxdna_module_present"]) is not bool
+        or type(hints["accel_character_device_present"]) is not bool
+        or hints["npu_ioctl_functional"] is not None
+    ):
         raise AdmissionShadowError("invalid device evidence")
     report.update(hints)
     return report
 
 
 def main(argv: list[str] | None = None) -> int:
-    cli=argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("--config",type=Path,required=True)
-    cli.add_argument("--allow-read",action="store_true")
-    cli.add_argument("--observed-failure",choices=sorted(ERROR_CODES),
-                     default="NO_ATTEMPT",help="operator-provided, UNATTESTED failure class")
-    args=cli.parse_args(argv)
+    cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument("--config", type=Path, required=True)
+    cli.add_argument("--allow-read", action="store_true")
+    cli.add_argument(
+        "--observed-failure",
+        choices=sorted(ERROR_CODES),
+        default="NO_ATTEMPT",
+        help="operator-provided, UNATTESTED failure class",
+    )
+    args = cli.parse_args(argv)
     if not args.allow_read:
-        print("source access refused; --allow-read required",file=sys.stderr)
+        print("source access refused; --allow-read required", file=sys.stderr)
         return 2
     try:
-        result=summarize(safe_config_read(args.config),
-                         failure=args.observed_failure,hints=device_hints())
-    except (AdmissionShadowError,OSError,TypeError,ValueError):
-        print("untrusted GenAI configuration refused; production unchanged",file=sys.stderr)
+        result = summarize(
+            safe_config_read(args.config),
+            failure=args.observed_failure,
+            hints=device_hints(),
+        )
+    except (AdmissionShadowError, OSError, TypeError, ValueError):
+        print(
+            "untrusted GenAI configuration refused; production unchanged",
+            file=sys.stderr,
+        )
         return 3
-    print(json.dumps(result,sort_keys=True,separators=(",",":"),ensure_ascii=True))
+    print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
     return 0
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     raise SystemExit(main())
