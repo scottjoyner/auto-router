@@ -42,15 +42,38 @@ def fixture(root: Path):
     return model, config, hashlib.sha256(raw).hexdigest()
 
 
+def inspect_fixture(path: Path, digest: str) -> dict:
+    return mod.inspect(
+        path,
+        expected_hash=digest,
+        expected_graph_hash=hashlib.sha256(b"x").hexdigest(),
+        expected_data_hash=hashlib.sha256(b"data").hexdigest(),
+    )
+
+
 class RecoveryGateTests(unittest.TestCase):
     def test_candidate_is_always_production_hold(self):
         with tempfile.TemporaryDirectory() as root:
             path, _, digest = fixture(Path(root))
-            result = mod.inspect(path, expected_hash=digest)
+            result = inspect_fixture(path, digest)
             self.assertEqual(result["production_gate"], "HOLD")
             self.assertFalse(result["production_routing_eligible"])
             self.assertIsNone(result["actual_generated_tokens"])
             self.assertNotIn("/virtual", str(result))
+
+    def test_model_graph_mutation_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            (path / "model.onnx").write_bytes(b"tampered")
+            with self.assertRaisesRegex(mod.ResearchGateError, "graph fingerprint"):
+                inspect_fixture(path, digest)
+
+    def test_external_weights_mutation_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            (path / "model.onnx.data").write_bytes(b"tampered")
+            with self.assertRaisesRegex(mod.ResearchGateError, "tensor fingerprint"):
+                inspect_fixture(path, digest)
 
     def test_altered_config_digest_refused(self):
         with tempfile.TemporaryDirectory() as root:
@@ -65,7 +88,7 @@ class RecoveryGateTests(unittest.TestCase):
             raw = json.dumps(cfg).encode()
             (path / "genai_config.json").write_bytes(raw)
             with self.assertRaises(mod.ResearchGateError):
-                mod.inspect(path, expected_hash=hashlib.sha256(raw).hexdigest())
+                inspect_fixture(path, hashlib.sha256(raw).hexdigest())
 
     def test_cpu_provider_denied(self):
         with tempfile.TemporaryDirectory() as root:
@@ -76,7 +99,7 @@ class RecoveryGateTests(unittest.TestCase):
             raw = json.dumps(cfg).encode()
             (path / "genai_config.json").write_bytes(raw)
             with self.assertRaises(mod.ResearchGateError):
-                mod.inspect(path, expected_hash=hashlib.sha256(raw).hexdigest())
+                inspect_fixture(path, hashlib.sha256(raw).hexdigest())
 
     def test_onnx_external_data_symlink_denied(self):
         with tempfile.TemporaryDirectory() as root:
@@ -84,7 +107,7 @@ class RecoveryGateTests(unittest.TestCase):
             (path / "model.onnx.data").unlink()
             (path / "model.onnx.data").symlink_to(path / "model.onnx")
             with self.assertRaises(mod.ResearchGateError):
-                mod.inspect(path, expected_hash=digest)
+                inspect_fixture(path, digest)
 
     def test_duplicate_json_key_denied(self):
         with tempfile.TemporaryDirectory() as root:
@@ -92,7 +115,7 @@ class RecoveryGateTests(unittest.TestCase):
             raw = b'{"model":{},"model":{}}'
             (path / "genai_config.json").write_bytes(raw)
             with self.assertRaises(mod.ResearchGateError):
-                mod.inspect(path, expected_hash=hashlib.sha256(raw).hexdigest())
+                inspect_fixture(path, hashlib.sha256(raw).hexdigest())
 
     def test_default_no_execution_needs_exact_known_hash(self):
         with tempfile.TemporaryDirectory() as root:
