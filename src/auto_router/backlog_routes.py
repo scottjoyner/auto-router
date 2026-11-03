@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from auto_router.assistx_tasks import AssistXTaskClient
 from auto_router.backlog_scheduler import (
@@ -11,8 +11,9 @@ from auto_router.backlog_scheduler import (
     dry_run_backlog_selection,
 )
 from auto_router.event_outbox import EventOutbox
-from auto_router.settings import get_settings
+from auto_router.security import require_admin
 from auto_router.service_routes import dispatch_outbox_cycle
+from auto_router.settings import get_settings
 
 
 def register_backlog_routes(app: FastAPI, state: Any) -> None:
@@ -25,6 +26,7 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
         source: str = "manual",
         limit: int = 25,
         queue: str = "backlog",
+        _: None = Depends(require_admin),
     ) -> dict[str, Any]:
         request = BacklogDryRunRequest.model_validate(payload)
         assistx_info: dict[str, Any] | None = None
@@ -61,6 +63,7 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
         limit: int = 25,
         queue: str = "backlog",
         dispatch_limit: int = 25,
+        _: None = Depends(require_admin),
     ) -> dict[str, Any]:
         request = BacklogDryRunRequest.model_validate(payload)
         assistx_info: dict[str, Any] | None = None
@@ -94,7 +97,7 @@ def register_backlog_routes(app: FastAPI, state: Any) -> None:
         }
 
     @app.get("/admin/backlog/assistx/config")
-    async def backlog_assistx_config() -> dict[str, Any]:
+    async def backlog_assistx_config(_: None = Depends(require_admin)) -> dict[str, Any]:
         settings = get_settings()
         return {
             "configured": bool(settings.assistx_tasks_url),

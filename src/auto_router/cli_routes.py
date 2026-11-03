@@ -3,10 +3,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from auto_router.cli_discovery import discover_cli_tools
 from auto_router.event_outbox import EventOutbox, OutboxEvent
+from auto_router.security import require_admin
 from auto_router.settings import get_settings
 
 
@@ -17,11 +18,13 @@ def register_cli_routes(app: FastAPI, state: Any) -> None:
         state.event_outbox = EventOutbox(get_settings().database_url)
 
     @app.get("/admin/agent-clis")
-    async def admin_agent_clis() -> dict[str, Any]:
+    async def admin_agent_clis(_: None = Depends(require_admin)) -> dict[str, Any]:
         return {"clis": state.cli_discovery}
 
     @app.post("/admin/agent-clis/discover")
-    async def discover_agent_clis(enqueue_events: bool = True) -> dict[str, Any]:
+    async def discover_agent_clis(
+        enqueue_events: bool = True, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         results = await discover_cli_tools()
         payloads = [result.to_dict() for result in results]
         state.cli_discovery = payloads

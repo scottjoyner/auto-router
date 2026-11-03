@@ -4,14 +4,15 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
-from auto_router.context import ContextService
 from auto_router.config import _project_live_models
+from auto_router.context import ContextService
 from auto_router.live_models import LiveModelCache
 from auto_router.model_registry import ModelRegistryStore
 from auto_router.models import ModelConfig, ProviderConfig
 from auto_router.providers import build_provider
+from auto_router.security import require_admin
 from auto_router.service_scanner import discover_tailnet_lmstudio_services, is_lmstudio_service
 from auto_router.settings import get_settings
 from auto_router.signal_registry import live_model_signals, signal_snapshot
@@ -25,7 +26,9 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
         hydrate_live_models_from_registry(state)
 
     @app.get("/admin/live-models")
-    async def admin_live_models(limit: int = 100) -> dict[str, Any]:
+    async def admin_live_models(
+        limit: int = 100, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         return {
             "providers": state.live_models.snapshot(),
             "registry_summary": state.model_registry.summary(),
@@ -36,7 +39,9 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
         }
 
     @app.post("/admin/live-models/refresh")
-    async def refresh_live_models(provider: str | None = None) -> dict[str, Any]:
+    async def refresh_live_models(
+        provider: str | None = None, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         await merge_discovered_lmstudio_providers(state, provider)
         providers = selected_refresh_providers(state, provider)
         if provider is None:
@@ -53,7 +58,9 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
         }
 
     @app.post("/admin/providers/probe")
-    async def probe_provider_models(provider: str | None = None) -> dict[str, Any]:
+    async def probe_provider_models(
+        provider: str | None = None, _: None = Depends(require_admin)
+    ) -> dict[str, Any]:
         await merge_discovered_lmstudio_providers(state, provider)
         providers = selected_probe_providers(state, provider)
         if provider is None:
