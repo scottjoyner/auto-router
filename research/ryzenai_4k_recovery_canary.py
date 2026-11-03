@@ -18,6 +18,12 @@ from pathlib import Path
 EXPECTED_4K_CONFIG_SHA256 = "5dec97a007abb3aab6cd4bd48df0c06ad217e4a2c872c0dcc72241019334f184"
 EXPECTED_ONNX_GRAPH_SHA256 = "14b6de9461b38c00898788da3efed93a3ea5aa8ef597a43cd409cea8de86cbbf"
 EXPECTED_ONNX_DATA_SHA256 = "8e3104b796839b77c57d59cc5cabce0b2bae189f74452c564bd2fb207686eee1"
+EXPECTED_PACKAGE_MANIFEST_SHA256 = (
+    "f6bbb31025aa55d7c36b72d4f7797296e93b41e28e62e89ea4ccbc81cadd5dcc"
+)
+EXPECTED_PACKAGE_FILE_COUNT = 215
+EXPECTED_PACKAGE_DIRECTORY_COUNT = 5
+EXPECTED_PACKAGE_BYTES = 1455523445
 MAX_CONFIG_BYTES = 16_384
 MAX_PACKAGE_BYTES = 6 * 1024**3
 MIN_AVAILABLE_KIB = 25_000_000
@@ -91,14 +97,84 @@ def _hash_regular_file(path: Path) -> str:
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
         )
         with os.fdopen(fd, "rb") as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
                 raise ResearchGateError("model file is not regular")
             digest = hashlib.sha256()
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
+            after = os.fstat(stream.fileno())
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise ResearchGateError("model file changed during verification")
             return digest.hexdigest()
     except OSError as exc:
         raise ResearchGateError("model file read failed") from exc
+
+
+def _package_manifest(model_dir: Path) -> tuple[str, int, int, int]:
+    """Content-address the entire fixed package, including metadata and control files.
+
+    Manifest v1: sorted relative POSIX paths, directory entries D\\0path\\0,
+    file entries F\\0path\\0size\\0raw-SHA256; SHA256 over their concatenation.
+    No URL, model import, route, or execution is involved.
+    """
+    manifest = hashlib.sha256()
+    file_count = 0
+    directory_count = 0
+    total_bytes = 0
+    for current, directories, files in os.walk(model_dir, followlinks=False):
+        base = Path(current)
+        directories.sort()
+        files.sort()
+        for name in directories:
+            path = base / name
+            if not stat.S_ISDIR(path.lstat().st_mode):
+                raise ResearchGateError("non-directory or symlink package entry")
+            rel = path.relative_to(model_dir).as_posix().encode("utf-8", "strict")
+            manifest.update(b"D\x00" + rel + b"\x00")
+            directory_count += 1
+            if directory_count > 64:
+                raise ResearchGateError("package directory-count limit exceeded")
+        for name in files:
+            path = base / name
+            before = path.lstat()
+            if not stat.S_ISREG(before.st_mode):
+                raise ResearchGateError("non-regular or symlink package entry")
+            file_count += 1
+            total_bytes += before.st_size
+            if file_count > 512 or total_bytes > MAX_PACKAGE_BYTES:
+                raise ResearchGateError("package resource limits exceeded")
+            digest = _hash_regular_file(path)
+            after = path.lstat()
+            if (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            ) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise ResearchGateError("package file changed during verification")
+            rel = path.relative_to(model_dir).as_posix().encode("utf-8", "strict")
+            manifest.update(
+                b"F\x00"
+                + rel
+                + b"\x00"
+                + str(before.st_size).encode()
+                + b"\x00"
+                + bytes.fromhex(digest)
+            )
+    if file_count == 0:
+        raise ResearchGateError("empty model package refused")
+    return manifest.hexdigest(), file_count, directory_count, total_bytes
 
 
 def inspect(
@@ -106,6 +182,7 @@ def inspect(
     expected_hash: str = EXPECTED_4K_CONFIG_SHA256,
     expected_graph_hash: str = EXPECTED_ONNX_GRAPH_SHA256,
     expected_data_hash: str = EXPECTED_ONNX_DATA_SHA256,
+    expected_manifest_hash: str = EXPECTED_PACKAGE_MANIFEST_SHA256,
 ) -> dict:
     if not model_dir.is_absolute() or any(
         component.is_symlink() for component in (model_dir, *model_dir.parents)
@@ -157,10 +234,22 @@ def inspect(
         raise ResearchGateError("ONNX graph fingerprint mismatch")
     if _hash_regular_file(model_dir / "model.onnx.data") != expected_data_hash:
         raise ResearchGateError("external tensor fingerprint mismatch")
+    manifest, count, directories, total = _package_manifest(model_dir)
+    if manifest != expected_manifest_hash:
+        raise ResearchGateError("full package manifest fingerprint mismatch")
+    if expected_manifest_hash == EXPECTED_PACKAGE_MANIFEST_SHA256 and (
+        count != EXPECTED_PACKAGE_FILE_COUNT
+        or directories != EXPECTED_PACKAGE_DIRECTORY_COUNT
+        or total != EXPECTED_PACKAGE_BYTES
+    ):
+        raise ResearchGateError("full package size/count mismatch")
     return {
         "model_config_sha256": hashlib.sha256(raw).hexdigest(),
         "onnx_graph_sha256": expected_graph_hash,
         "onnx_external_data_sha256": expected_data_hash,
+        "full_package_manifest_sha256": manifest,
+        "full_package_files_verified": count,
+        "full_package_directories_verified": directories,
         "model_architecture": "qwen2",
         "ryzenai_backend_declared": True,
         "candidate_correction": "remove only session_options.custom_ops_library",
@@ -193,20 +282,6 @@ def _check_host() -> None:
         raise ResearchGateError("NPU occupied or holder check uncertain")
 
 
-def _validate_package_tree(model_dir: Path) -> int:
-    size = 0
-    for current, dirs, files in os.walk(model_dir, followlinks=False):
-        for name in dirs + files:
-            path = Path(current) / name
-            if path.is_symlink():
-                raise ResearchGateError("model package symlink refused")
-            if path.is_file():
-                size += path.stat().st_size
-                if size > MAX_PACKAGE_BYTES:
-                    raise ResearchGateError("package exceeds research size bound")
-    return size
-
-
 def _venv_paths(venv: Path) -> tuple[Path, Path, list[str]]:
     if not venv.is_absolute() or venv.is_symlink():
         raise ResearchGateError("absolute runtime required")
@@ -233,7 +308,9 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
     if not 1 <= requested_tokens <= 16:
         raise ResearchGateError("synthetic output-token limit exceeded")
     _check_host()
-    package_bytes = _validate_package_tree(model_dir)
+    package_manifest, _files, _dirs, package_bytes = _package_manifest(model_dir)
+    if package_manifest != EXPECTED_PACKAGE_MANIFEST_SHA256:
+        raise ResearchGateError("source package manifest not approved")
     python, provider, library_dirs = _venv_paths(venv)
     with tempfile.TemporaryDirectory(prefix="ryzenai-4k-research-") as root:
         staging = Path(root)
@@ -241,6 +318,11 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
             raise ResearchGateError("insufficient scratch disk headroom")
         staged_model = staging / "model"
         shutil.copytree(model_dir, staged_model, symlinks=False)
+        staged_manifest, _staged_files, _staged_dirs, _staged_bytes = _package_manifest(
+            staged_model
+        )
+        if staged_manifest != EXPECTED_PACKAGE_MANIFEST_SHA256:
+            raise ResearchGateError("staged package manifest changed")
         if _hash_regular_file(staged_model / "model.onnx") != EXPECTED_ONNX_GRAPH_SHA256:
             raise ResearchGateError("staged ONNX graph identity drift")
         if _hash_regular_file(staged_model / "model.onnx.data") != EXPECTED_ONNX_DATA_SHA256:
