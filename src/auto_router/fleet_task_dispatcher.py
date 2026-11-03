@@ -242,8 +242,11 @@ def _openai_compatible_rows(payload: Any) -> list[dict[str, Any]]:
     In particular, an Ollama-style {"models": [{"model": "..."}]} response
     must never be interpreted as a loadable OpenAI model by _model_id.
     """
-    if type(payload) is not dict or "models" in payload:
+    if type(payload) is not dict:
         raise OpenAIModelSchemaError("incompatible model catalog structure")
+    # Some llama-server builds return BOTH canonical OpenAI data[] and a
+    # legacy models[] list. The latter is never authoritative for this
+    # endpoint. Validate and consume data[].id without relying on models[].
     if "object" in payload and payload["object"] != "list":
         raise OpenAIModelSchemaError("unexpected model catalog object")
     rows = payload.get("data")
@@ -378,6 +381,7 @@ def _probe_provider(
     native_success = False
     explicit_loaded_state = False
     compatibility_models: set[str] = set()
+    supplemental_catalog_warnings: list[str] = []
     deadline = time.monotonic() + timeout_seconds
 
     endpoints = (
@@ -409,6 +413,10 @@ def _probe_provider(
                     errors.append(f"{endpoint}: incompatible-model-schema")
                     endpoint_status[endpoint] = "incompatible-model-schema"
                     continue
+                if not native and isinstance(payload, dict) and "models" in payload:
+                    supplemental_catalog_warnings.append(
+                        "v1/models: supplemental legacy models ignored; canonical data used"
+                    )
                 latencies.append(elapsed)
                 successful_endpoint = True
                 endpoint_status[endpoint] = f"ok:{len(rows)}"
@@ -459,6 +467,7 @@ def _probe_provider(
         loaded_state_source = "compatibility-inferred"
 
     warnings = list(errors) if successful_endpoint else []
+    warnings.extend(supplemental_catalog_warnings)
     configured_set = set(configured_models)
     missing_configured = sorted(configured_set - observed_models)
     unconfigured = sorted(observed_models - configured_set)
