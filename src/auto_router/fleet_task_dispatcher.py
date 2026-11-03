@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Live LM Studio fleet discovery used by loadout rebuilding.
 
 Discovery is deliberately observation-only. The provider registry describes the
@@ -7,6 +5,8 @@ nodes that may be observed, while model inventory is accepted only from live
 runtime responses. Persisted reports are a diagnostic fallback when the registry
 file itself is absent; they never override a present registry.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -23,7 +23,6 @@ import httpx
 import yaml
 
 from .offline_guard import host_is_offline_allowed
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROVIDER_CONFIG = Path(
