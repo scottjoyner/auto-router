@@ -55,6 +55,27 @@ def test_native_loaded_instances_are_measured_not_advertised(monkeypatch):
                for w in node.warnings)
 
 
+def test_native_v0_completes_v1_catalog_as_observed_on_xwing(monkeypatch):
+    """A 16-row /api/v1 can be completed by a valid 17-row /api/v0."""
+    native_v1=[
+        {"key":"resident-language","loaded_instances":[{"id":"inst1","config":{}}]},
+        {"key":"resident-embed","loaded_instances":[{"id":"inst2","config":{}}]},
+    ]
+    native_v1 += [{"key":f"idle-{i}","loaded_instances":[]} for i in range(14)]
+    native_v0=[
+        {"id":row["key"],"state":"loaded" if row["loaded_instances"] else "not-loaded"}
+        for row in native_v1
+    ]
+    native_v0.append({"id":"extra-native-v0","state":"not-loaded"})
+    compat=[{"id":row["id"]} for row in native_v0]
+    node=_probe(monkeypatch,native_v1=native_v1,native_v0=native_v0,compat=compat)
+    assert node.online is True
+    assert node.inventory_complete is True
+    assert node.inventory_authoritative is True
+    assert node.loaded_models==["resident-embed","resident-language"]
+    assert len(node.all_models)==17
+
+
 def test_native_complete_consistent_inventory_can_be_authoritative(monkeypatch):
     native=[
         {"key":"resident","loaded_instances":[{"id":"inst1","config":{}}]},
