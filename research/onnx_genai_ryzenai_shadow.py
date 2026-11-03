@@ -103,9 +103,9 @@ def parse_config(payload: bytes) -> dict[str, Any]:
 
 
 def safe_config_read(path: Path) -> bytes:
-    if type(path) is not Path or not path.is_absolute() or path.name != "genai_config.json":
+    if not isinstance(path, Path) or not path.is_absolute() or path.name != "genai_config.json":
         raise AdmissionShadowError("absolute genai_config.json required")
-    if path.is_symlink() or path.parent.is_symlink():
+    if any(component.is_symlink() for component in (path, *path.parents)):
         raise AdmissionShadowError("symlink config directory or file")
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
