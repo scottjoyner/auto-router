@@ -22,7 +22,7 @@ MAX_CONFIG_BYTES = 16_384
 MAX_PACKAGE_BYTES = 6 * 1024**3
 MIN_AVAILABLE_KIB = 25_000_000
 DEVICE = Path("/dev/accel/accel0")
-CHILD = r'''
+CHILD = r"""
 import hashlib
 import json
 import os
@@ -65,7 +65,7 @@ result = {
     ).hexdigest(),
 }
 print("NPU_CANARY_JSON=" + json.dumps(result, sort_keys=True), flush=True)
-'''
+"""
 
 
 class ResearchGateError(ValueError):
@@ -91,7 +91,10 @@ def inspect(model_dir: Path, expected_hash: str = EXPECTED_4K_CONFIG_SHA256) -> 
         fd = os.open(config_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or not 2 <= info.st_size <= MAX_CONFIG_BYTES:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or not 2 <= info.st_size <= MAX_CONFIG_BYTES
+            ):
                 raise ResearchGateError("invalid bounded configuration")
             raw = os.read(fd, MAX_CONFIG_BYTES + 1)
         finally:
@@ -193,7 +196,11 @@ def _venv_paths(venv: Path) -> tuple[Path, Path, list[str]]:
         site / "onnxruntime/capi",
         site / "voe/lib",
     ]
-    if not python.exists() or not provider.is_file() or any(not d.is_dir() for d in paths):
+    if (
+        not python.exists()
+        or not provider.is_file()
+        or any(not d.is_dir() for d in paths)
+    ):
         raise ResearchGateError("RyzenAI library paths incomplete")
     return python, provider, [str(d) for d in paths]
 
@@ -232,12 +239,29 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
         )
         trace = staging / "npu_ioctl.trace"
         command = [
-            "nice", "-n", "15", "strace", "-qq", "-f", "-y",
-            "-e", "trace=ioctl", "-o", str(trace), str(python), "-c", CHILD,
+            "nice",
+            "-n",
+            "15",
+            "strace",
+            "-qq",
+            "-f",
+            "-y",
+            "-e",
+            "trace=ioctl",
+            "-o",
+            str(trace),
+            str(python),
+            "-c",
+            CHILD,
         ]
         proc = subprocess.Popen(
-            command, cwd=staging, env=env, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, start_new_session=True
+            command,
+            cwd=staging,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
         try:
             stdout, _stderr = proc.communicate(timeout=70)
@@ -248,7 +272,7 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
         if proc.returncode != 0:
             raise ResearchGateError("canary process failed")
         markers = [
-            line[len("NPU_CANARY_JSON="):]
+            line[len("NPU_CANARY_JSON=") :]
             for line in stdout.splitlines()
             if line.startswith("NPU_CANARY_JSON=")
         ]
@@ -295,14 +319,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ack-research-npu-execution", action="store_true")
     parser.add_argument("--tokens", type=int, default=4)
     args = parser.parse_args(argv)
-    if args.run_canary and (not args.ack_research_npu_execution or args.venv_dir is None):
-        parser.error("--run-canary requires --ack-research-npu-execution and --venv-dir")
+    if args.run_canary and (
+        not args.ack_research_npu_execution or args.venv_dir is None
+    ):
+        parser.error(
+            "--run-canary requires --ack-research-npu-execution and --venv-dir"
+        )
     try:
         report = inspect(args.model_dir)
         if args.run_canary:
             report.update(execute(args.model_dir, args.venv_dir, args.tokens))
-    except (ResearchGateError, OSError, ValueError, TypeError, subprocess.SubprocessError):
-        print("RyzenAI research preflight refused; production unchanged", file=sys.stderr)
+    except (
+        ResearchGateError,
+        OSError,
+        ValueError,
+        TypeError,
+        subprocess.SubprocessError,
+    ):
+        print(
+            "RyzenAI research preflight refused; production unchanged", file=sys.stderr
+        )
         return 3
     print(json.dumps(report, sort_keys=True))
     return 0
