@@ -117,9 +117,7 @@ def _host(base_url: str) -> str:
 def _validate_base_url(base_url: str, *, provider_name: str) -> None:
     parsed = urlsplit(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise DiscoveryConfigError(
-            f"provider {provider_name!r} has an invalid LM Studio base_url"
-        )
+        raise DiscoveryConfigError(f"provider {provider_name!r} has an invalid LM Studio base_url")
     if parsed.username or parsed.password:
         raise DiscoveryConfigError(
             f"provider {provider_name!r} must use api_token_env instead of URL credentials"
@@ -233,6 +231,46 @@ def _inventory_rows(payload: Any) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+class OpenAIModelSchemaError(ValueError):
+    """HTTP success returned a body that is not an OpenAI model catalog."""
+
+
+def _openai_compatible_rows(payload: Any) -> list[dict[str, Any]]:
+    """Accept only the OpenAI-style /v1/models catalog, not Ollama /api/tags.
+
+    The endpoint path and HTTP 200 alone do not establish an API contract.
+    In particular, an Ollama-style {"models": [{"model": "..."}]} response
+    must never be interpreted as a loadable OpenAI model by _model_id.
+    """
+    if type(payload) is not dict:
+        raise OpenAIModelSchemaError("incompatible model catalog structure")
+    # Some llama-server builds return BOTH canonical OpenAI data[] and a
+    # legacy models[] list. The latter is never authoritative for this
+    # endpoint. Validate and consume data[].id without relying on models[].
+    if "object" in payload and payload["object"] != "list":
+        raise OpenAIModelSchemaError("unexpected model catalog object")
+    rows = payload.get("data")
+    if type(rows) is not list or len(rows) > 4096:
+        raise OpenAIModelSchemaError("invalid OpenAI model data list")
+    seen: set[str] = set()
+    for row in rows:
+        if type(row) is not dict:
+            raise OpenAIModelSchemaError("invalid model record")
+        value = row.get("id")
+        if (
+            type(value) is not str
+            or not 1 <= len(value) <= 512
+            or value.strip() != value
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+            or value in seen
+        ):
+            raise OpenAIModelSchemaError("invalid or duplicated OpenAI model id")
+        if "object" in row and row["object"] != "model":
+            raise OpenAIModelSchemaError("unexpected model record type")
+        seen.add(value)
+    return rows
+
+
 def _has_loaded_state(row: dict[str, Any]) -> bool:
     return any(
         key in row
@@ -329,8 +367,7 @@ def _probe_provider(
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     configured_models = [str(value) for value in provider.get("configured_models") or []]
     aliases = {
-        str(alias): str(model)
-        for alias, model in dict(provider.get("model_aliases") or {}).items()
+        str(alias): str(model) for alias, model in dict(provider.get("model_aliases") or {}).items()
     }
 
     errors: list[str] = []
@@ -344,6 +381,7 @@ def _probe_provider(
     native_success = False
     explicit_loaded_state = False
     compatibility_models: set[str] = set()
+    supplemental_catalog_warnings: list[str] = []
     deadline = time.monotonic() + timeout_seconds
 
     endpoints = (
@@ -366,7 +404,19 @@ def _probe_provider(
                     headers,
                     timeout_seconds=remaining,
                 )
-                rows = _inventory_rows(payload)
+                try:
+                    rows = _inventory_rows(payload) if native else _openai_compatible_rows(payload)
+                except OpenAIModelSchemaError:
+                    # Reachable HTTP is not proof of an OpenAI model API.
+                    # Do not copy body text (which may contain secrets)
+                    # into logs or a routable model inventory.
+                    errors.append(f"{endpoint}: incompatible-model-schema")
+                    endpoint_status[endpoint] = "incompatible-model-schema"
+                    continue
+                if not native and isinstance(payload, dict) and "models" in payload:
+                    supplemental_catalog_warnings.append(
+                        "v1/models: supplemental legacy models ignored; canonical data used"
+                    )
                 latencies.append(elapsed)
                 successful_endpoint = True
                 endpoint_status[endpoint] = f"ok:{len(rows)}"
@@ -394,22 +444,20 @@ def _probe_provider(
                 endpoint_status[endpoint] = message.split(": ", 1)[-1]
 
     conflicting_models = {
-        key for key, measurements in native_evidence.items()
-        if len(measurements) != 1
+        key for key, measurements in native_evidence.items() if len(measurements) != 1
     }
     unverified_models = (
-        observed_models - native_evidence.keys()
-    ) | invalid_native_evidence | conflicting_models
+        (observed_models - native_evidence.keys()) | invalid_native_evidence | conflicting_models
+    )
     loaded_models = {
-        key for key, values in native_evidence.items()
+        key
+        for key, values in native_evidence.items()
         if values == {True} and key not in unverified_models
     }
     # The catalog is fully authoritative only when *every* observed model
     # has consistent native residency proof. OpenAI-compatible visibility
     # and a partial native list cannot attest the rest of the machine.
-    inventory_authoritative = bool(
-        native_success and observed_models and not unverified_models
-    )
+    inventory_authoritative = bool(native_success and observed_models and not unverified_models)
     loaded_state_source = "none"
     if explicit_loaded_state:
         loaded_state_source = "native"
@@ -419,6 +467,7 @@ def _probe_provider(
         loaded_state_source = "compatibility-inferred"
 
     warnings = list(errors) if successful_endpoint else []
+    warnings.extend(supplemental_catalog_warnings)
     configured_set = set(configured_models)
     missing_configured = sorted(configured_set - observed_models)
     unconfigured = sorted(observed_models - configured_set)
@@ -429,9 +478,7 @@ def _probe_provider(
     if unconfigured:
         warnings.append("observed models not configured for routing: " + ", ".join(unconfigured))
     if loaded_state_source == "compatibility-inferred":
-        warnings.append(
-            "OpenAI-compatible inventory cannot assert that a model is loaded"
-        )
+        warnings.append("OpenAI-compatible inventory cannot assert that a model is loaded")
     if unverified_models and native_success:
         warnings.append(
             f"native residency unknown or conflicting for {len(unverified_models)} model(s)"
@@ -469,10 +516,7 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
             continue
         historical_models = {
             str(model)
-            for model in (
-                list(row.get("all_models") or [])
-                + list(row.get("loaded_models") or [])
-            )
+            for model in (list(row.get("all_models") or []) + list(row.get("loaded_models") or []))
             if str(model)
         }
         nodes.append(
@@ -482,9 +526,7 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
                 online=bool(row.get("online")),
                 loaded_models=[],
                 all_models=sorted(historical_models),
-                configured_models=[
-                    str(model) for model in row.get("configured_models") or []
-                ],
+                configured_models=[str(model) for model in row.get("configured_models") or []],
                 model_aliases={
                     str(alias): str(model)
                     for alias, model in dict(row.get("model_aliases") or {}).items()
