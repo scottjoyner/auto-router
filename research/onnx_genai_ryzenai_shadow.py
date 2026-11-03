@@ -28,6 +28,10 @@ ERROR_CODES = frozenset(
         "NPU_IOCTL_BAD_ADDRESS",
         "CPU_INVALID_GRAPH",
         "TIMEOUT",
+        "PROCESS_KILLED_UNVERIFIED",
+        "PROCESS_SEGFAULT",
+        "NPU_PROVIDER_SEGFAULT",
+        "VITISAI_DEPENDENCY_MISSING",
         "OTHER_FAILURE",
         "NO_ATTEMPT",
     }
@@ -94,6 +98,8 @@ def parse_config(payload: bytes) -> dict[str, Any]:
         "configured_model_architecture": model_type,
         "configured_providers": sorted(providers),
         "ryzenai_declared": "RyzenAI" in providers,
+        "custom_ops_library_declared": "custom_ops_library" in session,
+        "vaip_config_declared": "vaip_config" in session,
         "upstream_current_tree_lists_lfm3": True,
         "installed_runtime_lfm3_executed": False,
         "model_file_load_verified": False,
@@ -159,8 +165,16 @@ def classify_failure(error_text: Any, *, exit_code: int | None) -> str:
         return "NPU_PROVIDER_LIBRARY_NOT_FOUND"
     if "invalid model" in message and "node" in message:
         return "CPU_INVALID_GRAPH"
-    if exit_code in (124, 137):
+    if exit_code == 139:
+        if "libonnxruntime_providers_ryzenai.so" in message:
+            return "NPU_PROVIDER_SEGFAULT"
+        return "PROCESS_SEGFAULT"
+    if "libpeano-lib.so" in message and "cannot open shared object file" in message:
+        return "VITISAI_DEPENDENCY_MISSING"
+    if exit_code == 124:
         return "TIMEOUT"
+    if exit_code == 137:
+        return "PROCESS_KILLED_UNVERIFIED"
     return "OTHER_FAILURE"
 
 
