@@ -38,13 +38,21 @@ def fixture(root: Path):
     return model, config, hashlib.sha256(raw).hexdigest()
 
 
-def inspect_fixture(path: Path, digest: str) -> dict:
+def inspect_fixture(path: Path, digest: str, *, expected_manifest: str | None = None) -> dict:
     return mod.inspect(
         path,
         expected_hash=digest,
         expected_graph_hash=hashlib.sha256(b"x").hexdigest(),
         expected_data_hash=hashlib.sha256(b"data").hexdigest(),
+        expected_manifest_hash=(
+            expected_manifest if expected_manifest is not None else FIXTURE_MANIFEST_SHA256
+        ),
     )
+
+
+with tempfile.TemporaryDirectory() as _fixture_root:
+    _fixture_path, _, _ = fixture(Path(_fixture_root))
+    FIXTURE_MANIFEST_SHA256 = mod._package_manifest(_fixture_path)[0]
 
 
 class RecoveryGateTests(unittest.TestCase):
@@ -70,6 +78,43 @@ class RecoveryGateTests(unittest.TestCase):
             (path / "model.onnx.data").write_bytes(b"tampered")
             with self.assertRaisesRegex(mod.ResearchGateError, "tensor fingerprint"):
                 inspect_fixture(path, digest)
+
+    def test_package_metadata_mutation_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            (path / "README.md").write_text("# Qwen_rai_1.8.0_npu_4K\nmodified")
+            with self.assertRaisesRegex(mod.ResearchGateError, "full package manifest"):
+                inspect_fixture(path, digest)
+
+    def test_opaque_compiled_file_mutation_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            (path / "opaque.ctrlpkt").write_bytes(b"malicious")
+            with self.assertRaisesRegex(mod.ResearchGateError, "full package manifest"):
+                inspect_fixture(path, digest)
+
+    def test_subdirectory_entry_mutation_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            (path / "extra").mkdir()
+            with self.assertRaisesRegex(mod.ResearchGateError, "full package manifest"):
+                inspect_fixture(path, digest)
+
+    def test_symlink_package_entry_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            (path / "extra.ctrlpkt").symlink_to(path / "model.onnx")
+            with self.assertRaisesRegex(mod.ResearchGateError, "symlink package entry"):
+                inspect_fixture(path, digest)
+
+    def test_manifest_is_order_independent(self):
+        with tempfile.TemporaryDirectory() as root:
+            path, _, digest = fixture(Path(root))
+            self.assertEqual(mod._package_manifest(path)[0], FIXTURE_MANIFEST_SHA256)
+            self.assertEqual(
+                inspect_fixture(path, digest)["full_package_manifest_sha256"],
+                FIXTURE_MANIFEST_SHA256,
+            )
 
     def test_altered_config_digest_refused(self):
         with tempfile.TemporaryDirectory() as root:
