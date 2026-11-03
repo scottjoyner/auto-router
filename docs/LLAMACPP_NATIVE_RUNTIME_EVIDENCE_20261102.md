@@ -21,8 +21,9 @@ for the native source-correlation proof.
 `scripts/probe_llamacpp_residency.py --url http://127.0.0.1:1236`
 requests only GET `/props` and GET `/v1/models` with a total JSON size cap,
 no inherited proxies, no redirects, and no credentials. The URL must be
-`localhost` or a numeric loopback/private/Tailnet address with an explicit
-port. Public DNS, URL credentials, queries and unexpected paths are rejected
+`localhost` or a numeric loopback/RFC1918/Tailnet address with an explicit
+port. Link-local addresses (including cloud metadata), public DNS, URL credentials,
+queries and unexpected paths are rejected
 *before* sending requests.
 
 A **runtime-residency candidate** requires all of the following in the same
