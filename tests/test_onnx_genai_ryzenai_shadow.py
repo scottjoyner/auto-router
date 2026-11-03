@@ -137,8 +137,10 @@ class AdmissionShadowTests(unittest.TestCase):
         for x in (None,True,23,"RyzenAI",{},[None],["RyzenAI"],[{"RyzenAI":None}],
                   [{"RyzenAI":{},"CPU":{}}], [{"RyzenAI":{}},{"RyzenAI":{}}], [{}],
                   [{"CPU":{}}]*9):
+            cfg=fixture()
+            cfg["model"]["decoder"]["session_options"]["provider_options"]=x
             with self.subTest(value=str(x)[:30]),self.assertRaises(shadow.AdmissionShadowError):
-                shadow.parse_config(payload(providers=x))
+                shadow.parse_config(json.dumps(cfg).encode())
 
     def test_two_distinct_providers_listed_deterministically(self):
         r=shadow.parse_config(payload(providers=[{"RyzenAI":{}},{"CPU":{}}]))
