@@ -38,8 +38,11 @@ performance or safe swap-on-host behavior.
 | Component | Observed |
 | --- | --- |
 | Kernel | `7.0.0-42-generic` |
-| Driver/module | `amdxdna` loaded |
-| Device | `/dev/accel/accel0` exists as character device |
+| Driver/module | `amdxdna` loaded, **in-tree kernel module** under `/lib/modules/7.0.0-42-generic/kernel/`, not DKMS |
+| NPU device | `/dev/accel/accel0` exists as character device; PCI vendor 0x1022, device 0x17f0, rev 0x10 |
+| XRT userspace | 2.25.37 (`xrt-base`, `xrt-npu` packages present) |
+| `xrt-smi examine` (read-only) | **Exit 0; device detected** as RyzenAI-npu4, architecture aie2p, topology 6x8 |
+| AMD NPU firmware | **1.1.2.64**, as reported by XRT |
 | AMD SDK and Python environment | Already installed; nothing downloaded |
 | `onnxruntime-genai-ryzenai` | `0.14.0`, import reports `0.14.0-dev` |
 | `onnxruntime-vitisai` | `1.27.0` |
@@ -76,6 +79,18 @@ No weights or service state were changed intentionally.
 a completed model generation. There are **no** valid
 time-to-first-token, decoding-throughput, task-quality or
 model-accuracy results.
+
+A follow-up read-only XRT probe ran after the failed model trials:
+with process-local `/opt/xilinx/xrt/setup.sh`, `xrt-smi examine`
+returned exit 0 and identified the NPU and firmware above.
+**The NPU is enumerated correctly; the model-specific BO ioctl
+still failed.** AMD's [Linux installation guide](https://ryzenai.docs.amd.com/en/latest/linux.html)
+uses `xrt-smi examine` as a driver installation check and requires
+compatible XRT, NPU drivers and runtime. Its [application
+compatibility notes](https://ryzenai.docs.amd.com/en/latest/app_development.html)
+explicitly call for APU-type and driver/EP checks before execution.
+These are discovery/compatibility checks, not a substitute for a
+real successful model generation.
 
 An `amdxdna` character device and world-accessible device
 node prove **only presence**, not a compatible firmware,
