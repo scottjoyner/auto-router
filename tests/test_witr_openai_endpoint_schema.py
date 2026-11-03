@@ -21,6 +21,11 @@ def _probe(monkeypatch, *, compatibility, native_v1=None, native_v0=None):
         if request.url.path == "/api/v0/models" and native_v0 is not None:
             return httpx.Response(200, json={"data": native_v0})
         if request.url.path == "/v1/models":
+            if compatibility is None:
+                # HTTPX's json=None omits the body; send JSON null explicitly.
+                return httpx.Response(
+                    200, content=b"null", headers={"Content-Type": "application/json"}
+                )
             return httpx.Response(200, json=compatibility)
         return httpx.Response(404)
 
