@@ -134,14 +134,10 @@ checkout or deployed services.
 - **91 PASSED, 4 SKIPPED, one existing
   StarletteDeprecationWarning**, local Py3.11
   virtualenv; AST parsing passed.
-- The new test file passes Ruff.
-  The touched original discovery module retains
-  preexisting `E402`/import ordering findings
-  because its module docstring sits *after*
-  `from __future__ import annotations`.
-  This PR deliberately avoids unrelated
-  whole-file formatting churn; hosted CI
-  is not yet confirmed.
+- **Ruff checks pass** for both touched Python files.
+  Only the preexisting module docstring and adjacent
+  blank-line placement were corrected; no unrelated
+  code was reformatted. Hosted CI is not yet confirmed.
 
 ## No-go and follow-up
 
