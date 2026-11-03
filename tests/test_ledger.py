@@ -1,4 +1,4 @@
-from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
+from auto_router.ledger import RuntimeSample, UsageLedger
 
 
 def test_usage_ledger_records_runtime_samples(tmp_path):
