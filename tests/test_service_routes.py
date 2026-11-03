@@ -8,7 +8,6 @@ from auto_router.service_routes import (
     apply_service_results_to_context,
     build_outbox_dispatch_status,
     build_outbox_pressure_status,
-    dispatch_outbox_batch,
     dispatch_outbox_cycle,
     enqueue_service_snapshot_events,
     service_summary,
@@ -167,3 +166,100 @@ def test_dispatch_outbox_cycle_updates_status(monkeypatch, tmp_path) -> None:
     assert status["last_result_count"] == 1
     assert status["interval_seconds"] == 5.0
     assert status["pending"] == 1
+
+
+def _scheduled_outbox_state(*, pending=60, retry=0, dead_letter=0,
+                            outcome="success", age=245, interval=300.0,
+                            next_in=55, enabled=True, dry_run=False):
+    # A fixed time source avoids sleeping or invoking a real dispatcher.
+    now = 1000.0
+    def live_summary():
+        return {"pending": pending, "retry": retry,
+                "dead_letter": dead_letter, "delivered": 9876,
+                "total": pending + retry + dead_letter + 9876}
+    return SimpleNamespace(
+        event_outbox=SimpleNamespace(summary=live_summary),
+        outbox_dispatch_status={
+            "configured": enabled, "enabled": enabled,
+            "last_outcome": outcome,
+            "last_dry_run": dry_run,
+            "last_completed_at": now - age,
+            "interval_seconds": interval,
+            "next_run_at": now + next_in,
+            # A historical summary must never override the live queue.
+            "last_summary": {"pending": 74, "retry": 15, "dead_letter": 4,
+                             "delivered": 9876},
+        },
+    )
+
+
+def test_expected_scheduled_event_batch_is_not_false_pressure(monkeypatch):
+    import auto_router.service_routes as routes
+    monkeypatch.setattr(routes.time, "time", lambda: 1000.0)
+    state = _scheduled_outbox_state(pending=60)
+    pressure = routes.build_outbox_pressure_status(state)
+    assert pressure["pressure_count_source"] == "live_outbox"
+    assert pressure["pending"] == 60
+    assert pressure["retry"] == 0
+    assert pressure["dead_letter"] == 0
+    assert pressure["scheduled_drain_expected"] is True
+    assert pressure["pressure_total"] == 60
+    assert pressure["level"] == "ok"
+    assert pressure["active"] is False
+    assert "not verified inference" in pressure["detail"]
+
+
+def test_zero_live_pending_never_resurrects_old_dispatch_summary(monkeypatch):
+    import auto_router.service_routes as routes
+    monkeypatch.setattr(routes.time, "time", lambda: 1000.0)
+    result = routes.build_outbox_pressure_status(_scheduled_outbox_state(pending=0))
+    assert result["pressure_count_source"] == "live_outbox"
+    assert result["pending"] == 0
+    assert result["retry"] == 0
+    assert result["dead_letter"] == 0
+    assert result["pressure_total"] == 0
+    assert result["level"] == "ok"
+    assert result["scheduled_drain_expected"] is False
+
+
+def test_overdue_failed_dry_run_or_disabled_schedule_does_not_suppress_alert(monkeypatch):
+    import auto_router.service_routes as routes
+    monkeypatch.setattr(routes.time, "time", lambda: 1000.0)
+    cases = [
+        {"age": 345, "next_in": -45},
+        {"outcome": "failed"},
+        {"dry_run": True},
+        {"enabled": False},
+        {"retry": 1},
+        {"dead_letter": 1},
+        {"pending": 150},
+    ]
+    for changes in cases:
+        state = _scheduled_outbox_state(**changes)
+        result = routes.build_outbox_pressure_status(state)
+        assert result["scheduled_drain_expected"] is False, changes
+        assert result["level"] == "warning", changes
+        assert result["active"] is True, changes
+
+
+def test_large_sustained_backlog_remains_critical_even_with_successful_prior_drain(monkeypatch):
+    import auto_router.service_routes as routes
+    monkeypatch.setattr(routes.time, "time", lambda: 1000.0)
+    result = routes.build_outbox_pressure_status(_scheduled_outbox_state(pending=201))
+    assert result["scheduled_drain_expected"] is False
+    assert result["level"] == "critical"
+    assert result["pressure_total"] == 201
+
+
+def test_historical_status_only_fallback_is_labeled_and_not_treated_as_live_drain(monkeypatch):
+    import auto_router.service_routes as routes
+    monkeypatch.setattr(routes.time, "time", lambda: 1000.0)
+    live = _scheduled_outbox_state(pending=50)
+    state = SimpleNamespace(outbox_dispatch_status=live.outbox_dispatch_status)
+    result = routes.build_outbox_pressure_status(state)
+    assert result["pressure_count_source"] == "last_dispatch_snapshot"
+    assert result["pending"] == 74
+    assert result["retry"] == 15
+    assert result["dead_letter"] == 4
+    assert result["scheduled_drain_expected"] is False
+    assert result["level"] == "warning"
