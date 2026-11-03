@@ -7,6 +7,9 @@ on:
       - 'src/auto_router/fleet_task_dispatcher.py'
       - 'src/auto_router/discovery_enabled_policy.py'
       - 'scripts/discover_fleet_models.py'
+      - 'src/auto_router/llamacpp_residency_evidence.py'
+      - 'scripts/probe_llamacpp_residency.py'
+      - 'tests/test_llamacpp_residency_evidence.py'
       - 'tests/test_fleet_live_discovery.py'
       - 'tests/test_disabled_provider_discovery.py'
       - 'config/providers.yaml'
@@ -32,7 +35,9 @@ jobs:
             src/auto_router/__init__.py \
             src/auto_router/fleet_task_dispatcher.py \
             src/auto_router/discovery_enabled_policy.py \
-            scripts/discover_fleet_models.py
+            scripts/discover_fleet_models.py \
+            src/auto_router/llamacpp_residency_evidence.py \
+            scripts/probe_llamacpp_residency.py
       - name: Lint discovery paths
         run: |
           ruff check --ignore E402,E501,I001 \
@@ -41,9 +46,14 @@ jobs:
             src/auto_router/discovery_enabled_policy.py \
             scripts/discover_fleet_models.py \
             tests/test_fleet_live_discovery.py \
-            tests/test_disabled_provider_discovery.py
+            tests/test_disabled_provider_discovery.py \
+            src/auto_router/llamacpp_residency_evidence.py \
+            scripts/probe_llamacpp_residency.py \
+            tests/test_llamacpp_residency_evidence.py
       - name: Test discovery failure modes
         run: |
           pytest -q \
             tests/test_fleet_live_discovery.py \
-            tests/test_disabled_provider_discovery.py
+            tests/test_disabled_provider_discovery.py \
+            tests/test_llamacpp_residency_evidence.py \
+            tests/test_discover_fleet_models_identity.py
