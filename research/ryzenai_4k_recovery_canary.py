@@ -18,6 +18,12 @@ from pathlib import Path
 EXPECTED_4K_CONFIG_SHA256 = (
     "5dec97a007abb3aab6cd4bd48df0c06ad217e4a2c872c0dcc72241019334f184"
 )
+EXPECTED_ONNX_GRAPH_SHA256 = (
+    "14b6de9461b38c00898788da3efed93a3ea5aa8ef597a43cd409cea8de86cbbf"
+)
+EXPECTED_ONNX_DATA_SHA256 = (
+    "8e3104b796839b77c57d59cc5cabce0b2bae189f74452c564bd2fb207686eee1"
+)
 MAX_CONFIG_BYTES = 16_384
 MAX_PACKAGE_BYTES = 6 * 1024**3
 MIN_AVAILABLE_KIB = 25_000_000
@@ -81,8 +87,35 @@ def _strict_pairs(items: list[tuple[str, object]]) -> dict:
     return result
 
 
-def inspect(model_dir: Path, expected_hash: str = EXPECTED_4K_CONFIG_SHA256) -> dict:
-    if not model_dir.is_absolute() or model_dir.is_symlink():
+def _hash_regular_file(path: Path) -> str:
+    """Bounded-memory hash of a non-symlink regular file; refuse unsafe types."""
+    if path.is_symlink():
+        raise ResearchGateError("model data symlink refused")
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+        with os.fdopen(fd, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ResearchGateError("model file is not regular")
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except OSError as exc:
+        raise ResearchGateError("model file read failed") from exc
+
+
+def inspect(
+    model_dir: Path,
+    expected_hash: str = EXPECTED_4K_CONFIG_SHA256,
+    expected_graph_hash: str = EXPECTED_ONNX_GRAPH_SHA256,
+    expected_data_hash: str = EXPECTED_ONNX_DATA_SHA256,
+) -> dict:
+    if not model_dir.is_absolute() or any(
+        component.is_symlink() for component in (model_dir, *model_dir.parents)
+    ):
         raise ResearchGateError("canonical absolute model directory required")
     config_path = model_dir / "genai_config.json"
     if config_path.is_symlink():
@@ -129,8 +162,14 @@ def inspect(model_dir: Path, expected_hash: str = EXPECTED_4K_CONFIG_SHA256) -> 
             raise ResearchGateError("required regular model file missing")
     if "npu_4K" not in (model_dir / "README.md").read_text()[:4096]:
         raise ResearchGateError("model package variant not confirmed")
+    if _hash_regular_file(model_dir / "model.onnx") != expected_graph_hash:
+        raise ResearchGateError("ONNX graph fingerprint mismatch")
+    if _hash_regular_file(model_dir / "model.onnx.data") != expected_data_hash:
+        raise ResearchGateError("external tensor fingerprint mismatch")
     return {
         "model_config_sha256": hashlib.sha256(raw).hexdigest(),
+        "onnx_graph_sha256": expected_graph_hash,
+        "onnx_external_data_sha256": expected_data_hash,
         "model_architecture": "qwen2",
         "ryzenai_backend_declared": True,
         "candidate_correction": "remove only session_options.custom_ops_library",
@@ -217,6 +256,16 @@ def execute(model_dir: Path, venv: Path, requested_tokens: int) -> dict:
             raise ResearchGateError("insufficient scratch disk headroom")
         staged_model = staging / "model"
         shutil.copytree(model_dir, staged_model, symlinks=False)
+        if (
+            _hash_regular_file(staged_model / "model.onnx")
+            != EXPECTED_ONNX_GRAPH_SHA256
+        ):
+            raise ResearchGateError("staged ONNX graph identity drift")
+        if (
+            _hash_regular_file(staged_model / "model.onnx.data")
+            != EXPECTED_ONNX_DATA_SHA256
+        ):
+            raise ResearchGateError("staged external tensor identity drift")
         config_path = staged_model / "genai_config.json"
         config = json.loads(config_path.read_text(), object_pairs_hook=_strict_pairs)
         config["model"]["decoder"]["session_options"].pop("custom_ops_library")
