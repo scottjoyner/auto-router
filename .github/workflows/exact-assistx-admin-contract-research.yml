@@ -1,0 +1,44 @@
+name: Exact AssistX Router Admin Contract (Synthetic)
+on:
+  pull_request:
+    paths:
+      - tests/test_cross_repo_assistx_admin_contract.py
+      - .github/workflows/exact-assistx-admin-contract-research.yml
+      - src/auto_router/effective_provider_snapshot.py
+      - src/auto_router/security.py
+      - src/auto_router/main.py
+  push:
+    branches:
+      - research/cross-repo-router-assistx-auth-contract-20261103
+    paths:
+      - tests/test_cross_repo_assistx_admin_contract.py
+      - .github/workflows/exact-assistx-admin-contract-research.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-synthetic-asgi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: scottjoyner/auto-assist
+          ref: de805215fa8fdf801fe8bfea42e0dee24fa70e33
+          path: assistx_exact
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install router test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Compile and source lint
+        run: |
+          python -m py_compile tests/test_cross_repo_assistx_admin_contract.py
+          ruff check --select F,I tests/test_cross_repo_assistx_admin_contract.py
+      - name: Test exact consumer source with real synthetic router ASGI
+        env:
+          ASSISTX_CLIENT_EXACT: assistx_exact/src/assistx/router_provider_inventory.py
+        run: python -m pytest -q tests/test_cross_repo_assistx_admin_contract.py
