@@ -16,9 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SOURCE = (
-    Path(__file__).resolve().parents[1] / "research" / "onnx_genai_ryzenai_shadow.py"
-)
+SOURCE = Path(__file__).resolve().parents[1] / "research" / "onnx_genai_ryzenai_shadow.py"
 SPEC = importlib.util.spec_from_file_location("genai_ryzenai_shadow_test", SOURCE)
 shadow = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = shadow
@@ -47,9 +45,7 @@ def payload(**kwargs):
 
 class AdmissionShadowTests(unittest.TestCase):
     def test_upstream_exact_pin(self):
-        self.assertEqual(
-            shadow.UPSTREAM_SOURCE_SHA, "82a4438b88febf4dd1762506d6cd5f50c5231ee3"
-        )
+        self.assertEqual(shadow.UPSTREAM_SOURCE_SHA, "82a4438b88febf4dd1762506d6cd5f50c5231ee3")
 
     def test_qwen2_ryzen_provider_claim_is_not_generation_proof(self):
         r = shadow.parse_config(payload())
@@ -220,13 +216,8 @@ class AdmissionShadowTests(unittest.TestCase):
         self.assertNotIn("/private", r)
 
     def test_npu_ioctl_bad_address_classified(self):
-        err = (
-            "RuntimeError: DRM_IOCTL_AMDXDNA_CREATE_BO IOCTL failed "
-            "(err=-14): Bad address"
-        )
-        self.assertEqual(
-            shadow.classify_failure(err, exit_code=1), "NPU_IOCTL_BAD_ADDRESS"
-        )
+        err = "RuntimeError: DRM_IOCTL_AMDXDNA_CREATE_BO IOCTL failed (err=-14): Bad address"
+        self.assertEqual(shadow.classify_failure(err, exit_code=1), "NPU_IOCTL_BAD_ADDRESS")
 
     def test_cpu_invalid_graph_classified(self):
         self.assertEqual(
@@ -240,25 +231,17 @@ class AdmissionShadowTests(unittest.TestCase):
         self.assertEqual(shadow.classify_failure("", exit_code=124), "TIMEOUT")
 
     def test_sigkill_exit_is_not_unverified_timeout(self):
-        self.assertEqual(
-            shadow.classify_failure("", exit_code=137), "PROCESS_KILLED_UNVERIFIED"
-        )
+        self.assertEqual(shadow.classify_failure("", exit_code=137), "PROCESS_KILLED_UNVERIFIED")
 
     def test_ryzenai_provider_crash_has_distinct_sanitized_class(self):
-        message = (
-            "python segfault at 410 in /private/secret/"
-            "libonnxruntime_providers_ryzenai.so"
-        )
-        self.assertEqual(
-            shadow.classify_failure(message, exit_code=139), "NPU_PROVIDER_SEGFAULT"
-        )
+        message = "python segfault at 410 in /private/secret/libonnxruntime_providers_ryzenai.so"
+        self.assertEqual(shadow.classify_failure(message, exit_code=139), "NPU_PROVIDER_SEGFAULT")
         self.assertNotIn("/private", shadow.classify_failure(message, exit_code=139))
         self.assertEqual(shadow.classify_failure("", exit_code=139), "PROCESS_SEGFAULT")
 
     def test_missing_peano_dependency_is_not_compute_failure(self):
         message = (
-            "libpeano-lib.so.21.0git: cannot open shared object file: "
-            "No such file or directory"
+            "libpeano-lib.so.21.0git: cannot open shared object file: No such file or directory"
         )
         self.assertEqual(
             shadow.classify_failure(message, exit_code=1),
