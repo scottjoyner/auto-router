@@ -250,17 +250,45 @@ def _has_loaded_state(row: dict[str, Any]) -> bool:
     )
 
 
-def _loaded_from_row(row: dict[str, Any]) -> bool:
-    state = str(row.get("state") or row.get("status") or "").lower()
-    if state in {"loaded", "ready", "running", "active"}:
-        return True
-    if state in {"not-loaded", "not_loaded", "unloaded", "stopped"}:
-        return False
+def _loaded_from_row(row: dict[str, Any]) -> bool | None:
+    """Strict native LM Studio residency: measured true/false or unknown.
+
+    A model being listed is not proof that it is loaded. Values such as
+    `loaded: "false"`, unknown states, malformed instances, and contradictory
+    native fields are *unknown*, never coerced to False or to truthy True.
+    """
+    observed: list[bool] = []
+    for key in ("state", "status"):
+        if key not in row:
+            continue
+        value = row[key]
+        if type(value) is not str:
+            return None
+        state = value.strip().lower()
+        if state in {"loaded", "ready", "running", "active", "in_use", "in-use"}:
+            observed.append(True)
+        elif state in {"not-loaded", "not_loaded", "unloaded", "stopped"}:
+            observed.append(False)
+        else:
+            return None
     for key in ("loaded", "is_loaded", "isLoaded"):
-        if key in row:
-            return bool(row.get(key))
-    instances = row.get("loaded_instances") or row.get("loadedInstances") or row.get("instances")
-    return isinstance(instances, list) and bool(instances)
+        if key not in row:
+            continue
+        if type(row[key]) is not bool:
+            return None
+        observed.append(row[key])
+    for key in ("loaded_instances", "loadedInstances", "instances"):
+        if key not in row:
+            continue
+        instances = row[key]
+        if type(instances) is not list or any(
+            type(instance) is not dict or not instance for instance in instances
+        ):
+            return None
+        observed.append(bool(instances))
+    if not observed or any(state != observed[0] for state in observed[1:]):
+        return None
+    return observed[0]
 
 
 def _request_json(
@@ -309,6 +337,8 @@ def _probe_provider(
     errors: list[str] = []
     observed_models: set[str] = set()
     loaded_models: set[str] = set()
+    native_evidence: dict[str, set[bool]] = {}
+    invalid_native_evidence: set[str] = set()
     latencies: list[float] = []
     endpoint_status: dict[str, str] = {}
     successful_endpoint = False
@@ -349,10 +379,14 @@ def _probe_provider(
                         model_id = _model_id(row)
                         if not model_id:
                             continue
-                        if _has_loaded_state(row):
-                            explicit_loaded_state = True
-                            if _loaded_from_row(row):
-                                loaded_models.add(model_id)
+                        if not _has_loaded_state(row):
+                            continue  # another native version may provide residency
+                        measured = _loaded_from_row(row)
+                        if measured is None:
+                            invalid_native_evidence.add(model_id)
+                            continue
+                        explicit_loaded_state = True
+                        native_evidence.setdefault(model_id, set()).add(measured)
                 else:
                     compatibility_models.update(model_ids)
             except Exception as exc:
@@ -360,6 +394,23 @@ def _probe_provider(
                 errors.append(message)
                 endpoint_status[endpoint] = message.split(": ", 1)[-1]
 
+    conflicting_models = {
+        key for key, measurements in native_evidence.items()
+        if len(measurements) != 1
+    }
+    unverified_models = (
+        observed_models - native_evidence.keys()
+    ) | invalid_native_evidence | conflicting_models
+    loaded_models = {
+        key for key, values in native_evidence.items()
+        if values == {True} and key not in unverified_models
+    }
+    # The catalog is fully authoritative only when *every* observed model
+    # has consistent native residency proof. OpenAI-compatible visibility
+    # and a partial native list cannot attest the rest of the machine.
+    inventory_authoritative = bool(
+        native_success and observed_models and not unverified_models
+    )
     loaded_state_source = "none"
     if explicit_loaded_state:
         loaded_state_source = "native"
@@ -382,6 +433,10 @@ def _probe_provider(
         warnings.append(
             "OpenAI-compatible inventory cannot assert that a model is loaded"
         )
+    if unverified_models and native_success:
+        warnings.append(
+            f"native residency unknown or conflicting for {len(unverified_models)} model(s)"
+        )
 
     return NodeInfo(
         name=str(provider["node_id"]),
@@ -399,7 +454,7 @@ def _probe_provider(
         provider_name=str(provider.get("name") or ""),
         discovery_source="live",
         inventory_complete=native_success,
-        inventory_authoritative=native_success and explicit_loaded_state,
+        inventory_authoritative=inventory_authoritative,
         loaded_state_source=loaded_state_source,
         observed_at=datetime.now(UTC).isoformat(),
     )
