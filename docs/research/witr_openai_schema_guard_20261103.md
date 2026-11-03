@@ -1,161 +1,170 @@
-# Starred witr audit: distinguish a live port from a compatible inference model catalog
+# Starred witr review: canonical OpenAI catalog precedence for mixed-schema servers
 
-**2026-11-03 · read-only fleet probe · production NO-GO**
+**2026-11-03 · scoped read-only fleet audit · draft / production HOLD**
 
-## Candidate reviewed
+## Why inspect witr
 
-The full public star list under `scottjoyner` remained **1,068 repositories**
-(10 full pages + 68 on page 11). The most actionable new operational tool
-was [pranshuparmar/witr](https://github.com/pranshuparmar/witr), an
-Apache-2.0 CLI for tracing which process, ancestor or systemd scope owns a
-listener. It was evaluated at upstream source commit
-`9e54a0507a4b3025fe8c3ecb329c7cb8da627995` and public release
-**v0.3.4**, binary SHA-256
+The public starred inventory remained **1,068** repos (pages 1–10 each 100,
+page 11 68). Evaluated [pranshuparmar/witr](https://github.com/pranshuparmar/witr)
+(Apache-2.0), an on-demand process/port provenance CLI, source commit
+`9e54a0507a4b3025fe8c3ecb329c7cb8da627995`, v0.3.4 Linux amd64
+binary SHA-256
 `d99098c61002f9b8a5337977d527dbe8ee29453f2a62c531038ea2749ea738eb`,
-matching GitHub's release checksum. This digest is a publisher-hosted
-checksum, **not an independent source-build or binary signature**.
+matching GitHub release metadata. A release checksum is **not** an
+independent publisher signature or reproducible-build attestation.
 
-The verified executable was temporarily copied over **already authorized,
-host-key-checked SSH** to `xwing` and `joyner`. It was run without root,
-without environment-variable or command-line argument disclosure, and
-removed by each remote shell's exit trap. No packages, systemd units,
-listeners, model endpoints or firewall rules were changed.
+The binary was copied transiently to `xwing` and `joyner` with pre-existing,
+host-key-checked SSH, used without privileged access, without printing
+process command lines or environment, then removed by a shell trap.
+Cross-checks used only `ss`, `ps` and `/proc/PID/exe`.
+No agent was installed, no services were restarted, and no
+network listeners or provider settings were changed.
 
-## Material finding: port ownership plus response schema
+## Physical evidence and corrected schema finding
 
-Read-only `witr --port ... --json` was reduced to process ID, source
-manager/type and warning count. Witr identified the xwing port 1234
-listener under a Chromium desktop scope, but its returned process
-`Exe` field was empty in this context. Cross-checking `ss -ltnp`,
-`ps -p` and `/proc/PID/exe` established that the **actual listening
-process was `lm-studio`**, PID 885908 at time of inspection, listening
-on `0.0.0.0:1234`.
+| Node | Listener evidence | Catalog evidence |
+| --- | --- | --- |
+| xwing | `ss` + `/proc` identify `lm-studio` PID 885908 bound to `0.0.0.0:1234` at inspection | Native LM Studio v1 16 records, native v0 17; `/v1/models` contains 17 canonical OpenAI `data[].id` records; **2 native-loaded models** |
+| Joyner | `ss` identifies a **loopback** listener `127.0.0.1:1234` owned by `llama-server` PID 1400803; the LAN and tailnet bindings' owners were **not independently established** by nonroot inspection | Native LM Studio v1/v0 both 404. `/v1/models` and `/models` return **both** legacy `models` and canonical OpenAI `data` lists, each containing one corresponding model |
 
-On Joyner, **witr missed the port owner**; `ss` revealed more than one
-binding at port 1234, including loopback, LAN and tailnet addresses.
-The loopback listener's PID 1400803 was actually
-**`llama-server`** at inspection. These PIDs are volatile and should
-not be used as stable identities or hardcoded automation references.
-A non-root `witr` negative result is **not proof of an absent process**.
+The model `id` in Joyner's `data[0]` is a nonempty
+string with `object="model"`. Its value equals
+the legacy `models[0].model` and `models[0].name`
+in the inspected response. These identities were
+**compared locally and not copied into this report**.
 
-Read-only HTTP GET responses on the hosts:
+Joyner also answered GET `/health` with
+`{"status":"ok"}`; `/props` responded, advertised a
+nonempty chat template, and `is_sleeping=false`.
+**Health and catalog compatibility are not generation tests**,
+do not prove auth/tool calling, and do not constitute a
+signed receipt of token usage or route admission.
 
-| Node | Native `/api/v1/models` | Native `/api/v0/models` | `/v1/models` | Actual semantic meaning |
-| --- | --- | --- | --- | --- |
-| xwing | 200, 16 records | 200, 17 records | 200, 17 OpenAI-style `data` records carrying `id` | LM Studio: two native-measured resident instances, remaining IDs just catalog visibility |
-| Joyner | 404 | 404 | 200, one `models` record with `name`, `model`, `digest`, `size`, `type`; **no `data[].id`** | HTTP reachable but **not** a verified OpenAI-compatible model catalog |
+The first diagnosis in this investigation was overly
+restrictive: the old Auto-Router parser chose `models`
+before `data`, so an initial inspection showed
+an Ollama-shaped first record even though a valid
+OpenAI `data` list was present. **The correct
+fix is to prefer the canonical `data[].id`
+while ignoring supplemental legacy `models`,
+not to reject this dual-schema response.**
 
-The third response is **Ollama-shaped**, even though `ss`
-identifies the owning process as `llama-server`. It is **not**
-a claim that the running process is Ollama, and it is not proof
-that the server cannot generate text through some other endpoint.
+`witr --port 1234` identified xwing's process
+ancestry under a desktop systemd scope, but
+missed Joyner's port owner; Joyner has several
+same-number bind addresses. The exact reason
+for witr's miss is unproven. Negative witr
+output is **not evidence of absent service**;
+independent `ss` cross-checks are required.
+PIDs are volatile, not stable provenance IDs.
 
-## Concrete Auto-Router bug and narrow fix
+## Auto-Router correction
 
-Auto-Router's existing
+The existing discovery code
 `src/auto_router/fleet_task_dispatcher.py`
-used the same permissive `_inventory_rows()` helper for
-LM Studio native APIs and the **OpenAI** `/v1/models` API.
-It accepted `models` as a top-level key and `model` as a
-fallback model identifier. This caused Joyner's
-`{"models":[{"model":"..."}]}` to be reported as one
-OpenAI-compatible advertised model, despite lacking
-an OpenAI `data[].id` record.
+used `_inventory_rows()` for *both* native
+LM Studio endpoints and `/v1/models`,
+prioritizing `models` over `data` and
+accepting `row.model` as a fallback ID.
+That selected legacy schema instead of
+canonical OpenAI `data[].id`, and could
+promote a **different legacy model identity**
+if the two fields disagreed.
 
-**This branch is stacked on the verified, still-draft**
-[Auto-Router PR #115](https://github.com/scottjoyner/auto-router/pull/115),
+This research branch is **stacked on**
+[PR #115](https://github.com/scottjoyner/auto-router/pull/115),
 base SHA
 `4a61e3a1fab6c8fc255898aa66d16e2206969d98`.
-It retains PR #115's strict native residency proof.
-No production state or live provider config is changed.
+It does **not** alter native residency rules or
+production route configuration.
 
-Added `_openai_compatible_rows()` for the compatible
-endpoint **only**. It requires a JSON object with
-`data` as a list, containing only dictionaries whose
-`id` values are nonempty, bounded, control-free,
-unique **strings**. Optional `object` markers must
-be `list` (outer) / `model` (row); their
-absence remains permitted for compliant
-compatible implementations. It rejects mixed
-`data`+`models` top-level schemas, model ID
-in `name` or `model` only, invalid types,
-duplicate IDs, control chars, whitespace and
-oversized catalogs.
+The new `_openai_compatible_rows()`
+is used for `/v1/models` **only**.
+It requires JSON `data` to be a list of
+dictionaries with nonempty, bounded, unique,
+control-free string `id` values. Optional
+`object` markers, when present, must be
+`list` (outer) and `model` (entry).
+Invalid IDs or missing/invalid `data`
+cause a sanitized
+`v1/models: incompatible-model-schema`
+diagnostic; no untrusted body is reflected.
 
-When the compatible endpoint responds HTTP 200
-but with an incompatible schema, the scanner
-records `v1/models: incompatible-model-schema`
-**without copying untrusted HTTP body content into errors**.
-Its model IDs are excluded from `all_models` and
-`loaded_models`; if no separate valid native
-API is available, `online=false` denotes
-*no valid model catalog*, **not network unreachable**.
-If a native LM Studio API provides valid independent
-residency, that native observation remains available
-even when the compatible endpoint is invalid.
+A response carrying **both** `data` and
+`models` is accepted **only if `data`
+is independently valid**. The legacy
+`models` array never creates model IDs
+or runtime-residency assertions, and a
+static warning records
+`supplemental legacy models ignored; canonical data used`.
+An invalid `data` list **cannot fall
+back** to `models` and become routable.
 
-This is an identity/schema fix, not inference
-admission. HTTP status alone cannot authorize
-model loading, generation, tool calling, security
-policy, task dispatch or signed receipt custody.
+If native LM Studio provides legitimate
+residency evidence, it stays available
+even if a separate compatible endpoint
+is malformed. If only a compatible
+OpenAI `data` list exists, the model is
+*catalog-visible* but **residency unknown**:
+`inventory_authoritative=false`,
+`loaded_models=[]`.
 
-## Exact red/green and live validation
+## Corrected red/green and live validation
 
-The new `tests/test_witr_openai_endpoint_schema.py`
-suite on **untouched** PR #115 head reproduced
-**31 failed, 5 passed** (including the live Joyner-like
-shape). Following the narrow fix:
+New regression file
+`tests/test_witr_openai_endpoint_schema.py`
+has **38 passing tests/parametrizations**
+after the correction. Against the
+*unchanged* PR #115 base with the
+final corrected tests, **33 failed,
+5 passed**: the prior parser
+still mishandled strict canonical
+model ID validation and dual-schema
+precedence.
 
-- **127 passed, 4 intentionally skipped**
-  in a combined local suite covering new
-  protocol-schema tests, the earlier native
-  residency tests, fleet discovery/security,
-  live model routes, placement mutation safety,
-  fleet report/health and authority contracts.
-- Ruff lint and Ruff format-check passed
-  on the two touched Python files.
-- One preexisting Starlette/httpx deprecation
-  warning, not a test failure.
+On the patched isolated research tree,
+the combined discovery, native-residency,
+live-model route, placement and authority
+tests returned **129 passed, 4 skipped**.
+Ruff lint, Ruff formatting and Python
+AST checks passed. One preexisting
+Starlette/httpx deprecation warning.
 
-Final read-only `_probe_provider()` comparison
-from `x1-370` using already configured **tailnet
-FQDNs**, no credentials and HTTP GET only:
+The final exact-head read-only `_probe_provider()`
+GET-only comparison must maintain:
 
-| Node | `online` (valid catalog) | Observed IDs | Native resident | Authoritative | Endpoint statuses |
-| --- | --- | ---: | ---: | --- | --- |
-| xwing | True | 17 | 2 | True | `api/v1:ok:16`, `api/v0:ok:17`, `v1:ok:17` |
-| Joyner | **False** | **0** | **0** | **False** | `api/v1:http-404`, `api/v0:http-404`, `v1:incompatible-model-schema` |
+| Node | Valid catalog | Observed IDs | Native resident | Authoritative |
+| --- | --- | ---: | ---: | --- |
+| xwing | True | 17 | 2 | True |
+| Joyner | **True** | **1 (canonical data ID)** | **0 measured / unknown residency** | **False** |
 
-This shows that the fix rejects the demonstrated invalid
-catalog without losing a genuine native LM Studio inventory.
+Joyner's `online=true` here means **valid
+catalog schema**, not verified generation,
+available memory, or route admission.
 
-## Deployment boundary and next gate
+## No-go boundary / productive next step
 
-**DRAFT / production HOLD.** No production
-discovery process, routes, models, ports, credentials,
-Graph/SGNC traces, firewall or services changed.
-No new generation was run, and **zero token
-throughput was measured** in this iteration.
+**Draft / production HOLD.** No model
+generation, memory allocation, account
+registration, new paid provider, runtime
+install, tracing-hook install, firewall
+or route change was performed. Actual
+prompt/completion tokens and useful
+inference throughput remain unmeasured.
 
-Joyner's configured LM Studio provider remains
-**disabled** pending the existing authenticated
-route/protocol/owner cutover gates. A correct next
-step is to identify which **actual** llama-server
-API contract is supported by that build and verify
-a separate explicitly configured adapter under
-approved credentials; not relabel `models[].model`
-as an OpenAI `data[].id` or silently enable
-a route. End-to-end admission also needs a bounded
-successful generation, valid tool-call outputs,
-latency and signed token receipts, followed by
-existing SGNC custody and operator-policy gates.
+Joyner's existing LM Studio provider is
+still disabled under separate identity,
+policy and cutover controls. A bounded,
+authorized canary against the **real
+llama-server OpenAI chat/completions
+contract** would be the next practical
+step. It must establish actual model
+identity, successful prompt/completion
+tokens, tool-call correctness, latency
+and source-side receipts, before an
+independent signed SGNC custody and
+operator admission decision.
 
-Witr itself is a useful **on-demand operational
-diagnostic**, but this evidence does not justify
-installing a persistent cross-fleet agent, exposing
-a new API surface, running it with root, or
-depending on its negative result without `ss`
-cross-checks. Further code-context tooling
-(tgrep/Ripwire) also remains research-only
-until downstream task correctness and real model
-tokens are measured.
+Do not use `witr` ancestry, catalog
+status, process presence, or `/health`
+alone as a reason to enable the route.
