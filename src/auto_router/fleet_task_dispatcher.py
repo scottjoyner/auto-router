@@ -117,9 +117,7 @@ def _host(base_url: str) -> str:
 def _validate_base_url(base_url: str, *, provider_name: str) -> None:
     parsed = urlsplit(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise DiscoveryConfigError(
-            f"provider {provider_name!r} has an invalid LM Studio base_url"
-        )
+        raise DiscoveryConfigError(f"provider {provider_name!r} has an invalid LM Studio base_url")
     if parsed.username or parsed.password:
         raise DiscoveryConfigError(
             f"provider {provider_name!r} must use api_token_env instead of URL credentials"
@@ -366,8 +364,7 @@ def _probe_provider(
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     configured_models = [str(value) for value in provider.get("configured_models") or []]
     aliases = {
-        str(alias): str(model)
-        for alias, model in dict(provider.get("model_aliases") or {}).items()
+        str(alias): str(model) for alias, model in dict(provider.get("model_aliases") or {}).items()
     }
 
     errors: list[str] = []
@@ -404,11 +401,7 @@ def _probe_provider(
                     timeout_seconds=remaining,
                 )
                 try:
-                    rows = (
-                        _inventory_rows(payload)
-                        if native
-                        else _openai_compatible_rows(payload)
-                    )
+                    rows = _inventory_rows(payload) if native else _openai_compatible_rows(payload)
                 except OpenAIModelSchemaError:
                     # Reachable HTTP is not proof of an OpenAI model API.
                     # Do not copy body text (which may contain secrets)
@@ -443,22 +436,20 @@ def _probe_provider(
                 endpoint_status[endpoint] = message.split(": ", 1)[-1]
 
     conflicting_models = {
-        key for key, measurements in native_evidence.items()
-        if len(measurements) != 1
+        key for key, measurements in native_evidence.items() if len(measurements) != 1
     }
     unverified_models = (
-        observed_models - native_evidence.keys()
-    ) | invalid_native_evidence | conflicting_models
+        (observed_models - native_evidence.keys()) | invalid_native_evidence | conflicting_models
+    )
     loaded_models = {
-        key for key, values in native_evidence.items()
+        key
+        for key, values in native_evidence.items()
         if values == {True} and key not in unverified_models
     }
     # The catalog is fully authoritative only when *every* observed model
     # has consistent native residency proof. OpenAI-compatible visibility
     # and a partial native list cannot attest the rest of the machine.
-    inventory_authoritative = bool(
-        native_success and observed_models and not unverified_models
-    )
+    inventory_authoritative = bool(native_success and observed_models and not unverified_models)
     loaded_state_source = "none"
     if explicit_loaded_state:
         loaded_state_source = "native"
@@ -478,9 +469,7 @@ def _probe_provider(
     if unconfigured:
         warnings.append("observed models not configured for routing: " + ", ".join(unconfigured))
     if loaded_state_source == "compatibility-inferred":
-        warnings.append(
-            "OpenAI-compatible inventory cannot assert that a model is loaded"
-        )
+        warnings.append("OpenAI-compatible inventory cannot assert that a model is loaded")
     if unverified_models and native_success:
         warnings.append(
             f"native residency unknown or conflicting for {len(unverified_models)} model(s)"
@@ -518,10 +507,7 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
             continue
         historical_models = {
             str(model)
-            for model in (
-                list(row.get("all_models") or [])
-                + list(row.get("loaded_models") or [])
-            )
+            for model in (list(row.get("all_models") or []) + list(row.get("loaded_models") or []))
             if str(model)
         }
         nodes.append(
@@ -531,9 +517,7 @@ def _from_report(report: dict[str, Any]) -> list[NodeInfo]:
                 online=bool(row.get("online")),
                 loaded_models=[],
                 all_models=sorted(historical_models),
-                configured_models=[
-                    str(model) for model in row.get("configured_models") or []
-                ],
+                configured_models=[str(model) for model in row.get("configured_models") or []],
                 model_aliases={
                     str(alias): str(model)
                     for alias, model in dict(row.get("model_aliases") or {}).items()
