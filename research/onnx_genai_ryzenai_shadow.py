@@ -116,11 +116,7 @@ def parse_config(payload: bytes) -> dict[str, Any]:
 
 
 def safe_config_read(path: Path) -> bytes:
-    if (
-        not isinstance(path, Path)
-        or not path.is_absolute()
-        or path.name != "genai_config.json"
-    ):
+    if not isinstance(path, Path) or not path.is_absolute() or path.name != "genai_config.json":
         raise AdmissionShadowError("absolute genai_config.json required")
     if any(component.is_symlink() for component in (path, *path.parents)):
         raise AdmissionShadowError("symlink config directory or file")
@@ -200,9 +196,7 @@ def device_hints(
     }
 
 
-def summarize(
-    config: bytes, *, failure: str = "NO_ATTEMPT", hints: dict | None = None
-) -> dict:
+def summarize(config: bytes, *, failure: str = "NO_ATTEMPT", hints: dict | None = None) -> dict:
     if failure not in ERROR_CODES or type(failure) is not str:
         raise AdmissionShadowError("invalid classified failure code")
     report = parse_config(config)
