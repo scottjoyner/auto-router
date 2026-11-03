@@ -233,6 +233,43 @@ def _inventory_rows(payload: Any) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
+class OpenAIModelSchemaError(ValueError):
+    """HTTP success returned a body that is not an OpenAI model catalog."""
+
+
+def _openai_compatible_rows(payload: Any) -> list[dict[str, Any]]:
+    """Accept only the OpenAI-style /v1/models catalog, not Ollama /api/tags.
+
+    The endpoint path and HTTP 200 alone do not establish an API contract.
+    In particular, an Ollama-style {"models": [{"model": "..."}]} response
+    must never be interpreted as a loadable OpenAI model by _model_id.
+    """
+    if type(payload) is not dict or "models" in payload:
+        raise OpenAIModelSchemaError("incompatible model catalog structure")
+    if "object" in payload and payload["object"] != "list":
+        raise OpenAIModelSchemaError("unexpected model catalog object")
+    rows = payload.get("data")
+    if type(rows) is not list or len(rows) > 4096:
+        raise OpenAIModelSchemaError("invalid OpenAI model data list")
+    seen: set[str] = set()
+    for row in rows:
+        if type(row) is not dict:
+            raise OpenAIModelSchemaError("invalid model record")
+        value = row.get("id")
+        if (
+            type(value) is not str
+            or not 1 <= len(value) <= 512
+            or value.strip() != value
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+            or value in seen
+        ):
+            raise OpenAIModelSchemaError("invalid or duplicated OpenAI model id")
+        if "object" in row and row["object"] != "model":
+            raise OpenAIModelSchemaError("unexpected model record type")
+        seen.add(value)
+    return rows
+
+
 def _has_loaded_state(row: dict[str, Any]) -> bool:
     return any(
         key in row
@@ -366,7 +403,19 @@ def _probe_provider(
                     headers,
                     timeout_seconds=remaining,
                 )
-                rows = _inventory_rows(payload)
+                try:
+                    rows = (
+                        _inventory_rows(payload)
+                        if native
+                        else _openai_compatible_rows(payload)
+                    )
+                except OpenAIModelSchemaError:
+                    # Reachable HTTP is not proof of an OpenAI model API.
+                    # Do not copy body text (which may contain secrets)
+                    # into logs or a routable model inventory.
+                    errors.append(f"{endpoint}: incompatible-model-schema")
+                    endpoint_status[endpoint] = "incompatible-model-schema"
+                    continue
                 latencies.append(elapsed)
                 successful_endpoint = True
                 endpoint_status[endpoint] = f"ok:{len(rows)}"
