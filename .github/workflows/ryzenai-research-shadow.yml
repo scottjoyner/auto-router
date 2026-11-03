@@ -1,0 +1,55 @@
+name: RyzenAI research-only gates
+
+on:
+  push:
+    branches:
+      - research/ryzenai-4k-npu-recovery-20261103
+  pull_request:
+    branches:
+      - research/ryzenai-failure-classifier-20261103
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ryzenai-research-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pure-python-synthetic:
+    name: No hardware, no models, fail-closed research tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned static linter
+        run: python -m pip install --no-deps ruff==0.15.15
+      - name: Compile research scripts and tests
+        run: |
+          python -m py_compile \
+            research/onnx_genai_ryzenai_shadow.py \
+            research/ryzenai_4k_recovery_canary.py \
+            tests/test_onnx_genai_ryzenai_shadow.py \
+            tests/test_ryzenai_4k_recovery_canary.py
+      - name: Synthetic shadow regression suite
+        run: python -m unittest discover -s tests -p test_onnx_genai_ryzenai_shadow.py -q
+      - name: Synthetic 4K canary safety gates
+        run: python -m unittest discover -s tests -p test_ryzenai_4k_recovery_canary.py -q
+      - name: Pinned Ruff lint
+        run: |
+          ruff check \
+            research/onnx_genai_ryzenai_shadow.py \
+            research/ryzenai_4k_recovery_canary.py \
+            tests/test_onnx_genai_ryzenai_shadow.py \
+            tests/test_ryzenai_4k_recovery_canary.py
+      - name: Pinned Ruff format check
+        run: |
+          ruff format --check \
+            research/onnx_genai_ryzenai_shadow.py \
+            research/ryzenai_4k_recovery_canary.py \
+            tests/test_onnx_genai_ryzenai_shadow.py \
+            tests/test_ryzenai_4k_recovery_canary.py
