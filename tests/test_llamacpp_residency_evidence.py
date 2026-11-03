@@ -69,6 +69,7 @@ def test_wrong_configured_model_is_separate_from_resident_identity():
     "http://example.com:1234", "http://8.8.8.8:1234",
     "http://0.0.0.0:1234", "http://[::]:1234",
     "http://100.128.0.1:1234", "http://192.0.0.1:1234",
+    "http://169.254.169.254:80", "http://[fe80::1]:1234",
     "http://anything:1234", "ftp://127.0.0.1:1234",
     "http://account:password@127.0.0.1:1234",
     "http://127.0.0.1:1234/unsafe", "http://127.0.0.1:1234/?token=hello",
