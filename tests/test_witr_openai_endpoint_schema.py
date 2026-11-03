@@ -69,19 +69,44 @@ def _joyner_response():
                 "parameters": {},
             }
         ]
+        "object": "list",
+        "data": [
+            {"id": "local-placeholder", "object": "model", "meta": {}},
+        ],
     }
 
 
-def test_joyner_ollama_shape_is_not_routeable_openai_catalog(monkeypatch):
+def test_joyner_dual_catalog_uses_canonical_openai_id_without_residency(monkeypatch):
     node = _probe(monkeypatch, compatibility=_joyner_response())
-    assert node.all_models == []
+    assert node.all_models == ["local-placeholder"]
     assert node.loaded_models == []
     assert node.inventory_authoritative is False
     assert node.inventory_complete is False
-    assert node.online is False
-    assert node.endpoint_status["v1/models"] == "incompatible-model-schema"
-    assert "incompatible-model-schema" in node.error
-    assert "local-placeholder" not in node.error
+    assert node.online is True
+    assert node.loaded_state_source == "compatibility-inferred"
+    assert node.endpoint_status["v1/models"] == "ok:1"
+    assert any("supplemental legacy models ignored" in w for w in node.warnings)
+
+
+def test_dual_catalog_legacy_model_cannot_override_canonical_id(monkeypatch):
+    response = _joyner_response()
+    response["models"][0]["model"] = "forged-extra-legacy-model"
+    node = _probe(monkeypatch, compatibility=response)
+    assert node.online is True
+    assert node.all_models == ["local-placeholder"]
+    assert "forged-extra-legacy-model" not in node.all_models
+    assert node.loaded_models == []
+    assert node.inventory_authoritative is False
+
+
+def test_empty_canonical_data_ignores_nonempty_legacy_models(monkeypatch):
+    response = _joyner_response()
+    response["data"] = []
+    node = _probe(monkeypatch, compatibility=response)
+    assert node.online is True
+    assert node.all_models == []
+    assert node.loaded_models == []
+    assert any("supplemental legacy models ignored" in w for w in node.warnings)
 
 
 def test_compatible_openai_catalog_retains_diagnostic_visibility(monkeypatch):
@@ -118,7 +143,7 @@ def test_empty_openai_catalog_is_valid_empty_response(monkeypatch):
     [
         {"models": [{"model": "foo"}]},
         {"models": []},
-        {"models": [{"id": "smuggled-id"}], "data": [{"id": "valid-id"}]},
+        {"models": [{"id": "smuggled-id"}], "data": [{"id": None}]},
         {"data": [{"name": "no-id", "model": "m"}]},
         {"data": [{"id": "valid"}, {"name": "missing-id"}]},
         {"data": [None]},
@@ -174,7 +199,7 @@ def test_native_lmstudio_evidence_survives_incompatible_compat_endpoint(monkeypa
     node = _probe(
         monkeypatch,
         native_v1=native,
-        compatibility=_joyner_response(),
+        compatibility={"models": [{"model": "legacy-only-no-data"}]},
     )
     assert node.online is True
     assert node.loaded_models == ["native-loaded"]
