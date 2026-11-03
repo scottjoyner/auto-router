@@ -65,6 +65,41 @@ class RecoveryGateTests(unittest.TestCase):
             self.assertIsNone(result["actual_generated_tokens"])
             self.assertNotIn("/virtual", str(result))
 
+    def test_decode_phase_requires_successful_npu_ioctl(self):
+        trace = [
+            "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = 0",
+            '99 write(2<pipe:[12]>, "RYZENAI_GENERATION_BEGIN\\n", 25) = 25',
+            "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = 0",
+            "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = -1 EFAULT",
+            "99 ioctl(3</dev/null>, ..., 0x0) = 0",
+            '99 write(2<pipe:[12]>, "RYZENAI_GENERATION_END\\n", 23) = 23',
+            "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = 0",
+        ]
+        self.assertEqual(mod._generation_phase_npu_ioctls(trace), 1)
+
+    def test_decode_phase_rejects_init_only_npu_work(self):
+        trace = [
+            "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = 0",
+            '99 write(2<pipe:[12]>, "RYZENAI_GENERATION_BEGIN\\n", 25) = 25',
+            "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = -1 EFAULT",
+            '99 write(2<pipe:[12]>, "RYZENAI_GENERATION_END\\n", 23) = 23',
+        ]
+        with self.assertRaisesRegex(mod.ResearchGateError, "no successful NPU ioctl"):
+            mod._generation_phase_npu_ioctls(trace)
+
+    def test_decode_phase_rejects_missing_or_duplicate_markers(self):
+        begin = '99 write(2<pipe:[12]>, "RYZENAI_GENERATION_BEGIN\\n", 25) = 25'
+        end = '99 write(2<pipe:[12]>, "RYZENAI_GENERATION_END\\n", 23) = 23'
+        ioctl = "99 ioctl(3</dev/accel/accel0>, ..., 0x0) = 0"
+        for trace in (
+            [ioctl],
+            [end, ioctl, begin],
+            [begin, begin, ioctl, end],
+            [begin, ioctl, end, end],
+        ):
+            with self.subTest(trace=trace), self.assertRaises(mod.ResearchGateError):
+                mod._generation_phase_npu_ioctls(trace)
+
     def test_model_graph_mutation_refused(self):
         with tempfile.TemporaryDirectory() as root:
             path, _, digest = fixture(Path(root))
