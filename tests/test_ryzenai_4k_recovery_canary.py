@@ -9,7 +9,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parents[1] / "research" / "ryzenai_4k_recovery_canary.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[1] / "research" / "ryzenai_4k_recovery_canary.py"
+)
 spec = importlib.util.spec_from_file_location("ryzenai_research_canary_test", SCRIPT)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
@@ -23,7 +25,9 @@ def fixture(root: Path):
             "type": "qwen2",
             "decoder": {
                 "session_options": {
-                    "provider_options": [{"RyzenAI": {"hybrid_opt_token_backend": "npu"}}],
+                    "provider_options": [
+                        {"RyzenAI": {"hybrid_opt_token_backend": "npu"}}
+                    ],
                     "custom_ops_library": "/virtual/libonnxruntime_providers_ryzenai.so",
                     "vaip_config": "/virtual/vaip_config.json",
                 }
@@ -66,7 +70,9 @@ class RecoveryGateTests(unittest.TestCase):
     def test_cpu_provider_denied(self):
         with tempfile.TemporaryDirectory() as root:
             path, cfg, _ = fixture(Path(root))
-            cfg["model"]["decoder"]["session_options"]["provider_options"] = [{"CPU": {}}]
+            cfg["model"]["decoder"]["session_options"]["provider_options"] = [
+                {"CPU": {}}
+            ]
             raw = json.dumps(cfg).encode()
             (path / "genai_config.json").write_bytes(raw)
             with self.assertRaises(mod.ResearchGateError):
