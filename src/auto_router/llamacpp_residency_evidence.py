@@ -38,10 +38,12 @@ def _private_base(url: str) -> str:
         if isinstance(host, ipaddress.IPv4Address):
             permitted = (
                 "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
-                "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
+                "192.168.0.0/16", "100.64.0.0/10",
             )
         else:
-            permitted = ("::1/128", "fc00::/7", "fe80::/10")
+            # Link-local includes cloud instance metadata and unscoped IPv6
+            # interfaces. A fleet probe must not issue GETs to those ranges.
+            permitted = ("::1/128", "fc00::/7")
         if not any(host in ipaddress.ip_network(network) for network in permitted):
             raise ValueError("numeric_private_or_localhost_url_required")
     return f"{parsed.scheme}://{parsed.netloc}"
