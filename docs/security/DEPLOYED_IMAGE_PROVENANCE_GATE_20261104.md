@@ -408,3 +408,7 @@ authorization path, then test necessary authorized traffic and
 nonallowlisted denial across the host IPv4/IPv6 publication and
 Docker peer planes. The local client inventory alone cannot
 approve firewall changes, bridge detachment, or a container cutover.
+
+## November 4 additional fail-closed public-bind gate
+
+The standalone deployed-image provenance verifier no longer treats `--allow-public-bind` as sufficient authorization for `0.0.0.0` or `::` publication. The legacy argument is accepted only for invocation compatibility; requesting it forces a HOLD even if the six anonymous admin canaries return 401. A preliminary source/image inspection can now pass only with explicit loopback-only host bindings. Separately approved host/firewall or Docker-peer containment must be established by independent network evidence and the normal release process, not by a CLI override. Synthetic negative tests cover both wildcard bind and a loopback binding with the override requested. This is research code, not an assertion about production port state.
