@@ -17,7 +17,7 @@ spec.loader.exec_module(mod)
 def synthetic_efi_mount(proc: Path, efi: Path, *, filesystem: str = "vfat",
                         duplicate: bool = False) -> None:
     (proc / "self").mkdir(exist_ok=True)
-    line = f"36 25 8:1 / {efi} rw,relatime - {filesystem} /dev/synthetic rw\\n"
+    line = f"36 25 8:1 / {efi} rw,relatime - {filesystem} /dev/synthetic rw\n"
     (proc / "self" / "mountinfo").write_text(line * (2 if duplicate else 1))
 
 
@@ -170,22 +170,22 @@ class AuditTests(unittest.TestCase):
             p = Path(td)
             efi = p / "efi"
             efi.mkdir()
-            (p / "os-release").write_text('ID=ubuntu\\nVERSION_ID="26.04"\\n')
+            (p / "os-release").write_text('ID=ubuntu\nVERSION_ID="26.04"\n')
             (p / "meminfo").write_text(
-                "MemAvailable: 4000 kB\\nSwapTotal: 8192 kB\\nSwapFree: 8 kB\\n"
+                "MemAvailable: 4000 kB\nSwapTotal: 8192 kB\nSwapFree: 8 kB\n"
             )
             def run(argv, **_kwargs):
                 if argv[0] == "dpkg-query":
                     return subprocess.CompletedProcess(
-                        argv, 0, "libc6:amd64\\tii \\t2.43-2ubuntu2\\n", ""
+                        argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", ""
                     )
-                return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\\n", "")
+                return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
             for mode in ("not-mounted", "ext4", "duplicate"):
                 with self.subTest(mode=mode):
                     if mode == "not-mounted":
                         (p / "self").mkdir(exist_ok=True)
                         (p / "self" / "mountinfo").write_text(
-                            "36 25 8:1 / /unrelated rw - vfat /dev/synthetic rw\\n"
+                            "36 25 8:1 / /unrelated rw - vfat /dev/synthetic rw\n"
                         )
                     else:
                         synthetic_efi_mount(p, efi, filesystem="ext4" if mode == "ext4" else "vfat",
