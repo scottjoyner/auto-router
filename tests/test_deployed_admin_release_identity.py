@@ -163,12 +163,15 @@ def test_uvicorn_app_dir_override_is_not_an_attested_runtime():
     assert evaluate(actual,"a"*64,FILES_HASHES,status_probe=_canary)["gate"]=="HOLD"
 
 
-def test_public_bind_requires_explicit_individual_optin_and_still_needs_valid_image():
-    result=evaluate(_proof(public=True),"a"*64,FILES_HASHES,
-                    allow_public_bind=True,status_probe=_canary)
-    assert result["gate"]=="PASS_PRE_CUTOVER_INSPECTION_ONLY"
-    assert result["production_ready"] is False
-    result=evaluate(_proof(public=True),"b"*64,FILES_HASHES,
+def test_public_bind_optin_cannot_substitute_for_independent_isolation_proof():
+    for optin in (False, True):
+        result=evaluate(_proof(public=True),"a"*64,FILES_HASHES,
+                        allow_public_bind=optin,status_probe=_canary)
+        assert result["gate"]=="HOLD"
+        assert result["checks"]["host_port_bind_is_explicitly_approved"] is False
+        assert result["production_ready"] is False
+    # Supplying the deprecated override never weakens the loopback policy.
+    result=evaluate(_proof(),"a"*64,FILES_HASHES,
                     allow_public_bind=True,status_probe=_canary)
     assert result["gate"]=="HOLD"
 
