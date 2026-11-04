@@ -101,6 +101,20 @@ def inspect(read=_run, container: str=CONTAINER) -> dict:
     image=lease.split("|")[0]
     running = read(["docker", "inspect", "--format", "{{.State.Running}}", container])
     command = read(["docker", "inspect", "--format", "{{.Path}}", container])
+    # Only selected nonsecret HostConfig fields: no credentials or mounts'
+    # host-side paths. This is not a complete namespace or network audit.
+    host_security = read([
+        "docker", "inspect", "--format",
+        "{{.HostConfig.Privileged}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.PidMode}}",
+        container,
+    ]).split("|")
+    safe_host_security = (
+        len(host_security) == 3 and host_security[0] == "false"
+        and bool(host_security[1])
+        and host_security[1] not in {"host", "none"}
+        and not host_security[1].startswith("container:")
+        and host_security[2] in {"", "private"}
+    )
     args = json.loads(read(["docker", "inspect", "--format", "{{json .Args}}", container]))
     bindings = json.loads(read([
         "docker","inspect","--format","{{json .NetworkSettings.Ports}}",container]))
@@ -133,6 +147,7 @@ def inspect(read=_run, container: str=CONTAINER) -> dict:
                 ) for a in args[1:]
             ),
         "code_mounts_clear":code_mounts_safe(mounts),
+        "safe_docker_host_security":safe_host_security,
         "bindings":bindings,
         "installed_source_hashes":installed,
     }
@@ -184,6 +199,7 @@ def evaluate(actual: dict, expected_image: str, expected_files: dict,
         "immutable_image_id_matches_pinned_build":actual.get("image_id")==expected_image,
         "expected_secure_live_entrypoint":actual.get("expected_entrypoint") is True,
         "no_unreviewed_runtime_source_mounts":actual.get("code_mounts_clear") is True,
+        "no_privileged_host_network_or_pid_namespace":actual.get("safe_docker_host_security") is True,
         "installed_source_hashes_match_pinned_build":actual.get("installed_source_hashes")==expected_files,
         "host_port_bind_is_explicitly_approved":valid_bind,
         "no_unreviewed_published_host_ports":no_extra_publications,
