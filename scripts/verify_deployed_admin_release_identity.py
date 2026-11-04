@@ -87,8 +87,11 @@ def inspect(read=_run, container: str=CONTAINER) -> dict:
         "image_id":image,
         "identity_lease":lease,
         "running":running=="true",
+        # A foreign ASGI app must not pass by mentioning the expected app
+        # as an unrelated flag value. Uvicorn's first argument is its app.
         "expected_entrypoint":command in ("uvicorn","/usr/local/bin/uvicorn")
-            and ENTRYPOINT in args,
+            and bool(args) and args[0] == ENTRYPOINT
+            and args.count(ENTRYPOINT) == 1,
         "bindings":bindings,
         "installed_source_hashes":installed,
     }
@@ -115,6 +118,13 @@ def evaluate(actual: dict, expected_image: str, expected_files: dict,
                else ("127.0.0.1","::1","0.0.0.0","::"))
         for ip in ips
     )
+    # Every host-published port must be explicitly reviewed; otherwise an
+    # unexpected secondary published port can circumvent the tested 8088 gate.
+    bindings=actual.get("bindings",{})
+    no_extra_publications=isinstance(bindings,dict) and all(
+        key=="8088/tcp" or value is None
+        for key,value in bindings.items()
+    )
     # Read only HTTP status. This is NOT an authenticated positive-client test.
     canary=status_probe(port)
     rows=canary.get("results",[])
@@ -133,6 +143,7 @@ def evaluate(actual: dict, expected_image: str, expected_files: dict,
         "expected_secure_live_entrypoint":actual.get("expected_entrypoint") is True,
         "installed_source_hashes_match_pinned_build":actual.get("installed_source_hashes")==expected_files,
         "host_port_bind_is_explicitly_approved":valid_bind,
+        "no_unreviewed_published_host_ports":no_extra_publications,
         "anonymous_admin_gets_all_401":complete_denials,
     }
     return {
