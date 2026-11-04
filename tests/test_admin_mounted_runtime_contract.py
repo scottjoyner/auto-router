@@ -51,6 +51,7 @@ def test_all_mounted_admin_routes_require_auth_before_execution(entrypoint,expec
 def test_our_no_lifespan_checker_rejects_unprotected_synthetic_admin_route():
     # In-process fake app with a deliberately unauthenticated route.
     from fastapi import FastAPI
+
     from scripts.audit_mounted_admin_gate import audit
 
     app=FastAPI()

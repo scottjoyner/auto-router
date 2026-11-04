@@ -1,7 +1,9 @@
 """Offline tests proving the canary is read-only and truly fails closed."""
 from unittest.mock import patch
+
 import pytest
-from scripts.admin_auth_readonly_canary import ADMIN_PATHS,probe
+
+from scripts.admin_auth_readonly_canary import ADMIN_PATHS, probe
 
 
 class FakeResponse:

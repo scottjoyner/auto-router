@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+
 from auto_router import main as main_module
 
 TOKEN="research-fixture-admin-token-never-production"

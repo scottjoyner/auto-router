@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import secrets
-import hmac
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request, status

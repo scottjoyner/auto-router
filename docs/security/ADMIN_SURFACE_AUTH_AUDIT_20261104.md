@@ -214,10 +214,12 @@ The guards are de-duplicated by FastAPI's dependency cache in normal
 request handling. No background scheduler behavior from an older
 divergent branch is included.
 
-The shared auth helper was additionally tightened to enforce the
-documented `admin` username for HTTP Basic and use
-`hmac.compare_digest` when comparing provided tokens. Both positive
-auth tests and wrong-username/wrong-token negative tests were added.
+The current upstream shared auth helper **already** enforces the
+documented `admin` username for HTTP Basic and uses
+`secrets.compare_digest` for constant-time token comparisons.
+This branch retains those existing safeguards and adds focused
+negative regression tests for wrong-username and wrong-token inputs.
+No new secret-comparison or Basic-identity mechanism is claimed.
 
 **Do not infer deployment from updated upstream source.** The
 currently running local router was still returning anonymous
