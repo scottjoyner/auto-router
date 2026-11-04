@@ -52,6 +52,8 @@ def fake_docker(source,*, image=IMAGE, after=None, extra_mount=None):
             return "true"
         if "{{.Path}}" in args:
             return "uvicorn"
+        if "{{.HostConfig.Privileged}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.PidMode}}" in args:
+            return "false|auto-router-smoke|"
         if "{{json .Args}}" in args:
             return json.dumps(["auto_router.secure_live:app","--port","8088"])
         if "{{json .NetworkSettings.Ports}}" in args:
