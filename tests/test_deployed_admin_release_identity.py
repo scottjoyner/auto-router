@@ -11,7 +11,7 @@ import pytest
 
 from scripts.admin_auth_readonly_canary import ADMIN_PATHS
 from scripts.verify_deployed_admin_release_identity import (
-    FILES, _identity_lease, _sha, evaluate, inspect,
+    FILES, FILE_HASH_CODE, _identity_lease, _sha, code_mounts_safe, evaluate, inspect,
 )
 
 IMAGE="sha256:"+"a"*64
@@ -25,6 +25,7 @@ def _proof(*, public=False):
         "identity_lease":LEASE,
         "running":True,
         "expected_entrypoint":True,
+        "code_mounts_clear":True,
         "installed_source_hashes":FILES_HASHES.copy(),
         "bindings":{"8088/tcp":[{
             "HostIp":"0.0.0.0" if public else "127.0.0.1",
@@ -97,11 +98,65 @@ def test_decoy_asgi_argument_cannot_pass_exact_entrypoint_check():
                                "auto_router.secure_live:app"])
         if "{{json .NetworkSettings.Ports}}" in args:
             return json.dumps(_proof()["bindings"])
+        if "{{json .Mounts}}" in args:
+            return "[]"
         raise AssertionError(args)
     actual=inspect(read=fake)
     assert actual["expected_entrypoint"] is False
     result=evaluate(actual,"a"*64,FILES_HASHES,status_probe=_canary)
     assert result["gate"]=="HOLD"
+
+
+def test_runtime_source_mounts_fail_closed_without_reading_mount_sources():
+    assert code_mounts_safe([]) is True
+    assert code_mounts_safe([{"Destination":"/run/secrets/router-token"}]) is True
+    for candidate in (
+        [{"Destination":"/app/src", "Source":"/private/home/not-disclosed"}],
+        [{"Destination":"/usr/local/lib/python3.12/site-packages"}],
+        [{"Destination":"/workspace"}],
+        [{"Destination":"/app"}],
+        [{"Destination":"/app/../app"}],
+        [{"Destination":"relative/path"}],
+        [{"Destination":None}],
+        [None],
+        {"Destination":"/app"},
+    ):
+        assert code_mounts_safe(candidate) is False
+    d=_proof()
+    d["code_mounts_clear"]=False
+    result=evaluate(d,"a"*64,FILES_HASHES,status_probe=_canary)
+    assert result["gate"]=="HOLD"
+    assert result["checks"]["no_unreviewed_runtime_source_mounts"] is False
+
+
+def test_static_module_locator_checks_effective_runtime_import_path():
+    # PathFinder discovers top-level package without executing app code.
+    assert "PathFinder.find_spec('auto_router')" in FILE_HASH_CODE
+    assert "Path(locations[0]).resolve()!=root" in FILE_HASH_CODE
+    assert "import auto_router" not in FILE_HASH_CODE
+
+
+def test_uvicorn_app_dir_override_is_not_an_attested_runtime():
+    def mock_read(args):
+        if "exec" in args:
+            return json.dumps(FILES_HASHES)
+        if "{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}" in args:
+            return LEASE
+        if "{{.State.Running}}" in args:
+            return "true"
+        if "{{.Path}}" in args:
+            return "uvicorn"
+        if "{{json .Args}}" in args:
+            return json.dumps(["auto_router.secure_live:app",
+                               "--app-dir", "/app/src", "--port", "8088"])
+        if "{{json .NetworkSettings.Ports}}" in args:
+            return json.dumps(_proof()["bindings"])
+        if "{{json .Mounts}}" in args:
+            return "[]"
+        raise AssertionError(args)
+    actual=inspect(read=mock_read)
+    assert actual["expected_entrypoint"] is False
+    assert evaluate(actual,"a"*64,FILES_HASHES,status_probe=_canary)["gate"]=="HOLD"
 
 
 def test_public_bind_requires_explicit_individual_optin_and_still_needs_valid_image():
@@ -178,12 +233,14 @@ def test_docker_inspect_only_selected_metadata_and_files():
             return json.dumps(["auto_router.secure_live:app","--port","8088"])
         if "{{json .NetworkSettings.Ports}}" in args:
             return json.dumps(_proof()["bindings"])
+        if "{{json .Mounts}}" in args:
+            return "[]"
         raise AssertionError(args)
     actual=inspect(read=fake)
     assert actual["image_id"]==IMAGE
     assert actual["identity_lease"]==LEASE
     assert actual["installed_source_hashes"]==FILES_HASHES
-    assert len(calls)==6
+    assert len(calls)==7
     assert not any("docker rm" in " ".join(x) or "docker restart" in " ".join(x)
                    for x in calls)
 
