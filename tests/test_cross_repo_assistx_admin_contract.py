@@ -129,3 +129,41 @@ def test_legacy_404_fallback_is_authenticated_and_only_on_exact_404(environment)
         ("/admin/providers/effective", TOKEN),
         ("/admin/providers", TOKEN),
     ]
+
+
+
+def test_exact_live_entrypoint_all_admin_routes_require_admin_without_lifespan(monkeypatch):
+    """The deployed main_live entrypoint mounts routes beyond main.app.
+
+    Import this last: main_live registers its routes on the shared app. This
+    test remains synthetic, uses no lifespan and opens no network connections.
+    """
+    from fastapi.routing import APIRoute
+
+    from auto_router import offline_guard
+
+    # Hosted CI has no real provider config and must never read a live one.
+    # Stub ONLY the pre-import config-file guard for this route-graph audit;
+    # the strict-offline toggle and all actual admin deps stay unchanged.
+    monkeypatch.setattr(
+        offline_guard, "enforce_strict_offline_provider_config", lambda: None
+    )
+    from auto_router import main_live
+
+    admin_routes = [
+        r for r in main_live.app.routes
+        if isinstance(r, APIRoute) and r.path.startswith("/admin/")
+    ]
+    assert len(admin_routes) >= 20
+    seen = set()
+    for route in admin_routes:
+        for method in route.methods or []:
+            seen.add((method, route.path))
+        deps = {d.call for d in route.dependant.dependencies}
+        assert security.require_admin in deps, (
+            f"missing shared admin authorization: {route.path}"
+        )
+    assert ("GET", "/admin/providers") in seen
+    assert ("GET", "/admin/providers/effective") in seen
+    assert ("GET", "/admin/admission") in seen
+    assert ("POST", "/admin/runtime-projection") in seen
