@@ -15,11 +15,11 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 import pytest
-from auto_router.config import ProviderRegistry
-from auto_router.models import ModelConfig, ProviderConfig
 from fastapi.testclient import TestClient
 
 from auto_router import main, security
+from auto_router.config import ProviderRegistry
+from auto_router.models import ModelConfig, ProviderConfig
 
 EXPECTED = "b822fe337770dafc17ce04145627bdc6490f2876172af00fe7808f179e3c02c2"
 TOKEN = "synthetic-admin-only-not-real"
