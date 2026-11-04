@@ -279,7 +279,7 @@ register_memory_routes(app, state)
 app.include_router(fleet_router)
 
 
-@app.get("/admin/admission")
+@app.get("/admin/admission", dependencies=[Depends(require_admin)])
 async def admission_status(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -297,14 +297,14 @@ async def admission_status(
     }
 
 
-@app.get("/admin/runtime-projection")
+@app.get("/admin/runtime-projection", dependencies=[Depends(require_admin)])
 async def runtime_projection_status(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     return _projection_manager().status()
 
 
-@app.post("/admin/runtime-projection")
+@app.post("/admin/runtime-projection", dependencies=[Depends(require_admin)])
 async def apply_runtime_projection(
     payload: dict[str, Any] = Body(...),
     _: None = Depends(require_admin),

@@ -222,7 +222,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
     if not hasattr(state, "event_outbox"):
         state.event_outbox = EventOutbox(get_settings().database_url)
 
-    @app.get("/admin/services")
+    @app.get("/admin/services", dependencies=[Depends(require_admin)])
     async def admin_services(limit: int = 50) -> dict[str, Any]:
         services = merged_services(state)
         return {
@@ -233,7 +233,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
             "recent_events": state.service_store.recent_results(limit=limit),
         }
 
-    @app.post("/admin/services/scan")
+    @app.post("/admin/services/scan", dependencies=[Depends(require_admin)])
     async def scan_registered_services(
         allow_external: bool = False,
         limit: int | None = None,
@@ -264,7 +264,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
             "outbox_summary": state.event_outbox.summary(),
         }
 
-    @app.get("/admin/outbox")
+    @app.get("/admin/outbox", dependencies=[Depends(require_admin)])
     async def admin_outbox(limit: int = 100) -> dict[str, Any]:
         return {
             "summary": state.event_outbox.summary(),
@@ -272,21 +272,21 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
             "recent": state.event_outbox.recent(limit=limit),
         }
 
-    @app.post("/admin/outbox/dispatch")
+    @app.post("/admin/outbox/dispatch", dependencies=[Depends(require_admin)])
     async def dispatch_outbox(limit: int = 25, dry_run: bool = False, _: None = Depends(require_admin)) -> dict[str, Any]:
         return await dispatch_outbox_cycle(state, limit=limit, dry_run=dry_run, reason="manual")
 
-    @app.post("/admin/outbox/{event_id}/delivered")
+    @app.post("/admin/outbox/{event_id}/delivered", dependencies=[Depends(require_admin)])
     async def mark_outbox_delivered(event_id: str) -> dict[str, Any]:
         state.event_outbox.mark_delivered(event_id)
         return {"event_id": event_id, "status": "delivered", "summary": state.event_outbox.summary()}
 
-    @app.post("/admin/outbox/{event_id}/failed")
+    @app.post("/admin/outbox/{event_id}/failed", dependencies=[Depends(require_admin)])
     async def mark_outbox_failed(event_id: str, error: str = "manual failure", retry: bool = True) -> dict[str, Any]:
         state.event_outbox.mark_failed(event_id, error=error, retry=retry)
         return {"event_id": event_id, "status": "retry" if retry else "dead_letter", "summary": state.event_outbox.summary()}
 
-    @app.post("/admin/outbox/prune")
+    @app.post("/admin/outbox/prune", dependencies=[Depends(require_admin)])
     async def prune_outbox(
         keep_delivered: int = 1000,
         keep_dead_letter: int = 0,
