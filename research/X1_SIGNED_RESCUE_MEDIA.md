@@ -111,3 +111,33 @@ x1 block devices or its package manager.
 The signed ISO proves source authenticity and boot-image layout, not a
 verified secure boot on this machine, an offline root/EFI image, or
 restoration of the fleet controller. P0 OS repair and NPU 16K stay HOLD.
+
+## Independent off-host NAS mirror verification — Nov 3, 2026, ~19:16 EST
+
+An additional scoped copy of the verified Ubuntu live ISO was created on the
+NAS by Joyner, without any change to the x1 controller, EFI, package
+database, Secure Boot settings, or attached camera drive.
+
+**NAS location:**
+`/nas/backups/x1-370-signed-live-recovery-20261103-Uxlmr0xv/ubuntu-24.04.5.1-desktop-amd64.iso`
+
+- Length: **6,250,332,160 bytes**.
+- **Full NAS SHA-256 independently verified from Deathstar**:
+  `4da4a0c9035da8e68a59a838674f403f0a54472c78a83b4fb7f78d03588f85a7`.
+- Deathstar separately used its installed Ubuntu keyring to authenticate
+  the NAS copies of `SHA256SUMS` and `SHA256SUMS.gpg` with `gpgv`; PASS.
+- Joyner's original source streamed with matching SHA-256 to a new NAS
+  file; first and last 4 MiB later independently matched original.
+- An initial bounded full NAS readback on Joyner timed out. An
+  independent complete-file readback on Deathstar subsequently
+  **finished successfully** and matched the authenticated source.
+  Record the slowdown when evaluating large-image backup throughput.
+- A human-readable `README-SAFE-HANDOFF.txt` was created adjacent to
+  the image warning against touching existing USB devices. SMB
+  mount-side file modes may not reflect remote ACLs. No secrets are
+  stored with the ISO.
+
+This is an authenticated **recovery image file** copied to accessible
+storage, **not** a tested bootable USB, x1 physical console, coherent
+root+EFI system backup, or restore. The OS repair remains HOLD, and
+production 16K NPU driver replacement remains NO-GO.
