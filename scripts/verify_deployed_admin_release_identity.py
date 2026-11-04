@@ -83,6 +83,11 @@ def code_mounts_safe(mounts: object) -> bool:
         target=mount.get("Destination")
         if not isinstance(target,str) or not target.startswith("/") or "/../" in target:
             return False
+        # The CI image has a deliberately mounted, data-only configuration
+        # directory. This exact mount is not an import root; its parent, any
+        # app source mount, and every other /app subtree remain denied.
+        if target=="/app/config":
+            continue
         if any(target==root or target.startswith(root+"/") for root in CODE_ROOTS):
             return False
     return True
