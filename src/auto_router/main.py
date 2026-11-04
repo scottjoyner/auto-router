@@ -549,7 +549,7 @@ async def admin_context_graph() -> dict[str, Any]:
 
 
 @app.get("/admin/providers")
-async def admin_providers() -> dict[str, Any]:
+async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
