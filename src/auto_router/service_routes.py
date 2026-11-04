@@ -233,7 +233,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
             "recent_events": state.service_store.recent_results(limit=limit),
         }
 
-    @app.post("/admin/services/scan")
+    @app.post("/admin/services/scan", dependencies=[Depends(require_admin)])
     async def scan_registered_services(
         allow_external: bool = False,
         limit: int | None = None,
@@ -272,7 +272,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
             "recent": state.event_outbox.recent(limit=limit),
         }
 
-    @app.post("/admin/outbox/dispatch")
+    @app.post("/admin/outbox/dispatch", dependencies=[Depends(require_admin)])
     async def dispatch_outbox(limit: int = 25, dry_run: bool = False, _: None = Depends(require_admin)) -> dict[str, Any]:
         return await dispatch_outbox_cycle(state, limit=limit, dry_run=dry_run, reason="manual")
 
@@ -286,7 +286,7 @@ def register_service_routes(app: FastAPI, state: Any) -> None:
         state.event_outbox.mark_failed(event_id, error=error, retry=retry)
         return {"event_id": event_id, "status": "retry" if retry else "dead_letter", "summary": state.event_outbox.summary()}
 
-    @app.post("/admin/outbox/prune")
+    @app.post("/admin/outbox/prune", dependencies=[Depends(require_admin)])
     async def prune_outbox(
         keep_delivered: int = 1000,
         keep_dead_letter: int = 0,

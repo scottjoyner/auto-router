@@ -36,11 +36,11 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
             context=data,
         )
 
-    @app.get("/admin/ops/summary")
+    @app.get("/admin/ops/summary", dependencies=[Depends(require_admin)])
     async def admin_ops_summary(_: None = Depends(require_admin)) -> dict[str, Any]:
         return build_ops_summary(state)
 
-    @app.get("/admin/ops/preflight")
+    @app.get("/admin/ops/preflight", dependencies=[Depends(require_admin)])
     async def admin_ops_preflight(_: None = Depends(require_admin)) -> dict[str, Any]:
         return build_preflight_report(state, get_settings())
 
