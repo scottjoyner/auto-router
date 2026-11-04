@@ -69,8 +69,8 @@ Exact reviewed source hashes should come from the pinned
 builder's validated artifact, not the running container.
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. python3 -B \
- scripts/verify_deployed_admin_release_identity.py \
+PYTHONDONTWRITEBYTECODE=1 python3 -B \
+ -m scripts.verify_deployed_admin_release_identity \
  --expected-image-sha256 "$APPROVED_BUILD_IMAGE_SHA256" \
  --expected-main-sha256 "$APPROVED_MAIN_SHA256" \
  --expected-security-sha256 "$APPROVED_SECURITY_SHA256" \
