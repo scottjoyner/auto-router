@@ -1,0 +1,74 @@
+--- a/relay.py
++++ b/relay.py
+@@ -608,6 +608,15 @@
+         # whole suite hanging rather than as an obvious failure.
+         if not self.authenticate_device(body.get("device_id"), self.certified_identity()):
+             return self.send_json(403, {"error": "device identity does not match"})
++        # As with /device/result, the acknowledgement must be bound to
++        # the exact device that owns an actual dispatched call. Merely
++        # having a valid device certificate must not allow a caller to
++        # suppress requeueing another device's unfinished work.
++        assigned_device = self.registry.queued_for(call_id)
++        if assigned_device is None:
++            return self.send_json(404, {"error": "unknown call_id; cannot acknowledge"})
++        if assigned_device != body["device_id"]:
++            return self.send_json(403, {"error": "call belongs to another device"})
+         self.registry.note_ack(call_id)
+         self.registry.record({"event": "ack", "call_id": call_id,
+                               "device_id": body.get("device_id"), "ts": now_iso()})
+--- a/relay_test.py
++++ b/relay_test.py
+@@ -16,6 +16,7 @@
+ import shutil
+ import socket
+ import ssl
++import threading
+ import subprocess
+ import sys
+ import tempfile
+@@ -1419,3 +1420,45 @@
+ 
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)
++
++
++class DeviceAckBindingRegression(MutualTLSRelay):
++    """Standalone negative tests for nonexistent or other-device ACK."""
++
++    def test_an_unknown_call_id_must_not_be_acknowledged(self):
++        status, body = self.post_tls(
++            "/device/ack",
++            {"call_id": "no-call-with-this-id", "device_id": "joyner"},
++            token=self.device_token("joyner"),
++            device_id="joyner",
++        )
++        self.assertEqual(status, 404, body)
++
++
++    def test_another_device_cannot_ack_a_dispatched_call(self):
++        # Dispatch using an explicit test-only ID; no device process is
++        # started, so the call remains queued while this request is sent.
++        call_id = "isolated-owned-call-ack-negative"
++        outcome = {}
++
++        def dispatch():
++            outcome["response"] = self.op_post(
++                "/dispatch",
++                {"device_id": "x1-370", "call_id": call_id,
++                 "argv": ["uname", "-s"], "timeout": 2},
++                timeout=35,
++            )
++
++        worker = threading.Thread(target=dispatch, daemon=True)
++        worker.start()
++        try:
++            time.sleep(0.3)
++            status, body = self.post_tls(
++                "/device/ack", {"call_id": call_id, "device_id": "joyner"},
++                token=self.device_token("joyner"), device_id="joyner",
++            )
++            self.assertEqual(status, 403, body)
++        finally:
++            worker.join(25)
++        self.assertFalse(worker.is_alive())
++        self.assertIn("response", outcome)
