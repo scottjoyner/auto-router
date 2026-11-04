@@ -99,13 +99,55 @@ class AuditTests(unittest.TestCase):
                 if argv[0] == "mokutil":
                     return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
                 raise AssertionError("Unexpected command")
-            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p / "not-present")
+            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p)
             self.assertTrue(report["observations_complete"])
             self.assertEqual(report["package_state"], "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
+            self.assertFalse(report["production_change_permitted"])
+            missing_efi = mod.collect(
+                run=run, proc=p, etc=p, root=p, efi=p / "not-present"
+            )
+            self.assertFalse(missing_efi["observations_complete"])
+            self.assertEqual(missing_efi["failure"], "READ_ONLY_EVIDENCE_INCOMPLETE")
+            self.assertEqual(missing_efi["decision"], "HOLD")
             self.assertFalse(report["package_repair_permitted"])
             self.assertFalse(report["production_change_permitted"])
             self.assertEqual(report["decision"], "HOLD")
             self.assertEqual([c[0] for c in commands], ["dpkg-query", "mokutil"])
+
+    def test_residual_config_libc_is_not_accepted_as_installed(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "os-release").write_text('ID=ubuntu\nVERSION_ID="26.04"\n')
+            (p / "meminfo").write_text(
+                "MemAvailable: 4000 kB\nSwapTotal: 8192 kB\nSwapFree: 8 kB\n"
+            )
+            def run(argv, **_kwargs):
+                if argv[0] == "dpkg-query":
+                    return subprocess.CompletedProcess(
+                        argv, 0, "libc6:amd64\trc \t2.39-0ubuntu8.9\n", ""
+                    )
+                return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
+            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p)
+            self.assertTrue(report["observations_complete"])
+            self.assertEqual(report["package_state"], "INCOMPLETE")
+            self.assertEqual(report["decision"], "HOLD")
+
+    def test_missing_meminfo_or_unverified_secure_boot_is_not_clean_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "os-release").write_text('ID=ubuntu\nVERSION_ID="26.04"\n')
+            (p / "meminfo").write_text("MemAvailable: 4000 kB\n")
+            def run(argv, **_kwargs):
+                if argv[0] == "dpkg-query":
+                    return subprocess.CompletedProcess(
+                        argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", ""
+                    )
+                return subprocess.CompletedProcess(argv, 0, "unexpected SecureBoot text\n", "")
+            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p)
+            self.assertEqual(report["package_state"], "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
+            self.assertFalse(report["observations_complete"])
+            self.assertEqual(report["secure_boot"], "UNVERIFIED")
+            self.assertEqual(report["decision"], "HOLD")
 
     def test_tool_failure_is_not_false_green(self):
         def fail(*a, **kw):
