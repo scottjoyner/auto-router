@@ -154,11 +154,12 @@ def evaluate(actual: dict, expected_image: str, expected_files: dict,
     else:
         ips=[x.get("HostIp") if isinstance(x,dict) and x.get("HostPort")=="8088"
              else None for x in binding]
-    valid_bind=bool(ips) and all(
-        ip in (("127.0.0.1","::1") if not allow_public_bind
-               else ("127.0.0.1","::1","0.0.0.0","::"))
-        for ip in ips
-    )
+    # An operator flag cannot attest host firewall, upstream ingress or
+    # Docker-bridge peer isolation. Even an explicit request to allow a
+    # wildcard bind must HOLD until independently proven containment exists
+    # in a separate release process. Only loopback bindings pass here.
+    valid_bind=(bool(ips) and allow_public_bind is False
+                and all(ip in ("127.0.0.1","::1") for ip in ips))
     # Every host-published port must be explicitly reviewed; otherwise an
     # unexpected secondary published port can circumvent the tested 8088 gate.
     bindings=actual.get("bindings",{})
