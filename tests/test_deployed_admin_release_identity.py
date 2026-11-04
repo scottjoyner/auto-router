@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -160,8 +161,19 @@ def test_container_restart_makes_identity_lease_change():
 
 
 def test_cli_requires_all_image_and_source_identity_pins_before_network():
-    script=Path(__file__).resolve().parents[1]/"scripts"/"verify_deployed_admin_release_identity.py"
-    process=subprocess.run([sys.executable,"-B",str(script)],
-                           capture_output=True,text=True,timeout=5,check=False)
-    assert process.returncode!=0
+    root=Path(__file__).resolve().parents[1]
+    # A direct filename execution sets sys.path[0] to scripts/, so a
+    # package-qualified import is unavailable without PYTHONPATH.
+    # Run the documented package/module CLI from the repo root even
+    # when the environment is as minimal as a clean hosted runner.
+    env={key:value for key,value in os.environ.items()
+         if key not in ("PYTHONPATH","PYTHONHOME")}
+    process=subprocess.run(
+        [sys.executable,"-B","-m","scripts.verify_deployed_admin_release_identity"],
+        cwd=root,env=env,
+        capture_output=True,text=True,timeout=5,check=False,
+    )
+    assert process.returncode==2
     assert "--expected-image-sha256" in process.stderr
+    assert "ModuleNotFoundError" not in process.stderr
+    assert "Traceback" not in process.stderr
