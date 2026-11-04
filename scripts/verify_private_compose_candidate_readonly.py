@@ -8,14 +8,89 @@ This preflight is necessary but insufficient for supervised deployment.
 from __future__ import annotations
 
 import argparse
-from copy import deepcopy
 import json
+import os
 import re
+import selectors
+import signal
 import subprocess
+import time
+from copy import deepcopy
 from pathlib import Path
 
 IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
+_MAX_SYNTHETIC_OVERLAY_BYTES = 4 * 1024
+_COMPOSE_CONFIG_TIMEOUT = 25.0
+
+
+def _bounded_compose_config(argv: list[str], *, input: bytes | None = None) -> bytes | None:
+    """Read Docker Compose config with a real byte cap, deadline, no logging.
+
+    Compose may resolve private interpolation even with --no-env-resolution.
+    Never echo its stdout, stderr, argv, or a child exception to a caller.
+    This starts only docker compose config, never up/pull/build/restart.
+    """
+    if input is not None and (
+        type(input) is not bytes or len(input) > _MAX_SYNTHETIC_OVERLAY_BYTES
+    ):
+        return None
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, shell=False,
+            close_fds=True, start_new_session=True,
+        )
+        deadline = time.monotonic() + _COMPOSE_CONFIG_TIMEOUT
+        if input is not None:
+            assert proc.stdin is not None
+            # The synthetic overlay is smaller than PIPE_BUF and contains no
+            # private Compose values. Write it once and close stdin promptly.
+            proc.stdin.write(input)
+            proc.stdin.close()
+        output = bytearray()
+        with selectors.DefaultSelector() as selector:
+            assert proc.stdout is not None
+            selector.register(proc.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                ready = selector.select(remaining)
+                if not ready:
+                    return None
+                for key, _ in ready:
+                    data = os.read(key.fileobj.fileno(), 8192)
+                    if not data:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if len(output) + len(data) > _MAX_CONFIG_BYTES:
+                        return None
+                    output.extend(data)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or proc.wait(timeout=remaining) != 0:
+            return None
+        return bytes(output)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    finally:
+        if proc is not None:
+            # A timed-out child or descendant holding the output pipe open
+            # must be killed and reaped. Keep stderr private in all cases.
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            if proc.stdin is not None:
+                proc.stdin.close()
+            if proc.stdout is not None:
+                proc.stdout.close()
 
 
 def assess_merged_service(config: object, *, service: str, expected_image_id: str) -> dict[str, object]:
@@ -65,10 +140,10 @@ def run_private_preflight(compose_files: list[str], *, service: str, expected_im
     # private values: stdout and stderr must stay in process memory.
     argv.extend(["config", "--no-env-resolution", "--format", "json"])
     try:
-        result = subprocess.run(argv, capture_output=True, timeout=25, check=False)
-        if result.returncode != 0 or len(result.stdout) > _MAX_CONFIG_BYTES:
+        result = _bounded_compose_config(argv)
+        if result is None:
             return _hold("PRIVATE_COMPOSE_CONFIG_UNAVAILABLE")
-        data = json.loads(result.stdout)
+        data = json.loads(result)
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         return _hold("PRIVATE_COMPOSE_CONFIG_UNAVAILABLE")
     return assess_merged_service(data, service=service, expected_image_id=expected_image_id)
@@ -92,19 +167,16 @@ def run_synthetic_overlay_check(compose_files: list[str], *, service: str) -> di
         + "\n    pull_policy: never\n"
     ).encode()
     try:
-        original = subprocess.run(
+        original = _bounded_compose_config(
             base + ["config", "--no-env-resolution", "--format", "json"],
-            capture_output=True, timeout=25, check=False,
         )
-        candidate = subprocess.run(
+        candidate = _bounded_compose_config(
             base + ["-f", "-", "config", "--no-env-resolution", "--format", "json"],
-            input=payload, capture_output=True, timeout=25, check=False,
+            input=payload,
         )
-        if (original.returncode or candidate.returncode
-                or len(original.stdout) > _MAX_CONFIG_BYTES
-                or len(candidate.stdout) > _MAX_CONFIG_BYTES):
+        if original is None or candidate is None:
             return _hold("PRIVATE_COMPOSE_CONFIG_UNAVAILABLE")
-        before, after = json.loads(original.stdout), json.loads(candidate.stdout)
+        before, after = json.loads(original), json.loads(candidate)
         baseline = before["services"][service]
         updated = after["services"][service]
         if not isinstance(baseline, dict) or not isinstance(updated, dict):
