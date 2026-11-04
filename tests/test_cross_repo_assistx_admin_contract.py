@@ -8,17 +8,18 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 import pytest
+from auto_router.config import ProviderRegistry
+from auto_router.models import ModelConfig, ProviderConfig
 from fastapi.testclient import TestClient
 
 from auto_router import main, security
-from auto_router.config import ProviderRegistry
-from auto_router.models import ModelConfig, ProviderConfig
 
 EXPECTED = "b822fe337770dafc17ce04145627bdc6490f2876172af00fe7808f179e3c02c2"
 TOKEN = "synthetic-admin-only-not-real"
@@ -167,3 +168,87 @@ def test_exact_live_entrypoint_all_admin_routes_require_admin_without_lifespan(m
     assert ("GET", "/admin/providers/effective") in seen
     assert ("GET", "/admin/admission") in seen
     assert ("POST", "/admin/runtime-projection") in seen
+
+
+def _load_exact_current_main_controlroom(monkeypatch, catalog):
+    """Load the exact PR #546 Control Room without executing AssistX __init__."""
+    raw = os.getenv("ASSISTX_CONTROL_EXACT")
+    assert raw, "hosted workflow must supply exact current-main Control Room"
+    source = Path(raw)
+    assert source.is_file()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == (
+        "bee6ed102474d3544e90c460eb6dfe3e9cbd6d3b8e6824877b0faa4b84becd77"
+    )
+    pkg = ModuleType("assistx")
+    pkg.__path__ = [str(source.parent)]
+    monkeypatch.setitem(sys.modules, "assistx", pkg)
+    monkeypatch.setitem(sys.modules, "assistx.router_provider_inventory", catalog)
+    # Only unrelated Control Room ancillary dependencies are stubbed.
+    # The actual router inventory and exact Control Room code stay untouched.
+    recovery = ModuleType("assistx.control_room_recovery")
+    recovery.island_recovery_snapshot = lambda *_args, **_kwargs: {}
+    deps = ModuleType("assistx.deps")
+    deps.load_redis_module = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, recovery.__name__, recovery)
+    monkeypatch.setitem(sys.modules, deps.__name__, deps)
+    spec = importlib.util.spec_from_file_location("assistx.control_room", source)
+    assert spec and spec.loader
+    control = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, control)
+    spec.loader.exec_module(control)
+    return control
+
+
+def test_exact_current_main_control_room_uses_real_sanitized_asgi(environment, monkeypatch):
+    parser, router = environment
+    control = _load_exact_current_main_controlroom(monkeypatch, parser)
+    monkeypatch.setenv("AUTO_ROUTER_BASE_URL", "http://synthetic-router.example:8088")
+    monkeypatch.setenv("AUTO_ROUTER_ADMIN_TOKEN", TOKEN)
+    monkeypatch.delenv("AUTO_ROUTER_ADMIN_PROVIDERS_URL", raising=False)
+    calls = []
+
+    def inprocess_fetch(url, path, *, admin_token):
+        route = urlsplit(url).path
+        calls.append((route, admin_token))
+        result = router.get(route, headers={"X-Admin-Token": admin_token})
+        if result.status_code >= 400:
+            raise HTTPError(url, result.status_code, "synthetic denial", {}, None)
+        return result.json(), 0.1
+
+    monkeypatch.setattr(control, "_http_json", inprocess_fetch)
+    result = control._provider_catalog()
+    assert result["destroyer"] == ["Ornith-1.5"]
+    assert result["stage-1"] == ["Ornith-1.5"]
+    assert calls == [("/admin/providers/effective", TOKEN)]
+    # A nonmatching token must not trigger old-router fallback or reveal nodes.
+    calls.clear()
+    monkeypatch.setenv("AUTO_ROUTER_ADMIN_TOKEN", "wrong")
+    assert control._provider_catalog() == {}
+    assert calls == [("/admin/providers/effective", "wrong")]
+
+
+def test_exact_current_main_control_room_legacy_404_fallback(environment, monkeypatch):
+    parser, router = environment
+    control = _load_exact_current_main_controlroom(monkeypatch, parser)
+    monkeypatch.setenv("AUTO_ROUTER_BASE_URL", "http://synthetic-router.example:8088")
+    monkeypatch.setenv("AUTO_ROUTER_ADMIN_TOKEN", TOKEN)
+    monkeypatch.delenv("AUTO_ROUTER_ADMIN_PROVIDERS_URL", raising=False)
+    calls = []
+
+    def inprocess_fetch(url, path, *, admin_token):
+        route = urlsplit(url).path
+        calls.append((route, admin_token))
+        if route == "/admin/providers/effective":
+            raise HTTPError(url, 404, "synthetic prepatch router", {}, None)
+        result = router.get(route, headers={"X-Admin-Token": admin_token})
+        if result.status_code >= 400:
+            raise HTTPError(url, result.status_code, "synthetic denial", {}, None)
+        return result.json(), 0.1
+
+    monkeypatch.setattr(control, "_http_json", inprocess_fetch)
+    result = control._provider_catalog()
+    assert result["destroyer"] == ["Ornith-1.5"]
+    assert calls == [
+        ("/admin/providers/effective", TOKEN),
+        ("/admin/providers", TOKEN),
+    ]
