@@ -67,9 +67,12 @@ def audit(app) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--entrypoint",choices=["main", "main_live"],required=True)
+    ap.add_argument("--entrypoint",choices=["main", "main_live", "secure_live"],required=True)
     args = ap.parse_args()
-    if args.entrypoint == "main_live":
+    if args.entrypoint == "secure_live":
+        # This is the actual container ASGI entrypoint; no lifespan.
+        from auto_router.secure_live import app
+    elif args.entrypoint == "main_live":
         from auto_router.main_live import app
     else:
         from auto_router.main import app

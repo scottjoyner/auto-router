@@ -127,6 +127,10 @@ jobs:
             sleep 3
           done
           test "$healthy" = "true"
+      - name: Verify all six administrative GET routes deny anonymous reads in the built Docker image
+        # Runs against the actual strict-offline ASGI container started above.
+        # No credentials, response bodies, live POSTs, or production services.
+        run: python3 -B scripts/admin_auth_readonly_canary.py --port 8088
       - name: Verify health, offline models, authenticated inference, route surface, admission, projection, and admin auth gate
         run: |
           curl -sf http://127.0.0.1:8088/health > /tmp/router-health.json
