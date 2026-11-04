@@ -88,6 +88,34 @@ def _free_bytes(path: Path) -> int | None:
     return stats.f_bavail * stats.f_frsize
 
 
+def _efi_mount_verified(proc: Path, efi: Path) -> bool:
+    """Require exactly one mounted EFI vfat filesystem, not an empty directory.
+
+    Reads only mountpoint/filesystem metadata. Neither device names nor raw
+    mount records are emitted into the aggregate report.
+    """
+    if not efi.is_dir():
+        return False
+    with (proc / "self" / "mountinfo").open(encoding="utf-8") as source:
+        data = source.read(1024 * 1024 + 1)
+    if len(data) > 1024 * 1024:
+        return False
+    mounts = []
+    for line in data.splitlines():
+        fields = line.split()
+        if len(fields) < 10 or fields[4] != str(efi):
+            continue
+        if fields.count("-") != 1:
+            return False
+        separator = fields.index("-")
+        mounts.append(
+            separator + 3 < len(fields)
+            and fields[3] == "/"
+            and fields[separator + 1] == "vfat"
+        )
+    return len(mounts) == 1 and mounts[0]
+
+
 def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
             etc: Path = Path("/etc"), root: Path = Path("/"),
             efi: Path = Path("/boot/efi")) -> dict:
@@ -105,6 +133,7 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
         report["os"] = _os_info(etc / "os-release")
         report["memory_kib"] = _meminfo(proc / "meminfo")
         report["filesystem_available_bytes"] = {"root": _free_bytes(root), "efi": _free_bytes(efi)}
+        report["efi_mounted_vfat"] = _efi_mount_verified(proc, efi)
         report["uname_kernel"] = os.uname().release
         try:
             sb = run(["mokutil", "--sb-state"], check=False, capture_output=True,
@@ -131,6 +160,7 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
             and all(isinstance(n, int) and n >= 0 for n in report["memory_kib"].values())
             and all(isinstance(n, int) and n > 0
                     for n in report["filesystem_available_bytes"].values())
+            and report["efi_mounted_vfat"] is True
             and report["secure_boot"] in {"enabled", "disabled"}
         )
         if not report["observations_complete"]:
