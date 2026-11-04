@@ -80,6 +80,18 @@ def test_signed_projection_generation_rejects_forged_claims(tmp_path) -> None:
     assert signed_projection_generation(state, {}) is None
 
 
+@pytest.mark.parametrize("invalid_generation", [True, False, "42", 42.0, 0, -1, None, {}])
+def test_signed_projection_rejects_noninteger_manager_generation(
+    tmp_path, invalid_generation
+) -> None:
+    state = _state(tmp_path, manager=_manager(generation=invalid_generation))
+    # Even a valid caller request must not confer provenance on malformed
+    # projection state, regardless of its apparent numeric value.
+    assert signed_projection_generation(
+        state, {"runtime_projection_generation": GENERATION}
+    ) is None
+
+
 def test_signed_projection_generation_requires_live_projection(tmp_path) -> None:
     state = _state(tmp_path, manager=None)
     metadata = {"runtime_projection_generation": GENERATION}

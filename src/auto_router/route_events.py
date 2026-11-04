@@ -54,9 +54,10 @@ def signed_projection_generation(
     current = getattr(manager, "current", None)
     if type(raw) is not int or raw < 1 or current is None:
         return None
-    try:
-        generation = int(current.generation)
-    except (TypeError, ValueError):
+    # Never normalize a malformed manager generation. In particular,
+    # bool is an int subclass and int("42") silently accepts string drift.
+    generation = getattr(current, "generation", None)
+    if type(generation) is not int or generation < 1:
         return None
     return generation if raw == generation else None
 
