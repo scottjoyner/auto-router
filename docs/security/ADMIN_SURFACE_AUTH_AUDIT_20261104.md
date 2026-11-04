@@ -147,3 +147,50 @@ trace metadata, model inventory and admission controls.
 
 **Overall production NO-GO**. Nothing was merged, pushed,
 restarted, loaded or deployed in this security research step.
+
+## Follow-up: fully mounted route verification (November 4, 01:18 EST)
+
+A separate script,
+`scripts/audit_mounted_admin_gate.py`, imports each application
+entrypoint in an isolated Python process with
+`AUTO_ROUTER_STRICT_OFFLINE=true`. It inspects the actual FastAPI
+`APIRoute.dependant.dependencies` compiled guards (rather than
+assuming decorators imply protection), and sends anonymous in-process
+requests to every mounted `/admin/*` method/path.
+
+The client deliberately **does not enter the application lifespan**,
+load models, dispatch tasks, call network endpoints, authenticate
+mutation calls, or change production services.
+
+- Base `auto_router.main`: **13 mounted admin methods**, all
+  guard-dependent and anonymous HTTP 401.
+- Reconciled `auto_router.main_live`: **19 mounted admin methods**,
+  all guard-dependent and anonymous HTTP 401, including
+  `POST /admin/load`, `POST /admin/circuits/reset`, and
+  `POST /admin/runtime-projection`.
+- The existing historical route modules are covered by the separate
+  static **34 declared decorator** audit; not all are mounted by the
+  reconciled runtime.
+- A deliberately unprotected synthetic route causes the audit to
+  **FAIL before invoking its handler**, demonstrating the check
+  cannot silently bless missing guards.
+
+Three new tests in `tests/test_admin_mounted_runtime_contract.py`
+passed. This is not a test of production admission, operator credentials,
+TLS, authentic fleet client compatibility or live POST side effects.
+The running `GET /admin/providers` and `GET /admin/context`
+still returned anonymous HTTP 200 at 01:16 EST. Do not call the
+deployment fixed until an approved rollout is actually verified.
+
+Reproduction:
+
+```bash
+AUTO_ROUTER_STRICT_OFFLINE=true PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH=src python3 -B scripts/audit_mounted_admin_gate.py \
+  --entrypoint main_live
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. \
+  python3 -B -m pytest -q \
+  tests/test_admin_mounted_runtime_contract.py \
+  tests/test_admin_surface_deny_default.py
+```
