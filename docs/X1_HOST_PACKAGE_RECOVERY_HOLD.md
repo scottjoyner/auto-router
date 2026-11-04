@@ -29,3 +29,7 @@ No workflow or production timer invokes this collector automatically.
 5. After maintenance, independently prove current/fallback boot, dpkg consistency, Neo4j and service identity, protected Router admin endpoints, disk/storage custody, memory reserve and safe inference. Reopen NPU work only under its independent signed driver/firmware and model-runtime approval.
 
 **Prohibited in this read-only scope:** apt --fix-broken, dpkg --configure, apt autoremove, swapoff, grub-install, kernel/DKMS installers, Docker/Neo4j restarts, model launches, firewall changes, credential changes, and reboot. Production remains HOLD.
+
+## November 4 strict observation completeness extension
+
+A reported `NO_DPKG_INCOMPLETE_INSTALLED_DETECTED` state is no longer sufficient for exit code 0. The collector additionally requires installed/held `libc6` (not only `rc` residual configuration), parseable Ubuntu OS version, complete read-only memory fields, nonzero available root and EFI capacity, and independently parsed Secure Boot status. Missing EFI, unreadable `mokutil` evidence or missing memory fields yields `observations_complete=false` and exit code 2, even when dpkg counts are zero. Successful collector exit is an informational preflight result only: no root+EFI restore, physical console, rollback rehearsal or maintenance approval is certified. All positive/negative tests use synthetic fixtures; no fleet host was changed.
