@@ -361,3 +361,50 @@ network evidence, missing/forged HTTP outcomes,
 a changed container during audit, command allowlist
 refusal, private receipt integrity and deny-default CLI.
 All are offline and do not depend on production credentials.
+
+## Network peer compatibility inventory — actual x1-370 evidence (12:56 EST)
+
+New `scripts/audit_router_peer_compatibility.py` provides a
+**read-only, non-authoritative dependency inventory** before choosing
+an isolation design. It captures the router's immutable image,
+published port and exact attached Docker network names, then reads
+*only container names* on each network. It repeats the network
+membership and image/start/port inspection to reject concurrent
+changes. No Docker `exec`, firewall inspection, token access, logs,
+environment inspection, network probe, provider call, container
+restart, or network modification is performed.
+
+The actual live inventory found:
+
+| Docker network | Current other container peers | Claim |
+| --- | --- | --- |
+| `git_default` | `assistx-api`, `auto-assign`, `git-redis-1`, `neo4j` | Four **potential** peers |
+| `assistx-fleet_default` | None beyond `git-router-1` | No additional current peers |
+
+Both networks have Docker bridge attachment semantics; the previous
+dual-plane audit established `Internal=false`. The names alone do
+**not** show these peers use the router's API, that they have
+authorized credentials, or that an isolation policy would preserve
+their traffic. Host/Tailscale/external clients might not appear as
+Docker peers and are **not covered** by this inventory.
+
+The private 0600 receipt:
+`/tmp/router-network-peers-20261104-1256.json`,
+SHA-256
+`7e7e9c59df3571f5a8216e5b799f785ce7c1152095ba0a84d8bdb86d87e9ed44`.
+
+**Result: HOLD, exit 2.** The audit is deliberately incapable of
+granting `production_ready`, of authorizing a peer allowlist, or
+of promoting image/rollback readiness. Twenty synthetic tests
+prove fail-closed behavior for changed image/network membership,
+router missing from a claimed network, duplicate/invalid
+container names, unreviewed network names, unsafe receipt
+destinations, and command invocation without explicit read-only
+consent.
+
+Before an approved containment change, an operator must independently
+establish each real API client's source network, endpoint and
+authorization path, then test necessary authorized traffic and
+nonallowlisted denial across the host IPv4/IPv6 publication and
+Docker peer planes. The local client inventory alone cannot
+approve firewall changes, bridge detachment, or a container cutover.
