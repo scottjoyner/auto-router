@@ -70,6 +70,40 @@ def test_stale_or_unsafe_deployment_never_passes(change):
     assert not all(result["checks"].values())
 
 
+def test_additional_published_host_port_denies_even_if_8088_is_correct():
+    d=_proof()
+    d["bindings"]["9090/tcp"]=[{"HostIp":"0.0.0.0","HostPort":"9090"}]
+    result=evaluate(d,"a"*64,FILES_HASHES,status_probe=_canary)
+    assert result["gate"]=="HOLD"
+    assert result["checks"]["no_unreviewed_published_host_ports"] is False
+    # Docker may report additional EXPOSEd but unpublished ports as null.
+    d["bindings"]["9090/tcp"]=None
+    assert evaluate(d,"a"*64,FILES_HASHES,
+                    status_probe=_canary)["gate"]=="PASS_PRE_CUTOVER_INSPECTION_ONLY"
+
+
+def test_decoy_asgi_argument_cannot_pass_exact_entrypoint_check():
+    def fake(args):
+        if "exec" in args:
+            return json.dumps(FILES_HASHES)
+        if "{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}" in args:
+            return LEASE
+        if "{{.State.Running}}" in args:
+            return "true"
+        if "{{.Path}}" in args:
+            return "uvicorn"
+        if "{{json .Args}}" in args:
+            return json.dumps(["unreviewed.module:app","--factory",
+                               "auto_router.secure_live:app"])
+        if "{{json .NetworkSettings.Ports}}" in args:
+            return json.dumps(_proof()["bindings"])
+        raise AssertionError(args)
+    actual=inspect(read=fake)
+    assert actual["expected_entrypoint"] is False
+    result=evaluate(actual,"a"*64,FILES_HASHES,status_probe=_canary)
+    assert result["gate"]=="HOLD"
+
+
 def test_public_bind_requires_explicit_individual_optin_and_still_needs_valid_image():
     result=evaluate(_proof(public=True),"a"*64,FILES_HASHES,
                     allow_public_bind=True,status_probe=_canary)
