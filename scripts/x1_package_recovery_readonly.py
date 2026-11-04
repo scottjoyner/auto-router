@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Read-only host package-health inventory. NEVER authorizes package repair/reboot."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from typing import Callable
+
+DPKG_FORMAT = "$" + "{binary:Package}\t$" + "{db:Status-Abbrev}\t$" + "{Version}\\n"
+CRITICAL = frozenset({"libc6", "libc-bin", "libc6-dev", "libc-dev-bin", "locales", "grub-efi-amd64", "shim-signed"})
+
+
+def inventory_packages(output: str) -> dict:
+    """Aggregate only; never publish package inventory, paths or command output."""
+    pending = 0
+    reinst = 0
+    critical: dict[str, dict[str, str]] = {}
+    total = 0
+    for line in output.splitlines():
+        cols = line.split("\t")
+        if len(cols) != 3 or not cols[0] or not re.fullmatch(r"[a-zA-Z?][a-zA-Z?][a-zA-Z? ]", cols[1]):
+            raise ValueError("unverifiable dpkg status record")
+        package, status, version = cols
+        total += 1
+        is_pending = status[0] in {"i", "h"} and (status[1] != "i" or status[2] == "R")
+        if is_pending:
+            pending += 1
+        if status[2] == "R":
+            reinst += 1
+        base_name = package.split(":", 1)[0]
+        if base_name in CRITICAL:
+            safe_version = version if re.fullmatch(r"[A-Za-z0-9.:+~_-]{1,100}", version) else "UNVERIFIED"
+            critical[base_name] = {"state": status.strip() or "UNKNOWN", "version": safe_version}
+    if total == 0 or "libc6" not in critical:
+        raise ValueError("no credible package inventory")
+    return {"total_packages": total, "incomplete_installed_packages": pending,
+            "reinstallation_required_packages": reinst, "critical_packages": critical}
+
+
+def _meminfo(path: Path) -> dict[str, int | None]:
+    keys = {"MemAvailable", "SwapTotal", "SwapFree"}
+    values: dict[str, int | None] = {k: None for k in keys}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"(MemAvailable|SwapTotal|SwapFree):\s+(\d+)\s+kB", line)
+        if match:
+            values[match[1]] = int(match[2])
+    return values
+
+
+def _os_info(path: Path) -> dict[str, str]:
+    info: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r'(ID|VERSION_ID)=(?:"([^"\n]*)"|([A-Za-z0-9_.+-]+))', line)
+        if match:
+            info[match[1]] = match[2] if match[2] is not None else match[3]
+    return {"id": info.get("ID", "UNVERIFIED"), "version": info.get("VERSION_ID", "UNVERIFIED")}
+
+
+def _free_bytes(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    stats = os.statvfs(path)
+    return stats.f_bavail * stats.f_frsize
+
+
+def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
+            etc: Path = Path("/etc"), root: Path = Path("/"),
+            efi: Path = Path("/boot/efi")) -> dict:
+    """Only fixed read commands; never logs raw errors or command arguments."""
+    report: dict = {"contract": "x1-package-recovery-readonly-v1", "production_change_permitted": False,
+                    "package_repair_permitted": False, "reboot_permitted": False,
+                    "root_efi_restore_certified": False, "console_recovery_certified": False,
+                    "rollback_rehearsal_certified": False, "decision": "HOLD"}
+    try:
+        result = run(["dpkg-query", "-W", f"-f={DPKG_FORMAT}"], check=False,
+                     capture_output=True, text=True, timeout=12)
+        if result.returncode != 0:
+            raise ValueError("dpkg-query returned nonzero")
+        report["dpkg"] = inventory_packages(result.stdout)
+        report["os"] = _os_info(etc / "os-release")
+        report["memory_kib"] = _meminfo(proc / "meminfo")
+        report["filesystem_available_bytes"] = {"root": _free_bytes(root), "efi": _free_bytes(efi)}
+        report["uname_kernel"] = os.uname().release
+        try:
+            sb = run(["mokutil", "--sb-state"], check=False, capture_output=True,
+                     text=True, timeout=8)
+            report["secure_boot"] = ("enabled" if sb.returncode == 0 and
+                                     "SecureBoot enabled" in sb.stdout else
+                                     "disabled" if sb.returncode == 0 and
+                                     "SecureBoot disabled" in sb.stdout else "UNVERIFIED")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            report["secure_boot"] = "UNVERIFIED"
+        report["package_state"] = ("INCOMPLETE" if report["dpkg"]["incomplete_installed_packages"] or
+                                   report["dpkg"]["reinstallation_required_packages"] else "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
+        report["observations_complete"] = True
+    except (ValueError, FileNotFoundError, PermissionError, OSError, subprocess.TimeoutExpired, UnicodeError):
+        report["observations_complete"] = False
+        report["package_state"] = "UNVERIFIED"
+        report["failure"] = "READ_ONLY_EVIDENCE_UNAVAILABLE"
+    return report
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--read-only", action="store_true", required=True,
+                        help="emit aggregate package-health evidence; never repair")
+    args = parser.parse_args(argv)
+    if not args.read_only:
+        return 2
+    report = collect()
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 2 if report["package_state"] != "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED" else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
