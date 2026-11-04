@@ -115,9 +115,26 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
                                      "SecureBoot disabled" in sb.stdout else "UNVERIFIED")
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             report["secure_boot"] = "UNVERIFIED"
-        report["package_state"] = ("INCOMPLETE" if report["dpkg"]["incomplete_installed_packages"] or
-                                   report["dpkg"]["reinstallation_required_packages"] else "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
-        report["observations_complete"] = True
+        # Clean dpkg counters are not sufficient: a host with only residual
+        # libc configuration (rc), missing EFI, or unreadable boot evidence
+        # must never produce a successful operator-preflight exit.
+        libc_ready = report["dpkg"]["critical_packages"]["libc6"]["state"] in {"ii", "hi"}
+        report["package_state"] = (
+            "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED"
+            if libc_ready and not report["dpkg"]["incomplete_installed_packages"]
+            and not report["dpkg"]["reinstallation_required_packages"]
+            else "INCOMPLETE"
+        )
+        report["observations_complete"] = (
+            report["os"]["id"] == "ubuntu"
+            and report["os"]["version"] != "UNVERIFIED"
+            and all(isinstance(n, int) and n >= 0 for n in report["memory_kib"].values())
+            and all(isinstance(n, int) and n > 0
+                    for n in report["filesystem_available_bytes"].values())
+            and report["secure_boot"] in {"enabled", "disabled"}
+        )
+        if not report["observations_complete"]:
+            report["failure"] = "READ_ONLY_EVIDENCE_INCOMPLETE"
     except (ValueError, FileNotFoundError, PermissionError, OSError, subprocess.TimeoutExpired, UnicodeError):
         report["observations_complete"] = False
         report["package_state"] = "UNVERIFIED"
@@ -134,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     report = collect()
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 2 if report["package_state"] != "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED" else 0
+    return 0 if (report["observations_complete"] is True
+                 and report["package_state"] == "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED") else 2
 
 
 if __name__ == "__main__":
