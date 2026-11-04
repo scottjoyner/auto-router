@@ -1,0 +1,36 @@
+--- a/certs_test.py
++++ b/certs_test.py
+@@ -14,6 +14,7 @@
+ from __future__ import annotations
+ 
+ import os
++import re
+ import shutil
+ import socket
+ import ssl
+@@ -229,12 +230,21 @@
+         self.assertIn("CA:FALSE", proc.stdout)
+ 
+     def test_the_identity_is_the_common_name(self):
+-        # The relay reads this to decide who is calling, so it has to be the device id.
++        # OpenSSL 3.0 prints "CN = id"; OpenSSL 3.5 may print "CN=id".
++        # Compare the complete CN value, not an attacker-controlled prefix.
+         for name, expected in (("x1-370", "x1-370"), ("operator", "operator")):
+             with self.subTest(name=name):
+-                proc = subprocess.run(["openssl", "x509", "-in", str(self.ca / f"{name}.crt"),
+-                                       "-noout", "-subject"], capture_output=True, text=True)
+-                self.assertIn(f"CN = {expected}", proc.stdout)
++                proc = subprocess.run(
++                    ["openssl", "x509", "-in", str(self.ca / f"{name}.crt"),
++                     "-noout", "-subject"], capture_output=True, text=True,
++                )
++                self.assertEqual(proc.returncode, 0)
++                match = re.search(
++                    r"(?:^|subject=|[,/])\s*CN\s*=\s*([^,/\r\n]+)",
++                    proc.stdout,
++                )
++                self.assertIsNotNone(match)
++                self.assertEqual(match.group(1).strip(), expected)
+ 
+     def test_status_lists_every_issued_certificate(self):
+         proc = mint(self.ca, "status")
