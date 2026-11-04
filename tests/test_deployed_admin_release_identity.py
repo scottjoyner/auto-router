@@ -110,11 +110,15 @@ def test_decoy_asgi_argument_cannot_pass_exact_entrypoint_check():
 def test_runtime_source_mounts_fail_closed_without_reading_mount_sources():
     assert code_mounts_safe([]) is True
     assert code_mounts_safe([{"Destination":"/run/secrets/router-token"}]) is True
+    assert code_mounts_safe([{"Destination":"/app/config", "Type": "bind"},
+                             {"Destination":"/data", "Type": "volume"}]) is True
     for candidate in (
         [{"Destination":"/app/src", "Source":"/private/home/not-disclosed"}],
         [{"Destination":"/usr/local/lib/python3.12/site-packages"}],
         [{"Destination":"/workspace"}],
         [{"Destination":"/app"}],
+        [{"Destination":"/app/config/poison.py"}],
+        [{"Destination":"/app/config-new"}],
         [{"Destination":"/app/../app"}],
         [{"Destination":"relative/path"}],
         [{"Destination":None}],
