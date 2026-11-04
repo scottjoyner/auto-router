@@ -28,12 +28,12 @@ jobs:
         run: python -m pip install ruff==0.15.15
       - name: Static syntax check
         run: |
-          python -m py_compile research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py
+          python -m py_compile research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py research/x1_backchannel_readiness.py
       - name: Ruff safety research lint
         run: |
-          ruff check --config pyproject.toml research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py tests/test_x1_offline_imaging_preflight.py tests/test_xdna_driver_staging_preflight.py tests/test_x1_apt_repair_plan_audit.py tests/test_x1_offline_pkg_bundle_audit.py
-          ruff format --check --config pyproject.toml research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py tests/test_x1_offline_imaging_preflight.py tests/test_xdna_driver_staging_preflight.py tests/test_x1_apt_repair_plan_audit.py tests/test_x1_offline_pkg_bundle_audit.py
-      - name: Run 56 isolated offline negative and fail-closed tests
+          ruff check --config pyproject.toml research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py research/x1_backchannel_readiness.py tests/test_x1_offline_imaging_preflight.py tests/test_xdna_driver_staging_preflight.py tests/test_x1_apt_repair_plan_audit.py tests/test_x1_offline_pkg_bundle_audit.py tests/test_x1_backchannel_readiness.py
+          ruff format --check --config pyproject.toml research/x1_offline_imaging_preflight.py research/xdna_driver_staging_preflight.py research/x1_apt_repair_plan_audit.py research/x1_offline_pkg_bundle_audit.py research/x1_backchannel_readiness.py tests/test_x1_offline_imaging_preflight.py tests/test_xdna_driver_staging_preflight.py tests/test_x1_apt_repair_plan_audit.py tests/test_x1_offline_pkg_bundle_audit.py tests/test_x1_backchannel_readiness.py
+      - name: Run 65 isolated offline negative and fail-closed tests
         run: |
           python -m unittest discover -s tests -p 'test_x1_*.py' -q
           python -m unittest discover -s tests -p 'test_xdna_driver_staging_preflight.py' -q
