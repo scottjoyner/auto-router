@@ -226,3 +226,29 @@ read-only status checks. This may reflect a stale deployed build,
 routing/front-proxy mismatch or configuration, and the exact
 deployed artifact must be checked before assigning root cause.
 No service was restarted or production route changed.
+
+## Enforceable loopback-only deployment canary
+
+An additional script, `scripts/admin_auth_readonly_canary.py`,
+provides a cutover acceptance test that never supplies credentials,
+never reads response bodies, restricts all traffic to
+`127.0.0.1`, and only issues GET requests to six pinned
+administrative paths. The script exits **0** only when *every*
+anonymous GET returns **401**. Any 200, 302, 404 or transport
+failure returns a failing status.
+
+```bash
+python3 -B scripts/admin_auth_readonly_canary.py --port 8088
+```
+
+The three offline unit tests cover correct denial, one leaking route,
+and rejected non-loopback/mutating inputs. On the pre-cutover running
+service, the real canary returned HTTP 200 for five monitored routes
+and HTTP 401 for `/admin/admission`: **CUTOVER GATE FAILED**.
+
+This is a **negative control**, not a deployment. It does not prove
+that any future authenticated operator request succeeds; authorized
+client and rollback tests remain separately required.
+
+**Production must remain unchanged until its deployment owner
+approves the release and verifies the exact target artifact.**
