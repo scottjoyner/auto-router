@@ -26,7 +26,13 @@ FILES = ("main.py", "security.py", "main_live.py", "secure_live.py")
 FILE_HASH_CODE = """
 import hashlib,json,sysconfig
 from pathlib import Path
-root=Path(sysconfig.get_path('purelib'))/'auto_router'
+from importlib.machinery import PathFinder
+root=(Path(sysconfig.get_path('purelib'))/'auto_router').resolve()
+# Find the package without importing or executing its application code.
+spec=PathFinder.find_spec('auto_router')
+locations=[] if spec is None else list(spec.submodule_search_locations or [])
+if len(locations)!=1 or Path(locations[0]).resolve()!=root:
+    raise SystemExit(3)
 names=('main.py','security.py','main_live.py','secure_live.py')
 print(json.dumps({name:hashlib.sha256((root/name).read_bytes()).hexdigest()
                   for name in names},sort_keys=True))
@@ -63,6 +69,25 @@ def _identity_lease(read=_run, container: str=CONTAINER) -> str:
     return raw
 
 
+CODE_ROOTS=("/app", "/code", "/workspace", "/opt/auto-router",
+            "/usr/local/lib", "/usr/lib")
+
+
+def code_mounts_safe(mounts: object) -> bool:
+    """Reject source/runtime-path overlays without exposing host mount sources."""
+    if not isinstance(mounts,list):
+        return False
+    for mount in mounts:
+        if not isinstance(mount,dict):
+            return False
+        target=mount.get("Destination")
+        if not isinstance(target,str) or not target.startswith("/") or "/../" in target:
+            return False
+        if any(target==root or target.startswith(root+"/") for root in CODE_ROOTS):
+            return False
+    return True
+
+
 def inspect(read=_run, container: str=CONTAINER) -> dict:
     """Only selected nonsecret Docker metadata and installed Python source hashes."""
     if container not in ALLOWED_CONTAINERS:
@@ -74,6 +99,10 @@ def inspect(read=_run, container: str=CONTAINER) -> dict:
     args = json.loads(read(["docker", "inspect", "--format", "{{json .Args}}", container]))
     bindings = json.loads(read([
         "docker","inspect","--format","{{json .NetworkSettings.Ports}}",container]))
+    # Destination-only mount metadata is evaluated in memory. Never print
+    # host-side mount Source paths or inspect mounted credentials.
+    mounts = json.loads(read([
+        "docker","inspect","--format","{{json .Mounts}}",container]))
     installed = json.loads(read([
         "docker","exec",container,"python3","-B","-c",FILE_HASH_CODE]))
     if (not isinstance(args,list) or not isinstance(bindings,dict)
@@ -91,7 +120,14 @@ def inspect(read=_run, container: str=CONTAINER) -> dict:
         # as an unrelated flag value. Uvicorn's first argument is its app.
         "expected_entrypoint":command in ("uvicorn","/usr/local/bin/uvicorn")
             and bool(args) and args[0] == ENTRYPOINT
-            and args.count(ENTRYPOINT) == 1,
+            and args.count(ENTRYPOINT) == 1
+            and not any(
+                isinstance(a,str) and (
+                    a in {"--app-dir", "--factory", "--reload", "--env-file"}
+                    or a.startswith(("--app-dir=", "--env-file="))
+                ) for a in args[1:]
+            ),
+        "code_mounts_clear":code_mounts_safe(mounts),
         "bindings":bindings,
         "installed_source_hashes":installed,
     }
@@ -141,6 +177,7 @@ def evaluate(actual: dict, expected_image: str, expected_files: dict,
         "container_running":actual.get("running") is True,
         "immutable_image_id_matches_pinned_build":actual.get("image_id")==expected_image,
         "expected_secure_live_entrypoint":actual.get("expected_entrypoint") is True,
+        "no_unreviewed_runtime_source_mounts":actual.get("code_mounts_clear") is True,
         "installed_source_hashes_match_pinned_build":actual.get("installed_source_hashes")==expected_files,
         "host_port_bind_is_explicitly_approved":valid_bind,
         "no_unreviewed_published_host_ports":no_extra_publications,
