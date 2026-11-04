@@ -186,3 +186,45 @@ Nineteen synthetic unit tests passed, including wrong-token
 acceptance, 401-for-valid-token, missing route, unsafe
 path/port/credential, unexpected environment, and accidental
 body-read rejection. Source and production remain unchanged.
+
+## Optional operator-controlled read-only credential acceptance (12:10 EST)
+
+New `scripts/approved_operator_readonly_canary.py` prepares a future
+**explicitly authorized** post-cutover verification step. It is not
+invoked from GitHub CI and has **never** been run against the current
+production router.
+
+The operator must provide the independently approved build's full
+Docker image SHA-256 and all four reviewed source SHA-256 values,
+supply `--explicit-approved-read-only-operator`, and pass the real
+operator credential through an already-open private **pipe file
+descriptor** numbered 3–32. The script refuses file-backed secrets,
+command-line secrets, standard input, malformed credentials, stale
+image/build source identities, public bind mismatches (unless separately
+reviewed through the lower-level provenance tool), incomplete six-path
+anonymous 401 checks and container restarts.
+
+**Only after** deployed-image identity and all six anonymous denials
+are revalidated does it read the credential from the pipe. It then
+makes exactly five sequential status-only GETs against loopback TCP
+8088: providers, context, circuits, agent jobs and admission. All
+five must return HTTP 200. It never reads response bodies, issues a
+POST, performs inference, or requests provider-health probes. The
+credential is never printed, stored in a receipt or accepted on argv.
+
+A success result is `PASS_READ_ONLY_OPERATOR_PROBE_ONLY`,
+**not production-ready**, and cannot establish independent rollback
+approval, external ingress isolation, signature/key custody, or
+authorization to restart/redeploy a live container. It is
+deliberately separate from the synthetic `smoke-admin-token` used
+in the CI Compose fixture.
+
+**Rollback warning:** the currently deployed October 7 image has
+five anonymously accessible administrative endpoints. Returning
+to that image cannot be treated as a security-safe rollback. A
+release plan must identify an independently reviewed, authenticated
+fallback or safe traffic isolation; neither has been approved here.
+
+Twenty-three operator-canary unit tests ran against fake Docker,
+HTTP and pipe fixtures; **no real operator credentials were read**
+and **no live production request was sent**.
