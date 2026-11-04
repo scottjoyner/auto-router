@@ -38,7 +38,7 @@ class AuditTests(unittest.TestCase):
         for state in incomplete:
             with self.subTest(state=state):
                 report = mod.inventory_packages(
-                    "libc6:amd64\\t" + state + "\\t2.43-2ubuntu2\\n"
+                    "libc6:amd64\t" + state + "\t2.43-2ubuntu2\n"
                 )
                 self.assertEqual(report["incomplete_installed_packages"], 1)
 
@@ -46,21 +46,21 @@ class AuditTests(unittest.TestCase):
         for state in ("???", "ix ", "xi ", "iiX", "iI ", "iU?"):
             with self.subTest(state=state), self.assertRaises(ValueError):
                 mod.inventory_packages(
-                    "libc6:amd64\\t" + state + "\\t2.43-2ubuntu2\\n"
+                    "libc6:amd64\t" + state + "\t2.43-2ubuntu2\n"
                 )
 
     def test_clean_hold_and_residual_config_are_not_false_pending(self):
         report = mod.inventory_packages(
-            "libc6:amd64\\thi \\t2.43-2ubuntu2\\n"
-            "old-config\\trc \\t1.0\\n"
-            "removed-package\\tun \\t1.0\\n"
+            "libc6:amd64\thi \t2.43-2ubuntu2\n"
+            "old-config\trc \t1.0\n"
+            "removed-package\tun \t1.0\n"
         )
         self.assertEqual(report["incomplete_installed_packages"], 0)
 
     def test_mixed_architectures_cannot_hide_a_broken_libc(self):
         report = mod.inventory_packages(
-            "libc6:i386\\tiHR\\t2.39-0ubuntu8.9\\n"
-            "libc6:amd64\\tii \\t2.43-2ubuntu2\\n"
+            "libc6:i386\tiHR\t2.39-0ubuntu8.9\n"
+            "libc6:amd64\tii \t2.43-2ubuntu2\n"
         )
         self.assertEqual(report["incomplete_installed_packages"], 1)
         self.assertEqual(report["reinstallation_required_packages"], 1)
