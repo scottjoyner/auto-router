@@ -148,3 +148,41 @@ receipt paths. All 48 combined relevant security tests
 passed on x1-370; strict import/name lint and workflow
 YAML parsing passed. Hosted exact-head build proof remains
 unverified until the revised PR workflow actually runs.
+
+## Additional synthetic positive-operator gate (12:06 EST)
+
+The Docker integration workflow now invokes
+`python3 -B -m scripts.admin_positive_auth_ci_canary
+--explicit-ci-synthetic-only` after anonymous-admin denial
+and before source-to-image provenance verification. It is
+restricted to `CI=true` and `GITHUB_ACTIONS=true`,
+loopback-only TCP 8088, and the previously committed
+**synthetic** `smoke-admin-token` fixture found in
+`docker-compose.integration.yml`. No real operator token
+is loaded, logged or used.
+
+For each of five **safely read-only** admin routes
+(`/admin/providers`, `/admin/context`,
+`/admin/circuits`, `/admin/agent-jobs`,
+`/admin/admission`), the script requires:
+- anonymous HTTP 401
+- invalid synthetic fixture credential HTTP 401
+- correct synthetic fixture credential HTTP 200
+
+All 15 requests are GET and status-only. No response body
+is consumed or saved. The sixth administrative endpoint
+`/admin/providers/health` remains covered by the existing
+anonymous-only 401 canary, but is **excluded** from
+positive-auth probes because its handler performs external
+provider-health checks and can write local signal snapshots.
+Likewise no admin POSTs or inference requests are sent.
+
+A successful result is strictly `PASS_CI_FIXTURE_ONLY`,
+**never evidence that a real production operator credential
+works**. Deployed credential verification must remain an
+explicitly authorized, separately reviewed human release gate.
+
+Nineteen synthetic unit tests passed, including wrong-token
+acceptance, 401-for-valid-token, missing route, unsafe
+path/port/credential, unexpected environment, and accidental
+body-read rejection. Source and production remain unchanged.
