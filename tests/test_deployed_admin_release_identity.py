@@ -26,6 +26,7 @@ def _proof(*, public=False):
         "running":True,
         "expected_entrypoint":True,
         "code_mounts_clear":True,
+        "safe_docker_host_security":True,
         "installed_source_hashes":FILES_HASHES.copy(),
         "bindings":{"8088/tcp":[{
             "HostIp":"0.0.0.0" if public else "127.0.0.1",
@@ -93,6 +94,8 @@ def test_decoy_asgi_argument_cannot_pass_exact_entrypoint_check():
             return "true"
         if "{{.Path}}" in args:
             return "uvicorn"
+        if "{{.HostConfig.Privileged}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.PidMode}}" in args:
+            return "false|auto-router-smoke|"
         if "{{json .Args}}" in args:
             return json.dumps(["unreviewed.module:app","--factory",
                                "auto_router.secure_live:app"])
@@ -105,6 +108,41 @@ def test_decoy_asgi_argument_cannot_pass_exact_entrypoint_check():
     assert actual["expected_entrypoint"] is False
     result=evaluate(actual,"a"*64,FILES_HASHES,status_probe=_canary)
     assert result["gate"]=="HOLD"
+
+
+@pytest.mark.parametrize("host_fields",[
+    "true|auto-router-smoke|",
+    "false|host|",
+    "false|container:another-container|",
+    "false|auto-router-smoke|host",
+    "false|none|",
+    "false||",
+    "unknown",
+])
+def test_privileged_or_shared_namespace_never_passes_release_gate(host_fields):
+    def read(args):
+        if "exec" in args:
+            return json.dumps(FILES_HASHES)
+        if "{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}" in args:
+            return LEASE
+        if "{{.State.Running}}" in args:
+            return "true"
+        if "{{.Path}}" in args:
+            return "uvicorn"
+        if "{{.HostConfig.Privileged}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.PidMode}}" in args:
+            return host_fields
+        if "{{json .Args}}" in args:
+            return json.dumps(["auto_router.secure_live:app", "--port", "8088"])
+        if "{{json .NetworkSettings.Ports}}" in args:
+            return json.dumps(_proof()["bindings"])
+        if "{{json .Mounts}}" in args:
+            return "[]"
+        raise AssertionError(args)
+    actual=inspect(read=read)
+    assert actual["safe_docker_host_security"] is False
+    verdict=evaluate(actual,"a"*64,FILES_HASHES,status_probe=_canary)
+    assert verdict["gate"]=="HOLD"
+    assert verdict["checks"]["no_privileged_host_network_or_pid_namespace"] is False
 
 
 def test_runtime_source_mounts_fail_closed_without_reading_mount_sources():
@@ -150,6 +188,8 @@ def test_uvicorn_app_dir_override_is_not_an_attested_runtime():
             return "true"
         if "{{.Path}}" in args:
             return "uvicorn"
+        if "{{.HostConfig.Privileged}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.PidMode}}" in args:
+            return "false|auto-router-smoke|"
         if "{{json .Args}}" in args:
             return json.dumps(["auto_router.secure_live:app",
                                "--app-dir", "/app/src", "--port", "8088"])
@@ -236,6 +276,8 @@ def test_docker_inspect_only_selected_metadata_and_files():
             return "true"
         if "{{.Path}}" in args:
             return "uvicorn"
+        if "{{.HostConfig.Privileged}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.PidMode}}" in args:
+            return "false|auto-router-smoke|"
         if "{{json .Args}}" in args:
             return json.dumps(["auto_router.secure_live:app","--port","8088"])
         if "{{json .NetworkSettings.Ports}}" in args:
@@ -247,7 +289,7 @@ def test_docker_inspect_only_selected_metadata_and_files():
     assert actual["image_id"]==IMAGE
     assert actual["identity_lease"]==LEASE
     assert actual["installed_source_hashes"]==FILES_HASHES
-    assert len(calls)==7
+    assert len(calls)==8
     assert not any("docker rm" in " ".join(x) or "docker restart" in " ".join(x)
                    for x in calls)
 
