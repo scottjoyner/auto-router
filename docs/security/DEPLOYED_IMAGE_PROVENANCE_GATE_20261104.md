@@ -228,3 +228,56 @@ fallback or safe traffic isolation; neither has been approved here.
 Twenty-three operator-canary unit tests ran against fake Docker,
 HTTP and pipe fixtures; **no real operator credentials were read**
 and **no live production request was sent**.
+
+## Fail-closed cached rollback inventory — actual x1-370 evidence (12:24 EST)
+
+New `scripts/audit_router_rollback_inventory.py` inventories only
+explicit, full Docker `sha256:...` image IDs via **read-only**
+`docker image inspect` and checks the unchanged live container identity
+before/after six anonymous **status-only** admin GETs. It cannot start,
+create, stop, restart, attach to, or load any container. It reads no
+Docker environment, mounts, credentials, or provider payloads. Its
+`--explicit-read-only` opt-in cannot trigger an image swap.
+
+The current x1-370 local inventory found three cached images:
+
+| Immutable SHA-256 prefix | Image creation date | Evidence-based result |
+| --- | --- | --- |
+| `8e4676c96bd8e037...` | October 25, 2026 | CACHED_UNVERIFIED_HOLD |
+| `4023ff9ff6ba511f...` | October 25, 2026 | CACHED_UNVERIFIED_HOLD |
+| `f6425386ad566ca5...` | October 25, 2026 | CACHED_UNVERIFIED_HOLD |
+
+The full content-addressed IDs are pinned in the machine-readable
+receipt. **Cached existence alone is not an authenticated fallback**:
+none of these older images has its installed source, authorized client,
+provider/config restoration, independent approval, full no-leak canary,
+or rollback drill verified. They were deliberately not started because
+the production node was under load and nearly out of swap.
+
+The still-running production image is
+`sha256:182d3d3c8aa6b8afbc45bb5094493f74baa58dbb5c0b0b54555b5718f03c1dd8`.
+Its port 8088 was bound to **both `0.0.0.0` and `::`**; **five of
+six** administrative GETs returned unauthenticated HTTP 200.
+The old image is therefore **not a security-safe rollback target**.
+
+Actual read-only receipt on x1-370:
+`/tmp/router-rollback-inventory-20261104-1224.json`
+SHA-256
+`0bdd24280853838d7b7aef31e4716a49ddc9c35e9a32d0b5cbf9e5dd5fcb489a`.
+The file is private mode 0600, and the command returned **HOLD,
+exit 2**. No containers were changed, and all three image reads used
+fixed, full immutable IDs.
+
+The tool refuses mutable Docker tags, duplicate/ambiguous IDs,
+missing or re-ordered six-route status evidence, forged `all_denied`
+fields, changed container identity during inspection, inconsistent
+host-port mapping, and false rollback approval. Its result can **never
+become production-ready** merely because an image exists or the
+current container is healthy.
+
+**Safe fallback remains UNVERIFIED:** a release must choose and
+separately attest either an independently approved authenticated
+fallback image plus a tested state/traffic recovery path, or an
+explicitly approved external isolation mechanism that blocks
+unauthorized access while services are restored. No such rollback
+or isolation action was executed in this research cycle.
