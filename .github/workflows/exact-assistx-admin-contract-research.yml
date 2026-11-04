@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: scottjoyner/auto-assist
-          ref: de805215fa8fdf801fe8bfea42e0dee24fa70e33
+          ref: 3c35e220c3a05f2e94d6e1b0733b9bae87bd65ef
           path: assistx_exact
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -41,4 +41,5 @@ jobs:
       - name: Test exact consumer source with real synthetic router ASGI
         env:
           ASSISTX_CLIENT_EXACT: assistx_exact/src/assistx/router_provider_inventory.py
+          ASSISTX_CONTROL_EXACT: assistx_exact/src/assistx/control_room.py
         run: python -m pytest -q tests/test_cross_repo_assistx_admin_contract.py
