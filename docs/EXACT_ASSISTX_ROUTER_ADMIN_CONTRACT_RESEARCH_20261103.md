@@ -60,3 +60,12 @@ No dispatch, provider probes, routes, processes or production state changed.
 This is **source and library compatibility only**, not deployed image proof:
 current live anonymous GET /admin/providers still returns HTTP 200 from
 x1-370 and Xwing. An unchanged runtime gate returns HOLD/exit 1.
+
+
+## Current-main consumer validation, November 4, 2026
+
+The previous dedicated workflow pinned AssistX draft PR #288 (nonmergeable) and tested only its pure inventory parser. This updated exact-head contract checks out **current-main-based, mergeable [AssistX PR #546](https://github.com/scottjoyner/auto-assist/pull/546), pinned commit 3c35e220c3a05f2e94d6e1b0733b9bae87bd65ef**. The parser remains byte-for-byte identical (SHA-256 b822fe337770dafc17ce04145627bdc6490f2876172af00fe7808f179e3c02c2), and the real patched Control Room source SHA-256 is bee6ed102474d3544e90c460eb6dfe3e9cbd6d3b8e6824877b0faa4b84becd77.
+
+Additional synthetic tests import the exact Control Room source without executing AssistX application's package initializer, stubbing only unrelated ancillary modules. Its real provider-inventory callsite sends authenticated `GET /admin/providers/effective` to the Router FastAPI ASGI handler in-process, accepts the sanitized provider IDs, refuses invalid admin credentials without legacy downgrade, and permits authenticated fallback to the legacy route ONLY for a deliberate effective-route HTTP 404. It does not launch Router lifespan, use sockets, read production config, forward secrets, claim Tasks, load models or alter routes.
+
+These tests are additional integration evidence, **not production release approval**: live Router anonymous /admin/providers still returns HTTP200, and fresh signed work capacity is absent.
