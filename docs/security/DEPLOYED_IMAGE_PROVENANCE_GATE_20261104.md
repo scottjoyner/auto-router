@@ -102,3 +102,49 @@ All test-only simulation is performed without Docker.
 provenance, correct credentials, rollback evidence,
 authorization and separate operator approval.**
 No production rollout is performed here.
+
+## Hosted CI build-to-checkout provenance addition (11:18 EST)
+
+PR #129's Docker integration job previously checked six anonymous
+admin HTTP 401 statuses on the newly built `auto-router-smoke`
+container, but it did **not** confirm that the container's installed
+`auto_router/*.py` files were the reviewed Git checkout's bytes.
+
+The new `scripts/verify_ci_built_image_provenance.py` addresses
+this additional trust gap without entering production. It runs
+*after* the existing admin 401 smoke check and only against
+the existing `auto-router-smoke` CI Docker container. It:
+- Pins the ephemeral container's immutable Docker image ID and
+  start timestamp before and after the complete proof.
+- SHA-256 hashes the **installed** `main.py`, `security.py`,
+  `main_live.py` and `secure_live.py` inside the built
+  container, without importing application code or reading
+  credentials, then compares all four with the Git checkout.
+- Verifies those four source files are Git-tracked and unmodified
+  relative to the checkout commit (and records that commit SHA).
+- Rejects unexpected bind/volume mounts that could obscure
+  the packaged source files; in this CI profile, only
+  `/app/config` and `/data` are permitted.
+- Verifies the container is still running the expected
+  `auto_router.secure_live:app` entrypoint with loopback-only
+  TCP 8088 publishing, and all six ordered anonymous
+  administrative GET requests return HTTP 401.
+- Emits a private, nonsecret `ci-artifacts/router-ci-built-image.json`
+  proof, retained for 14 days by `actions/upload-artifact@v4`.
+  A failed proof exits nonzero and blocks CI.
+
+The artifact's `PASS_CI_BUILD_ONLY` status proves consistency
+of the **temporary hosted CI build** with its tested Git
+checkout. It is neither a signed, independently witnessed
+provenance record nor an approved production image/promotion.
+The deployed-image gate still requires a **separately
+approved exact image ID**, source pins, credentials/rollback
+canary, and human release authorization before cutover.
+
+Local negative tests simulate mismatched installed bytes,
+unexpected code mounts, wrong source checkout revision,
+image/container restarts, anonymous admin 200 and unsafe
+receipt paths. All 48 combined relevant security tests
+passed on x1-370; strict import/name lint and workflow
+YAML parsing passed. Hosted exact-head build proof remains
+unverified until the revised PR workflow actually runs.
