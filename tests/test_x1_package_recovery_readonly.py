@@ -14,6 +14,13 @@ assert spec.loader is not None
 spec.loader.exec_module(mod)
 
 
+def synthetic_efi_mount(proc: Path, efi: Path, *, filesystem: str = "vfat",
+                        duplicate: bool = False) -> None:
+    (proc / "self").mkdir(exist_ok=True)
+    line = f"36 25 8:1 / {efi} rw,relatime - {filesystem} /dev/synthetic rw\\n"
+    (proc / "self" / "mountinfo").write_text(line * (2 if duplicate else 1))
+
+
 class AuditTests(unittest.TestCase):
     def test_half_installed_libc_and_unpacked_locale_hold(self):
         data = ("libc6:amd64\tiHR\t2.39-0ubuntu8.9\n"
@@ -99,7 +106,10 @@ class AuditTests(unittest.TestCase):
                 if argv[0] == "mokutil":
                     return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
                 raise AssertionError("Unexpected command")
-            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p)
+            efi = p / "efi"
+            efi.mkdir()
+            synthetic_efi_mount(p, efi)
+            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=efi)
             self.assertTrue(report["observations_complete"])
             self.assertEqual(report["package_state"], "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
             self.assertFalse(report["production_change_permitted"])
@@ -127,7 +137,10 @@ class AuditTests(unittest.TestCase):
                         argv, 0, "libc6:amd64\trc \t2.39-0ubuntu8.9\n", ""
                     )
                 return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
-            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p)
+            efi = p / "efi"
+            efi.mkdir()
+            synthetic_efi_mount(p, efi)
+            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=efi)
             self.assertTrue(report["observations_complete"])
             self.assertEqual(report["package_state"], "INCOMPLETE")
             self.assertEqual(report["decision"], "HOLD")
@@ -143,11 +156,47 @@ class AuditTests(unittest.TestCase):
                         argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", ""
                     )
                 return subprocess.CompletedProcess(argv, 0, "unexpected SecureBoot text\n", "")
-            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=p)
+            efi = p / "efi"
+            efi.mkdir()
+            synthetic_efi_mount(p, efi)
+            report = mod.collect(run=run, proc=p, etc=p, root=p, efi=efi)
             self.assertEqual(report["package_state"], "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
             self.assertFalse(report["observations_complete"])
             self.assertEqual(report["secure_boot"], "UNVERIFIED")
             self.assertEqual(report["decision"], "HOLD")
+
+    def test_efi_directory_without_real_vfat_mount_is_not_clean(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            efi = p / "efi"
+            efi.mkdir()
+            (p / "os-release").write_text('ID=ubuntu\\nVERSION_ID="26.04"\\n')
+            (p / "meminfo").write_text(
+                "MemAvailable: 4000 kB\\nSwapTotal: 8192 kB\\nSwapFree: 8 kB\\n"
+            )
+            def run(argv, **_kwargs):
+                if argv[0] == "dpkg-query":
+                    return subprocess.CompletedProcess(
+                        argv, 0, "libc6:amd64\\tii \\t2.43-2ubuntu2\\n", ""
+                    )
+                return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\\n", "")
+            for mode in ("not-mounted", "ext4", "duplicate"):
+                with self.subTest(mode=mode):
+                    if mode == "not-mounted":
+                        (p / "self").mkdir(exist_ok=True)
+                        (p / "self" / "mountinfo").write_text(
+                            "36 25 8:1 / /unrelated rw - vfat /dev/synthetic rw\\n"
+                        )
+                    else:
+                        synthetic_efi_mount(p, efi, filesystem="ext4" if mode == "ext4" else "vfat",
+                                            duplicate=mode == "duplicate")
+                    report = mod.collect(run=run, proc=p, etc=p, root=p, efi=efi)
+                    self.assertEqual(report["package_state"],
+                                     "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
+                    self.assertFalse(report["efi_mounted_vfat"])
+                    self.assertFalse(report["observations_complete"])
+                    self.assertEqual(report["decision"], "HOLD")
+
 
     def test_tool_failure_is_not_false_green(self):
         def fail(*a, **kw):
