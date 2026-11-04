@@ -39,17 +39,52 @@ def _provider_node_id(state: Any, provider_name: str | None) -> str | None:
     return None
 
 
-def _projection_metadata(request_metadata: dict[str, Any]) -> dict[str, Any]:
+def signed_projection_generation(
+    state: Any, request_metadata: dict[str, Any]
+) -> int | None:
+    """Project the live signed AssistX projection, never caller claims.
+
+    Caller-supplied metadata is not evidence that a request ran under a
+    particular generation. The integer is emitted only when it exactly matches
+    the generation held by the router's live signed projection manager.
+    """
+
+    raw = request_metadata.get("runtime_projection_generation")
+    manager = getattr(state, "runtime_projection_manager", None)
+    current = getattr(manager, "current", None)
+    if type(raw) is not int or raw < 1 or current is None:
+        return None
+    try:
+        generation = int(current.generation)
+    except (TypeError, ValueError):
+        return None
+    return generation if raw == generation else None
+
+
+def _projection_metadata(state: Any, request_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Emit generation/revision/checksum from the live signed projection.
+
+    When the request does not name the exact generation held by the router's
+    live signed projection manager, every field is reported as None: forged
+    caller metadata must never masquerade as projection provenance. The
+    revision/checksum are taken from the manager itself, not from metadata.
+    """
+
+    generation = signed_projection_generation(state, request_metadata)
+    if generation is None:
+        return {
+            "runtime_projection_generation": None,
+            "runtime_projection_revision": None,
+            "runtime_projection_checksum": None,
+        }
+    manager = getattr(state, "runtime_projection_manager", None)
+    current = getattr(manager, "current", None)
+    revision = getattr(current, "revision", None)
+    checksum = getattr(current, "checksum", None)
     return {
-        "runtime_projection_generation": request_metadata.get(
-            "runtime_projection_generation"
-        ),
-        "runtime_projection_revision": request_metadata.get(
-            "runtime_projection_revision"
-        ),
-        "runtime_projection_checksum": request_metadata.get(
-            "runtime_projection_checksum"
-        ),
+        "runtime_projection_generation": generation,
+        "runtime_projection_revision": revision if isinstance(revision, str) else None,
+        "runtime_projection_checksum": checksum if isinstance(checksum, str) else None,
     }
 
 
@@ -149,7 +184,7 @@ def enqueue_route_execution_event(
         "agent": request_metadata.get("agent")
         or request_metadata.get("executor"),
         "node_id": node_id,
-        **_projection_metadata(request_metadata),
+        **_projection_metadata(state, request_metadata),
         "runtime_node_id": request_metadata.get("runtime_node_id") or node_id,
         "runtime_instance_id": request_metadata.get("runtime_instance_id"),
         "runtime_kind": request_metadata.get("runtime_kind"),
@@ -274,7 +309,7 @@ def enqueue_route_decision_event(
         "task_id": task_id,
         "agent_run_id": agent_run_id,
         "node_id": node_id,
-        **_projection_metadata(request_metadata),
+        **_projection_metadata(state, request_metadata),
         "runtime_node_id": request_metadata.get("runtime_node_id") or node_id,
         "runtime_instance_id": request_metadata.get("runtime_instance_id"),
         "runtime_kind": request_metadata.get("runtime_kind"),
