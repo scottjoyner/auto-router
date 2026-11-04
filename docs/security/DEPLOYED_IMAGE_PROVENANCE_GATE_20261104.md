@@ -281,3 +281,83 @@ fallback image plus a tested state/traffic recovery path, or an
 explicitly approved external isolation mechanism that blocks
 unauthorized access while services are restored. No such rollback
 or isolation action was executed in this research cycle.
+
+## Dual-plane isolation-readiness proof — actual x1-370 evidence (12:44 EST)
+
+New `scripts/audit_router_isolation_readiness.py` adds a second,
+**read-only and deliberately non-remediating** ingress audit.
+
+Docker port publication and container-to-container bridge membership
+are separate paths. Neither a wildcard Docker bind nor an
+`Internal=false` network flag proves internet reachability by
+itself, and neither proves that the other path is protected.
+Changing a host firewall without knowing the actual Docker/NAT
+backend and existing client needs could both interrupt legitimate
+traffic and leave an unintended path accessible.
+
+The live audit confirmed:
+- Running image remains October 7's
+  `sha256:182d3d3c8aa6b8afbc45bb5094493f74baa58dbb5c0b0b54555b5718f03c1dd8`.
+- Port `8088/tcp` is published on both IPv4 `0.0.0.0`
+  and IPv6 `::`. This is a **potential host ingress
+  exposure**, not an independently verified external reachability.
+- The router is attached to two Docker `bridge` networks:
+  `git_default` and `assistx-fleet_default`. Both
+  report `Internal=false`. Actual inter-container peer
+  access and client allowlist **remain unverified**.
+- Five of six status-only anonymous admin reads return
+  HTTP 200 from loopback.
+- The authorized fleet tool blocked effective firewall-rule
+  inspection; no host nftables/iptables, upstream port-forward,
+  cloud edge policy or external probe was verified.
+
+The immutable-read-only proof was saved locally:
+`/tmp/router-dual-plane-isolation-20261104-1245.json`
+(private mode 0600), SHA-256
+`31a88fef63d44d2567f0ca4081ac1746cb61c527cfd54eada331f4769132800c`.
+
+**Result: HOLD, exit 2.** No network, Docker, firewall,
+operator-credential, container or ingress configuration was
+modified or applied. The auditor will not issue `PASS`
+or `production_ready=true` from inspect data.
+
+### Proposed release-safe containment pathways (NOT commands to apply)
+
+**Path A — controlled network isolation.** First independently
+inventory the effective Docker, host IPv4, host IPv6,
+upstream gateway/reverse-proxy and Docker-network client
+paths under operator-approved read-only access. Define and
+review the minimal required fleet client allowlist. Produce
+an approved, peer-reviewed change to restrict *untrusted*
+direct host ingress to 8088 and unauthorized Docker-network
+peers, keeping authorized internal traffic working. Perform
+an independent **nonallowlisted IPv4 and IPv6 probe**
+and authorized-client functional checks, with a separate
+preapproved safe restoration plan. This path requires an
+actual network authority and explicit cutover approval.
+
+**Path B — reviewed hardened image replacement.** Build an
+approved, immutable production image with source pins,
+first prove the six anonymous admin denials and five
+operator-authorized read-only GET responses in staging,
+verify ingress and client compatibility on both planes,
+and document a rollback to a separately approved
+authenticated image **or** independently approved
+traffic isolation. The currently running vulnerable
+October 7 image is **not an acceptable security-safe
+rollback target**.
+
+No proposed isolation path may be declared complete
+from one host's wildcard binding, an untested fallback,
+a synthetic CI credential, or a locally generated
+receipt. A future independent external probe and
+authorized fleet-client test are required before the
+production gate could change.
+
+The new synthetic tests cover IPv4/IPv6 wildcard
+publication, non-internal Docker bridge membership,
+false loopback-only assurances, malformed/reordered
+network evidence, missing/forged HTTP outcomes,
+a changed container during audit, command allowlist
+refusal, private receipt integrity and deny-default CLI.
+All are offline and do not depend on production credentials.
