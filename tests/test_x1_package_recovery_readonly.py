@@ -112,7 +112,7 @@ class AuditTests(unittest.TestCase):
             self.assertFalse(report["package_repair_permitted"])
             self.assertFalse(report["production_change_permitted"])
             self.assertEqual(report["decision"], "HOLD")
-            self.assertEqual([c[0] for c in commands], ["dpkg-query", "mokutil"])
+            self.assertEqual([c[0] for c in commands], ["dpkg-query", "mokutil"] * 2)
 
     def test_residual_config_libc_is_not_accepted_as_installed(self):
         with tempfile.TemporaryDirectory() as td:
