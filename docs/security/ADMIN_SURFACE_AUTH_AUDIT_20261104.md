@@ -194,3 +194,35 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. \
   tests/test_admin_mounted_runtime_contract.py \
   tests/test_admin_surface_deny_default.py
 ```
+
+## Rebase against updated upstream main and Basic-auth hardening
+
+On November 4 at approximately 01:31 EST, a read-only Git fetch
+updated `origin/main` to `cf1a74b` ("Allow local-only backlog
+selection without cloud fallback"). This upstream already includes
+**function-parameter `Depends(require_admin)` guards** on many of
+the `main.py` admin routes; consequently the older source-based
+"unguarded decorators" inventory is not proof that all those
+upstream handlers were anonymously accessible.
+
+The separate release-candidate branch
+`fix/admin-route-auth-hardening-20261104` starts at that updated
+`origin/main`, cherry-picks the narrow and broad research patches,
+and resolves overlap by retaining the existing parameter-level
+guards **in addition to the new decorator-level guards**.
+The guards are de-duplicated by FastAPI's dependency cache in normal
+request handling. No background scheduler behavior from an older
+divergent branch is included.
+
+The shared auth helper was additionally tightened to enforce the
+documented `admin` username for HTTP Basic and use
+`hmac.compare_digest` when comparing provided tokens. Both positive
+auth tests and wrong-username/wrong-token negative tests were added.
+
+**Do not infer deployment from updated upstream source.** The
+currently running local router was still returning anonymous
+HTTP 200 for `/admin/providers` and `/admin/context` in
+read-only status checks. This may reflect a stale deployed build,
+routing/front-proxy mismatch or configuration, and the exact
+deployed artifact must be checked before assigning root cause.
+No service was restarted or production route changed.

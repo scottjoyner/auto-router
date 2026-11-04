@@ -59,3 +59,16 @@ def test_basic_auth_succeeds_on_fixture_token(client):
 def test_bearer_auth_succeeds_on_fixture_token(client):
     response=client.get("/admin/providers",headers={"Authorization":f"Bearer {TOKEN}"})
     assert response.status_code==200
+
+
+def test_basic_wrong_user_with_valid_token_is_denied(client):
+    # Correct token MUST NOT bypass the documented Basic username policy.
+    response=client.get("/admin/providers",auth=("wrong-user",TOKEN))
+    assert response.status_code==401
+
+
+def test_bearer_wrong_token_denied(client):
+    assert client.get(
+        "/admin/providers",
+        headers={"Authorization":"Bearer wrong-synthetic-token"}
+    ).status_code == 401
