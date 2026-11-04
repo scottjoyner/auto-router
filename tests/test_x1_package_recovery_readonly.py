@@ -64,6 +64,27 @@ class AuditTests(unittest.TestCase):
         )
         self.assertEqual(report["incomplete_installed_packages"], 1)
         self.assertEqual(report["reinstallation_required_packages"], 1)
+        self.assertEqual(report["critical_packages"]["libc6"]["state"], "iHR")
+
+    def test_broken_multilib_order_never_gets_hidden(self):
+        for rows in (
+            ("libc6:amd64\tii \t2.43-2ubuntu2\n",
+             "libc6:i386\tiHR\t2.39-0ubuntu8.9\n"),
+            ("libc6:i386\tiHR\t2.39-0ubuntu8.9\n",
+             "libc6:amd64\tii \t2.43-2ubuntu2\n"),
+        ):
+            with self.subTest(rows=rows):
+                report = mod.inventory_packages("".join(rows))
+                self.assertEqual(report["incomplete_installed_packages"], 1)
+                self.assertEqual(report["critical_packages"]["libc6"]["state"], "iHR")
+
+    def test_duplicate_package_identity_or_bad_critical_version_denied(self):
+        for data in (
+            "libc6:amd64\tii \t2.43\nlibc6:amd64\tii \t2.43\n",
+            "libc6:amd64\tii \tmalformed/version\n",
+        ):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                mod.inventory_packages(data)
 
     def test_clean_inventory_still_never_authorizes_repair_or_reboot(self):
         with tempfile.TemporaryDirectory() as td:
