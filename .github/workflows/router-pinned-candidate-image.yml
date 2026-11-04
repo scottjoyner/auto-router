@@ -1,4 +1,4 @@
-name: Router Pinned Candidate Image (Undeployed)
+name: Router Pinned Candidate Image (Undeployed; Fresh Evidence)
 
 on:
   pull_request:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-and-attest-undeployed-candidate:
-    if: github.head_ref == 'security/effective-provider-snapshot-20261010'
+    if: github.head_ref == 'security/refresh-undeployed-router-candidate-20261103'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -187,7 +187,7 @@ jobs:
             ${{ runner.temp }}/router-candidate-archive.sha256
             ${{ runner.temp }}/router-candidate-metadata.json
             ${{ runner.temp }}/router-candidate.override.yml
-          retention-days: 3
+          retention-days: 14
           if-no-files-found: error
 
   restore-archive-and-prove-loadability:
