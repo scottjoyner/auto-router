@@ -23,11 +23,19 @@ def inventory_packages(output: str) -> dict:
     total = 0
     for line in output.splitlines():
         cols = line.split("\t")
-        if len(cols) != 3 or not cols[0] or not re.fullmatch(r"[a-zA-Z?][a-zA-Z?][a-zA-Z? ]", cols[1]):
+        # dpkg Status-Abbrev is Want/Status/Error. An unknown or future
+        # state MUST NOT become an apparent clean host by default.
+        if (len(cols) != 3 or not cols[0] or not cols[2]
+                or not re.fullmatch(r"[uihrp][ncHUFWti][ R]", cols[1])):
             raise ValueError("unverifiable dpkg status record")
         package, status, version = cols
         total += 1
-        is_pending = status[0] in {"i", "h"} and (status[1] != "i" or status[2] == "R")
+        # A requested install/hold is complete only when installed; a
+        # requested removal is complete only when absent or at rc state.
+        # A half-installed, unpacked, half-configured, triggers-pending,
+        # reinst-required or interrupted requested removal is incomplete.
+        complete = status in {"ii ", "hi ", "un ", "rn ", "pn ", "rc "}
+        is_pending = not complete
         if is_pending:
             pending += 1
         if status[2] == "R":
