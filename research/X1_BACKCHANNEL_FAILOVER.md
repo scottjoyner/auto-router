@@ -81,3 +81,52 @@ must not be overwritten. Secure Boot must not be disabled casually.
 
 Tracking: https://github.com/scottjoyner/auto-router/issues/124
 Draft research: https://github.com/scottjoyner/auto-router/pull/125
+
+## November 3, 2026 ~19:36–19:40 EST — exact MCP containment diagnosis
+
+Read-only inspection of the actual x1 systemd user units gives:
+
+| User unit | Active | NoNewPrivileges | Service restarts |
+| --- | --- | --- | --- |
+| openai-mcp-desktop-commander | active/running | yes | 0 |
+| fleet-exec-relay | active/running | yes | 0 |
+| fleet-exec-device@x1-370 | active/running | yes | 0 |
+
+The Fleet Commander shell reports UID=1000, CapEff=0, NoNewPrivs=1.
+Using existing authorized strict-host-key SSH **through Joyner**, a normal
+x1 login also reports UID=1000 but NoNewPrivs=0; its visible
+/etc/sudo.conf is owned by UID 0 with mode 0644 and its sudo policy
+shows the expected user. This distinguishes the **restricted MCP tunnel
+context** from the host's actual sudo configuration. The earlier
+UID=65534 appearance should not be treated as proof of host file
+ownership corruption. **No sudo command was executed.**
+
+Do not disable systemd NoNewPrivileges, alter sandbox policy, copy
+credentials, or route privileged OS repair through this MCP tunnel.
+The standard host maintenance channel must be explicitly authorized
+and is still blocked for recovery by absent consistent offline backup
+and physical console/restore proof.
+
+New read-only self-check:
+research/x1_control_plane_boundary_audit.py --check
+
+It checks only fixed systemd user-unit liveness, expected containment
+properties and the current process NoNewPrivs flag. It does not query
+secrets or grant authority. Even a complete PASS returns
+privileged_recovery_authorized=false, machine_agent_task_auth_proven=false,
+offline_console_and_rollback_proven=false. Its 10 synthetic tests
+cover missing units, wrong containment, failed service result,
+unreliable context, and safe command construction.
+
+Separate **productive task dispatch** blocker: on five fleet nodes,
+fleet-node-agent is an active **user** systemd service, while the system
+unit is inactive. [Auto-Assist issue #501](https://github.com/scottjoyner/auto-assist/issues/501)
+reports that actual per-node credentials are rejected HTTP 401 by
+task listing; production has two registered identities, zero approved
+slots and expired signed capacity projection. Repeatedly restarting
+agents or giving them the operator Basic credential is forbidden.
+This machine-auth migration and claim gating must be reviewed
+separately from Fleet Commander MCP connectivity.
+
+At last exact head, draft recovery research CI on PR #125 remains
+read-only and does not imply production or boot recovery authorization.
