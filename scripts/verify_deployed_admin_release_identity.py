@@ -18,6 +18,7 @@ from scripts.admin_auth_readonly_canary import ADMIN_PATHS, probe
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 CONTAINER = "git-router-1"
+ALLOWED_CONTAINERS = frozenset(("git-router-1", "auto-router-smoke"))
 ENTRYPOINT = "auto_router.secure_live:app"
 FILES = ("main.py", "security.py", "main_live.py", "secure_live.py")
 # Executed only inside the existing named container. Does not import app code
@@ -49,9 +50,11 @@ def _sha(value: str, name: str) -> str:
     return value
 
 
-def _identity_lease(read=_run) -> str:
+def _identity_lease(read=_run, container: str=CONTAINER) -> str:
+    if container not in ALLOWED_CONTAINERS:
+        raise ValueError("only designated Docker research/prod containers permitted")
     raw=read(["docker","inspect","--format",
-              "{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}",CONTAINER])
+              "{{.Image}}|{{.State.StartedAt}}|{{.State.Running}}",container])
     fields=raw.split("|")
     if (len(fields)!=3 or not fields[0].startswith("sha256:")
             or not HEX64.fullmatch(fields[0][7:])
@@ -60,17 +63,19 @@ def _identity_lease(read=_run) -> str:
     return raw
 
 
-def inspect(read=_run) -> dict:
+def inspect(read=_run, container: str=CONTAINER) -> dict:
     """Only selected nonsecret Docker metadata and installed Python source hashes."""
-    lease=_identity_lease(read)
+    if container not in ALLOWED_CONTAINERS:
+        raise ValueError("only designated Docker research/prod containers permitted")
+    lease=_identity_lease(read,container)
     image=lease.split("|")[0]
-    running = read(["docker", "inspect", "--format", "{{.State.Running}}", CONTAINER])
-    command = read(["docker", "inspect", "--format", "{{.Path}}", CONTAINER])
-    args = json.loads(read(["docker", "inspect", "--format", "{{json .Args}}", CONTAINER]))
+    running = read(["docker", "inspect", "--format", "{{.State.Running}}", container])
+    command = read(["docker", "inspect", "--format", "{{.Path}}", container])
+    args = json.loads(read(["docker", "inspect", "--format", "{{json .Args}}", container]))
     bindings = json.loads(read([
-        "docker","inspect","--format","{{json .NetworkSettings.Ports}}",CONTAINER]))
+        "docker","inspect","--format","{{json .NetworkSettings.Ports}}",container]))
     installed = json.loads(read([
-        "docker","exec",CONTAINER,"python3","-B","-c",FILE_HASH_CODE]))
+        "docker","exec",container,"python3","-B","-c",FILE_HASH_CODE]))
     if (not isinstance(args,list) or not isinstance(bindings,dict)
             or set(installed)!=set(FILES)
             or any(not isinstance(s,str) or not HEX64.fullmatch(s)
