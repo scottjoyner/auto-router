@@ -20,6 +20,7 @@ def inventory_packages(output: str) -> dict:
     pending = 0
     reinst = 0
     critical: dict[str, dict[str, str]] = {}
+    seen_packages: set[str] = set()
     total = 0
     for line in output.splitlines():
         cols = line.split("\t")
@@ -29,6 +30,9 @@ def inventory_packages(output: str) -> dict:
                 or not re.fullmatch(r"[uihrp][ncHUFWti][ R]", cols[1])):
             raise ValueError("unverifiable dpkg status record")
         package, status, version = cols
+        if package in seen_packages:
+            raise ValueError("ambiguous repeated dpkg package identity")
+        seen_packages.add(package)
         total += 1
         # A requested install/hold is complete only when installed; a
         # requested removal is complete only when absent or at rc state.
@@ -42,8 +46,16 @@ def inventory_packages(output: str) -> dict:
             reinst += 1
         base_name = package.split(":", 1)[0]
         if base_name in CRITICAL:
-            safe_version = version if re.fullmatch(r"[A-Za-z0-9.:+~_-]{1,100}", version) else "UNVERIFIED"
-            critical[base_name] = {"state": status.strip() or "UNKNOWN", "version": safe_version}
+            if not re.fullmatch(r"[A-Za-z0-9.:+~_-]{1,100}", version):
+                raise ValueError("unverifiable critical package version")
+            previous = critical.get(base_name)
+            # Multiarch names collapse to the same critical family. Preserve
+            # its worst observed state instead of overwriting broken libc:i386
+            # with a later healthy libc:amd64 record (or the reverse).
+            if previous is None or (
+                is_pending and previous["state"] in {"ii", "hi"}
+            ):
+                critical[base_name] = {"state": status.strip(), "version": version}
     if total == 0 or "libc6" not in critical:
         raise ValueError("no credible package inventory")
     return {"total_packages": total, "incomplete_installed_packages": pending,
