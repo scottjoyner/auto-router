@@ -254,3 +254,30 @@ client and rollback tests remain separately required.
 
 **Production must remain unchanged until its deployment owner
 approves the release and verifies the exact target artifact.**
+
+## Container-image proof gate added to draft PR (November 4, 03:16 EST)
+
+The PR's hosted `integration-smoke` job already builds and starts
+`auto_router.secure_live:app` in a fresh Docker Compose container.
+A new required CI step now calls the read-only
+`scripts/admin_auth_readonly_canary.py --port 8088` **against that
+running newly built container**, checking anonymous 401 for six pinned
+administrative GET endpoints, rather than relying solely on
+unit tests from a source checkout.
+
+The offline mounted-route test now additionally imports the
+**actual production `auto_router.secure_live:app` entrypoint**.
+Because this entrypoint installs an idempotency SQLite ledger
+during import (unlike `main_live`), the isolated subprocess
+sets `AUTO_ROUTER_DATABASE_URL=sqlite:///:memory:` and
+`AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT=true`. It never opens
+a production /data ledger. No app lifespan or real mutation is run.
+All **19** mounted secure_live admin paths reject anonymous calls,
+including POSTs, in addition to the 13 base and 19 reconciled
+checks.
+
+This CI-only image proof does not attest production image digest,
+legitimate operator-client compatibility, independent source
+authority or rollback readiness. Production still needs an
+explicit, controlled rebuild and an identical deployed image
+canary pass before the P0 security gate is closed.

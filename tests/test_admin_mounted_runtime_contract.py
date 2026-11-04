@@ -15,11 +15,17 @@ SCRIPT = ROOT / "scripts" / "audit_mounted_admin_gate.py"
 
 @pytest.mark.parametrize(
     ("entrypoint", "expected_count"),
-    [("main", 13), ("main_live", 19)],
+    [("main", 13), ("main_live", 19), ("secure_live", 19)],
 )
 def test_all_mounted_admin_routes_require_auth_before_execution(entrypoint,expected_count):
     env = os.environ.copy()
     env["AUTO_ROUTER_STRICT_OFFLINE"] = "true"
+    # Production secure_live installs the idempotency ledger on import.
+    # Only use an in-memory SQLite fixture, never the container's /data
+    # mount or this host's production database.
+    env["AUTO_ROUTER_DATABASE_URL"] = "sqlite:///:memory:"
+    env["AUTO_ROUTER_DATABASE_PLACEMENT_REQUIRED"] = "false"
+    env["AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT"] = "true"
     env["PYTHONPATH"] = str(ROOT / "src")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
