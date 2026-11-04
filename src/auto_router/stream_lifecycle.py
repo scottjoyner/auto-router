@@ -9,7 +9,7 @@ from typing import Any
 
 from auto_router.event_outbox import OutboxEvent
 from auto_router.providers import ProviderError, ProviderStreamResponse
-from auto_router.route_events import ensure_event_outbox
+from auto_router.route_events import ensure_event_outbox, signed_projection_generation
 
 
 class StreamCancelledError(RuntimeError):
@@ -198,7 +198,12 @@ def _enqueue_lifecycle_event(
                 # Raw exception text may contain upstream response bodies,
                 # URLs or API credentials: never publish in shared outbox.
                 "error_message": None,
-                "runtime_projection_generation": None,
+                # Projection provenance comes from the router's live signed
+                # projection, never from caller-supplied metadata.
+                "runtime_projection_generation": signed_projection_generation(
+                    state,
+                    request.metadata if isinstance(request.metadata, dict) else {},
+                ),
                 "runtime_instance_id": _route_config_identity(
                     getattr(chosen_provider, "runtime_instance_id", None)
                 ),
