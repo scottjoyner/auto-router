@@ -36,6 +36,11 @@ def assert_mounted_admin_guards(application) -> None:
         leaf = context.route
         fallback = getattr(context, "starlette_route", None)
         path = getattr(context, "path", None) or getattr(fallback, "path", None)
+        if path is None:
+            # Direct Starlette Mount("/") legitimately has an empty path.
+            # Keep it auditable, rather than failing before the explicit
+            # mount-shadowing veto below can identify its admin interception.
+            path = getattr(leaf, "path", None)
         pattern = getattr(context, "path_regex", None)
         if pattern is None:
             pattern = getattr(fallback, "path_regex", None)
