@@ -549,9 +549,46 @@ async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any
     }
 
 
+# Operator inventory must never serialize raw ProviderConfig. The provider
+# schema contains headers, api_key_env/file and access/base URLs (including
+# possible userinfo and query credentials). Treat additions to those schemas
+# as secret by default rather than relying on a growing denylist.
+_ADMIN_PROVIDER_FIELDS = frozenset({
+    "id", "name", "type", "node_id", "runtime_instance_id", "runtime_kind",
+    "enabled", "parallel_slots", "queue_limit", "priority", "quota_class",
+    "routing_roles", "worker_mode", "allow_agent_runtime",
+    "allow_code_execution", "models",
+})
+_ADMIN_MODEL_FIELDS = frozenset({
+    "alias", "provider_model", "capabilities", "context_window",
+    "quantization", "worker_mode",
+})
+
+
+def _redacted_admin_provider(provider: Any) -> dict[str, Any]:
+    raw = provider.model_dump()
+    if not isinstance(raw, dict):
+        raise ValueError("unexpected provider inventory data")
+    redacted = {key: value for key, value in raw.items()
+                if key in _ADMIN_PROVIDER_FIELDS and key != "models"}
+    models = raw.get("models", [])
+    if not isinstance(models, list):
+        raise ValueError("unexpected provider model inventory")
+    redacted["models"] = [
+        {key: value for key, value in model.items()
+         if key in _ADMIN_MODEL_FIELDS} if isinstance(model, dict)
+        else model if isinstance(model, str)
+        else {} for model in models
+    ]
+    return redacted
+
+
 @app.get("/admin/providers", dependencies=[Depends(require_admin)])
 async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
-    return {"providers": [provider.model_dump() for provider in state.providers.providers]}
+    return {"providers": [
+        _redacted_admin_provider(provider)
+        for provider in state.providers.providers
+    ]}
 
 
 @app.get("/admin/placement", dependencies=[Depends(require_admin)])
