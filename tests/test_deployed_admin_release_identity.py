@@ -148,9 +148,12 @@ def test_privileged_or_shared_namespace_never_passes_release_gate(host_fields):
 
 def test_runtime_source_mounts_fail_closed_without_reading_mount_sources():
     assert code_mounts_safe([]) is True
-    assert code_mounts_safe([{"Destination":"/run/secrets/router-token"}]) is True
+    assert code_mounts_safe([{"Destination":"/run/secrets/router-token", "Type":"bind"}]) is True
     assert code_mounts_safe([{"Destination":"/app/config", "Type": "bind"},
                              {"Destination":"/data", "Type": "volume"}]) is True
+    assert code_mounts_safe([{"Destination":"/app/config", "Type":"bind"},
+                             {"Destination":"/data", "Type":"volume"},
+                             {"Destination":"/run/secrets/admin-token", "Type":"bind"}]) is True
     for candidate in (
         [{"Destination":"/app/src", "Source":"/private/home/not-disclosed"}],
         [{"Destination":"/usr/local/lib/python3.12/site-packages"}],
@@ -158,6 +161,15 @@ def test_runtime_source_mounts_fail_closed_without_reading_mount_sources():
         [{"Destination":"/app"}],
         [{"Destination":"/app/config/poison.py"}],
         [{"Destination":"/app/config-new"}],
+        [{"Destination":"/etc/passwd", "Type":"bind"}],
+        [{"Destination":"/home/svc", "Type":"volume"}],
+        [{"Destination":"/app/config", "Type":"bind"},
+         {"Destination":"/app/config", "Type":"bind"}],
+        [{"Destination":"/run/secrets/../etc/passwd", "Type":"bind"}],
+        [{"Destination":"/run/secrets/secret", "Type":"tmpfs"}],
+        [{"Destination":"/run/secrets/secret", "Type":"bind"},
+         {"Destination":"/run/secrets//secret", "Type":"bind"}],
+        [{"Destination":"/data", "Type":"tmpfs"}],
         [{"Destination":"/app/../app"}],
         [{"Destination":"relative/path"}],
         [{"Destination":None}],
