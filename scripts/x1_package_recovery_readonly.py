@@ -22,6 +22,7 @@ def inventory_packages(output: str) -> dict:
     critical: dict[str, dict[str, str]] = {}
     seen_packages: set[str] = set()
     native_libc_state: str | None = None
+    native_libc_version: str | None = None
     total = 0
     for line in output.splitlines():
         cols = line.split("\t")
@@ -38,7 +39,10 @@ def inventory_packages(output: str) -> dict:
         # libc6:i386 package must never establish native system glibc readiness.
         # dpkg may omit the architecture suffix for native packages.
         if package in {"libc6", "libc6:amd64"}:
+            if native_libc_state is not None:
+                raise ValueError("ambiguous native libc6 architecture alias")
             native_libc_state = status
+            native_libc_version = version
         total += 1
         # A requested install/hold is complete only when installed; a
         # requested removal is complete only when absent or at rc state.
@@ -64,9 +68,22 @@ def inventory_packages(output: str) -> dict:
                 critical[base_name] = {"state": status.strip(), "version": version}
     if total == 0 or "libc6" not in critical:
         raise ValueError("no credible package inventory")
+    # These three packages are built from the same Ubuntu glibc source. A
+    # clean-looking dpkg database with missing libc-bin/locales or mixed
+    # versions can still represent the interrupted upgrade; deny that state.
+    glibc_coherent = (
+        native_libc_state in {"ii ", "hi "}
+        and native_libc_version is not None
+        and all(
+            critical.get(name, {}).get("state") in {"ii", "hi"}
+            and critical[name]["version"] == native_libc_version
+            for name in ("libc6", "libc-bin", "locales")
+        )
+    )
     return {"total_packages": total, "incomplete_installed_packages": pending,
             "reinstallation_required_packages": reinst, "critical_packages": critical,
-            "native_amd64_libc_installed": native_libc_state in {"ii ", "hi "}}
+            "native_amd64_libc_installed": native_libc_state in {"ii ", "hi "},
+            "glibc_core_version_coherent": glibc_coherent}
 
 
 def _meminfo(path: Path) -> dict[str, int | None]:
@@ -162,6 +179,7 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
         # must never produce a successful operator-preflight exit.
         libc_ready = (
             report["dpkg"]["native_amd64_libc_installed"] is True
+            and report["dpkg"]["glibc_core_version_coherent"] is True
             and report["dpkg"]["critical_packages"]["libc6"]["state"] in {"ii", "hi"}
         )
         report["package_state"] = (
