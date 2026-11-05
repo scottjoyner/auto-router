@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from starlette.routing import Mount, WebSocketRoute
 from auto_router.security import require_admin
 
@@ -21,26 +21,37 @@ from auto_router.runtime_projection_v2 import RuntimeProjectionManager
 from auto_router.stream_lifecycle import install_stream_lifecycle
 
 def assert_mounted_admin_guards(application) -> None:
-    """Fail process import before serving any unguarded admin route.
+    """Fail ASGI import when any effective admin route can evade auth.
 
-    Inspect the mounted app, not source decorators: included routers and
-    inherited routes are represented by compiled FastAPI dependencies.
-    Reject raw Starlette routes or mounts under the admin prefix because they
-    bypass this dependency mechanism. No HTTP requests, network or secrets.
+    FastAPI >=0.137 preserves included routers as lazy _IncludedRouter entries
+    without .path. Use the supported iter_route_contexts() effective view;
+    never assume application.routes is a flat list of APIRoute objects.
+    No HTTP request, lifespan, network access or handler invocation occurs.
     """
-    admin_count = 0
-    # Every compiled path pattern is inspected, not just its declared literal
-    # prefix. A preceding Mount("/") or Route("/{path:path}") can shadow
-    # protected /admin routes without its own path starting with /admin.
+    contexts = list(iter_route_contexts(application.routes))
+    if not 0 < len(contexts) <= 1024:
+        raise RuntimeError("mounted effective route inventory unverifiable")
+
+    def effective(context):
+        leaf = context.route
+        fallback = getattr(context, "starlette_route", None)
+        path = getattr(context, "path", None) or getattr(fallback, "path", None)
+        pattern = getattr(context, "path_regex", None)
+        if pattern is None:
+            pattern = getattr(fallback, "path_regex", None)
+        if pattern is None:
+            pattern = getattr(leaf, "path_regex", None)
+        if not isinstance(path, str) or pattern is None:
+            raise RuntimeError("unverifiable effective route identity")
+        return leaf, path, pattern
+
+    resolved = [effective(context) for context in contexts]
     admin_paths = set()
-    for route in application.routes:
-        path = getattr(route, "path", None)
-        if isinstance(path, str) and (
-            path == "/admin" or path.startswith("/admin/")
-        ):
+    admin_count = 0
+    for leaf, path, _ in resolved:
+        if path == "/admin" or path.startswith("/admin/"):
             admin_count += 1
-            # Substitute constrained, harmless values for path parameters;
-            # no request is sent and no handler is invoked.
+            # Expand path parameters without making network calls.
             admin_paths.add(re.sub(r"\{[^{}]+\}", "guard-probe", path))
     if admin_count < 1:
         raise RuntimeError("mounted admin surface missing; cannot prove auth contract")
@@ -48,25 +59,16 @@ def assert_mounted_admin_guards(application) -> None:
         "/admin", "/admin/", "/admin/__guard_probe__",
         "/admin/__guard_probe__/nested",
     })
-    for route in application.routes:
-        pattern = getattr(route, "path_regex", None)
-        path = getattr(route, "path", None)
-        if not isinstance(path, str) or pattern is None:
-            # Do not leak handler objects/configuration; the type is enough to
-            # identify an unsupported router registration during CI review.
-            raise RuntimeError(
-                f"unverifiable mounted route identity: {type(route).__name__}"
-            )
-        # A raw Route, Mount, dynamically parameterized route or websocket
-        # that can intercept *any* protected sample needs the same guard.
+    for leaf, _, pattern in resolved:
         if not any(pattern.match(probe) for probe in admin_paths):
             continue
-        if isinstance(route, (Mount, WebSocketRoute)) or not isinstance(route, APIRoute):
+        if isinstance(leaf, (Mount, WebSocketRoute)) or not isinstance(leaf, APIRoute):
             raise RuntimeError("unsupported mounted admin route type")
-        dependencies = route.dependant.dependencies
-        if not any(dependency.call is require_admin for dependency in dependencies):
+        if not any(
+            dependency.call is require_admin
+            for dependency in leaf.dependant.dependencies
+        ):
             raise RuntimeError("mounted admin endpoint lacks compiled admin authentication")
-
 
 # Replace the compatibility HMAC manager before the ASGI lifespan constructs any
 # runtime state. The mounted production entrypoint therefore accepts only schema-v2
