@@ -62,6 +62,19 @@ def assert_mounted_admin_guards(application) -> None:
         "/admin", "/admin/", "/admin/__guard_probe__",
         "/admin/__guard_probe__/nested",
     })
+    # The retired task-execution API is *not* an administrative query
+    # endpoint: its claim/heartbeat/finalization semantics require separate
+    # signed node authority, not a shared operator token. Never accidentally
+    # resurrect it from an included router or a raw Starlette mount.
+    retired_agent_probes = {
+        "/jobs/agent", "/jobs/agent/",
+        "/jobs/agent/fixture", "/jobs/agent/fixture/claim",
+    }
+    for _leaf, path, pattern in resolved:
+        if (path == "/jobs/agent" or path.startswith("/jobs/agent/")
+                or any(pattern.match(probe) for probe in retired_agent_probes)):
+            raise RuntimeError("retired agent execution surface must not be mounted")
+
     # FastAPI's supported effective-route iterator does not consistently
     # expose the Mount node itself. Audit top-level ASGI mounts separately:
     # /admin/private may hide its own child routes and Mount('/') can
@@ -73,7 +86,7 @@ def assert_mounted_admin_guards(application) -> None:
         regex = getattr(top, "path_regex", None)
         if (not isinstance(path, str) or regex is None
                 or path == "/admin" or path.startswith("/admin/")
-                or any(regex.match(probe) for probe in admin_paths)):
+                or any(regex.match(probe) for probe in admin_paths | retired_agent_probes)):
             raise RuntimeError("unsupported mounted admin route type")
     if admin_count < 1:
         raise RuntimeError("mounted admin surface missing; cannot prove auth contract")
