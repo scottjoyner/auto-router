@@ -36,6 +36,28 @@ def _unauthorized(detail: str = "Admin authentication required") -> HTTPExceptio
     )
 
 
+def _admin_credential_is_separate(admin_token: str) -> bool:
+    """Never admit an internal or routing-service credential as admin.
+
+    Unlike deployment preflight this runs at the actual admin auth boundary,
+    including when the operator skips the candidate-config audit. Unset
+    unrelated credentials are ignored; a missing admin token is denied by
+    require_admin. Values are never logged or reflected to the caller.
+    """
+    if not admin_token:
+        return False
+    for name in (
+        "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN",
+        "AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN",
+        "AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS",
+        "AUTO_ROUTER_ROUTE_DECISION_TOKEN",
+    ):
+        other = os.getenv(name, "")
+        if other and secrets.compare_digest(admin_token, other):
+            return False
+    return True
+
+
 async def require_admin(
     request: Request,
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
@@ -46,6 +68,8 @@ async def require_admin(
     token = getattr(settings, "admin_token", "") or ""
     if not token:
         raise _unauthorized("Admin token not configured (set AUTO_ROUTER_ADMIN_TOKEN)")
+    if not _admin_credential_is_separate(token):
+        raise _unauthorized("Administrative credential configuration rejected")
 
     provided: list[str] = []
     if x_admin_token:
