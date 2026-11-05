@@ -31,14 +31,14 @@ def python_tree_hash(root):
     paths = sorted(p for p in root.rglob("*") if p.suffix == ".py" or p.is_symlink())
     if not 0 < len(paths) <= 512:
         raise ValueError("unverifiable Python package tree")
-    digest = hashlib.sha256(b"auto-router-python-tree-v1\\0")
+    digest = hashlib.sha256(b"auto-router-python-tree-v1\0")
     for path in paths:
         meta = path.lstat()
         if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > 2_000_000:
             raise ValueError("unverifiable Python source file")
         rel = path.relative_to(root).as_posix()
         digest.update(rel.encode("utf-8"))
-        digest.update(b"\\0")
+        digest.update(b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
