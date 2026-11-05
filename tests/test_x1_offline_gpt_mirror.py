@@ -25,8 +25,10 @@ def disk_fixture():
     data[450] = 0xEE
     data[510:512] = b"\x55\xaa"
     entries = bytearray(TABLE_BYTES)
-    entries[:16] = bytes(range(1, 17))
+    entries[:16] = mod._ESP_TYPE_GUID
     entries[16:32] = bytes(range(17, 33))
+    entries[32:40] = (34).to_bytes(8, "little")
+    entries[40:48] = (100).to_bytes(8, "little")
     array_crc = zlib.crc32(entries) & 0xFFFFFFFF
     data[1024:1024 + TABLE_BYTES] = entries
     data[BACK_TABLE_LBA * 512:LAST_LBA * 512] = entries
@@ -53,6 +55,21 @@ def disk_fixture():
         current=LAST_LBA, backup=1, table_lba=BACK_TABLE_LBA,
     )
     return data
+
+
+def rehash_both_gpt_headers(disk: bytearray):
+    """Research fixture only: intentionally forge both matching GPT CRCs."""
+    entry_start = 1024
+    table = disk[entry_start:entry_start + TABLE_BYTES]
+    crc = (zlib.crc32(table) & 0xFFFFFFFF).to_bytes(4, "little")
+    disk[BACK_TABLE_LBA * 512:LAST_LBA * 512] = table
+    for header_offset in (512, LAST_LBA * 512):
+        disk[header_offset + 88:header_offset + 92] = crc
+        disk[header_offset + 16:header_offset + 20] = bytes(4)
+        checksum = zlib.crc32(disk[header_offset:header_offset + 92])
+        disk[header_offset + 16:header_offset + 20] = (
+            checksum & 0xFFFFFFFF
+        ).to_bytes(4, "little")
 
 
 class MirrorTests(unittest.TestCase):
@@ -100,6 +117,57 @@ class MirrorTests(unittest.TestCase):
                         f"forged mirror accidentally accepted offset {offset}",
                     )
                     self.assertFalse(proof["production_host_repair_allowed"])
+
+    def test_forged_mirror_crcs_cannot_hide_invalid_esp_or_lba(self):
+        # All mirror bytes and both CRCs are valid; semantic extents are not.
+        mutations = {
+            "absent_efi_system_partition": (1024, bytes(16)),
+            "partition_without_unique_guid": (1040, bytes(16)),
+            "partition_starts_before_usable": (1056, (1).to_bytes(8, "little")),
+            "partition_ends_after_usable": (1064, (2030).to_bytes(8, "little")),
+            "partition_start_after_end": (1056, (110).to_bytes(8, "little")),
+            "half_deleted_unused_entry": (1024 + 128 + 40, bytes([1])),
+        }
+        for name, (offset, payload) in mutations.items():
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    media = Path(tmp) / "offhost-copy"
+                    media.mkdir()
+                    disk = media / "raw.img"
+                    data = disk_fixture()
+                    data[offset:offset + len(payload)] = payload
+                    rehash_both_gpt_headers(data)
+                    disk.write_bytes(data)
+                    proof = mod.inspect(media, disk)
+                    self.assertTrue(proof["observation_complete"])
+                    self.assertFalse(
+                        proof["primary_backup_gpt_and_array_match"],
+                        f"forged semantic GPT partition accepted: {name}",
+                    )
+                    self.assertEqual(proof["decision"], "HOLD")
+
+    def test_duplicate_partition_guid_and_overlap_rejected_with_valid_crcs(self):
+        cases = ("duplicate", "overlap")
+        for case in cases:
+            with self.subTest(case=case):
+                data = disk_fixture()
+                second = 1024 + 128
+                data[second:second + 16] = bytes(range(1, 17))
+                data[second + 16:second + 32] = (
+                    bytes(range(17, 33))
+                    if case == "duplicate" else bytes(range(33, 49))
+                )
+                data[second + 32:second + 40] = (90).to_bytes(8, "little")
+                data[second + 40:second + 48] = (150).to_bytes(8, "little")
+                rehash_both_gpt_headers(data)
+                with tempfile.TemporaryDirectory() as tmp:
+                    media = Path(tmp) / "offhost-copy"
+                    media.mkdir()
+                    disk = media / "raw.img"
+                    disk.write_bytes(data)
+                    proof = mod.inspect(media, disk)
+                    self.assertFalse(proof["primary_backup_gpt_and_array_match"])
+
 
     def test_invalid_media_root_and_symlinked_disk_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
