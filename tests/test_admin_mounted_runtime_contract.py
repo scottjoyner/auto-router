@@ -68,3 +68,73 @@ def test_our_no_lifespan_checker_rejects_unprotected_synthetic_admin_route():
 
     with pytest.raises(AssertionError,match="missing compiled admin guard"):
         audit(app)
+
+
+def test_production_entrypoint_blocks_new_unguarded_or_raw_admin_routes():
+    """Synthetic startup-contract test: no lifespan, no network, no credentials."""
+    env = os.environ.copy()
+    env["AUTO_ROUTER_STRICT_OFFLINE"] = "true"
+    env["AUTO_ROUTER_DATABASE_URL"] = "sqlite:///:memory:"
+    env["AUTO_ROUTER_DATABASE_PLACEMENT_REQUIRED"] = "false"
+    env["AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT"] = "true"
+    env["PYTHONPATH"] = str(ROOT / "src")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    code = """
+from fastapi import Depends, FastAPI
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route, Mount
+from auto_router.secure_live import app, assert_mounted_admin_guards
+from auto_router.security import require_admin
+
+assert_mounted_admin_guards(app)
+new = FastAPI()
+@new.get('/admin/synthetic-safe', dependencies=[Depends(require_admin)])
+async def safe():
+    return {}
+assert_mounted_admin_guards(new)
+
+@new.get('/admin/synthetic-unguarded')
+async def unsafe():
+    raise AssertionError('must never reach handler')
+try:
+    assert_mounted_admin_guards(new)
+except RuntimeError as exc:
+    assert 'lacks compiled admin authentication' in str(exc)
+else:
+    raise AssertionError('unprotected route accepted')
+
+raw = FastAPI()
+raw.router.routes.append(Route('/admin/raw', lambda request: PlainTextResponse('unsafe')))
+try:
+    assert_mounted_admin_guards(raw)
+except RuntimeError as exc:
+    assert 'unsupported mounted admin route type' in str(exc)
+else:
+    raise AssertionError('raw Starlette admin route accepted')
+
+mounted = FastAPI()
+mounted.mount('/admin/private', FastAPI())
+try:
+    assert_mounted_admin_guards(mounted)
+except RuntimeError as exc:
+    assert 'unsupported mounted admin route type' in str(exc)
+else:
+    raise AssertionError('mounted nested admin app accepted')
+
+empty = FastAPI()
+try:
+    assert_mounted_admin_guards(empty)
+except RuntimeError as exc:
+    assert 'admin surface missing' in str(exc)
+else:
+    raise AssertionError('missing admin route accepted')
+print('admin-route-import-fence-pass')
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code],
+        capture_output=True, text=True, env=env, timeout=18, check=False,
+    )
+    assert result.returncode == 0, (
+        f"synthetic production route fence failed: {result.stderr[-1300:]}"
+    )
+    assert "admin-route-import-fence-pass" in result.stdout
