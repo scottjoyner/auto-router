@@ -18,7 +18,7 @@ import sys
 
 from scripts.admin_auth_readonly_canary import ADMIN_PATHS, probe
 from scripts.verify_deployed_admin_release_identity import (
-    FILES, _identity_lease, _run, evaluate, inspect,
+    FILES, TREE_KEY, _identity_lease, _run, evaluate, inspect, python_tree_hash,
 )
 
 SCHEMA="auto-router.ci-built-image-provenance.v1"
@@ -36,6 +36,7 @@ def source_hashes(root: Path) -> dict:
         if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:
             raise ValueError("reviewed checkout code is not a single regular file")
         result[name]=hashlib.sha256(target.read_bytes()).hexdigest()
+    result[TREE_KEY]=python_tree_hash(code)
     return result
 
 
