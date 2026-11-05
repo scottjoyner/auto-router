@@ -11,11 +11,12 @@ import pytest
 
 from scripts.admin_auth_readonly_canary import ADMIN_PATHS
 from scripts.verify_deployed_admin_release_identity import (
-    FILES, FILE_HASH_CODE, _identity_lease, _sha, code_mounts_safe, evaluate, inspect,
+    FILES, TREE_KEY, FILE_HASH_CODE, _identity_lease, _sha, code_mounts_safe, evaluate, inspect,
 )
 
 IMAGE="sha256:"+"a"*64
 FILES_HASHES={file:format(i+1,"064x") for i,file in enumerate(FILES)}
+FILES_HASHES[TREE_KEY]="a"*64
 LEASE=IMAGE+"|2026-11-04T16:02:00.000Z|true"
 
 
@@ -214,6 +215,27 @@ def test_public_bind_optin_cannot_substitute_for_independent_isolation_proof():
     result=evaluate(_proof(),"a"*64,FILES_HASHES,
                     allow_public_bind=True,status_probe=_canary)
     assert result["gate"]=="HOLD"
+
+
+def test_supporting_python_module_drift_blocks_pre_cutover():
+    # The original four entrypoint hashes still match; a changed supporting
+    # module invalidates the aggregate installed package digest.
+    installed=_proof()
+    installed["installed_source_hashes"][TREE_KEY]="b"*64
+    verdict=evaluate(installed,"a"*64,FILES_HASHES,status_probe=_canary)
+    assert verdict["gate"]=="HOLD"
+    assert verdict["checks"]["installed_source_hashes_match_pinned_build"] is False
+
+
+def test_expected_python_tree_digest_is_required():
+    expected=FILES_HASHES.copy()
+    expected.pop(TREE_KEY)
+    with pytest.raises(ValueError,match="package tree"):
+        evaluate(_proof(),"a"*64,expected,status_probe=_canary)
+    expected=FILES_HASHES.copy()
+    expected[TREE_KEY]="not-a-sha"
+    with pytest.raises(ValueError):
+        evaluate(_proof(),"a"*64,expected,status_probe=_canary)
 
 
 def test_anonymous_200_refuses_even_when_image_is_exact():
