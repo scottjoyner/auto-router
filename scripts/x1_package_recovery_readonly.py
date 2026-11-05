@@ -118,6 +118,7 @@ def _efi_mount_verified(proc: Path, efi: Path) -> bool:
         mounts.append(
             separator + 3 < len(fields)
             and fields[3] == "/"
+            and "rw" in fields[5].split(",")
             and fields[separator + 1] == "vfat"
         )
     return len(mounts) == 1 and mounts[0]
@@ -141,7 +142,12 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
         report["memory_kib"] = _meminfo(proc / "meminfo")
         report["filesystem_available_bytes"] = {"root": _free_bytes(root), "efi": _free_bytes(efi)}
         report["efi_mounted_vfat"] = _efi_mount_verified(proc, efi)
-        report["uname_kernel"] = os.uname().release
+        uname = os.uname()
+        report["uname_kernel"] = uname.release
+        # Collector is deliberately specific to the designated x1-370 AMD64
+        # host. A clean package inventory from another architecture is not
+        # evidence that this x1 recovery preflight ran in the right context.
+        report["target_architecture_verified"] = uname.machine == "x86_64"
         try:
             sb = run(["mokutil", "--sb-state"], check=False, capture_output=True,
                      text=True, timeout=8)
@@ -171,6 +177,7 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
             and all(isinstance(n, int) and n > 0
                     for n in report["filesystem_available_bytes"].values())
             and report["efi_mounted_vfat"] is True
+            and report["target_architecture_verified"] is True
             and report["secure_boot"] in {"enabled", "disabled"}
         )
         if not report["observations_complete"]:
