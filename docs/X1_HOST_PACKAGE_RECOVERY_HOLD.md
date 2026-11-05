@@ -12,7 +12,7 @@ Run manually, only within a separately approved read-only evidence session:
 
     python3 scripts/x1_package_recovery_readonly.py --read-only
 
-It emits only aggregate JSON to stdout, never a package inventory, secret, raw process environment, private host path, upgrade-log body or credential. It invokes only fixed read-only dpkg-query and optional mokutil status commands; reads os-release, meminfo, kernel and filesystem available capacity. It never invokes apt, dpkg configuration/repair, package download, Docker, systemd, SQL, Neo4j, swap changes, network requests, reboot or a write operation. Return code 2 means incomplete/unverifiable state, 0 means no incomplete installed dpkg states were detected. **Neither exit code grants maintenance or release approval.** Missing console, root/EFI restore, rollback rehearsal and production admission remain HOLD.
+It emits only aggregate JSON to stdout, never a package inventory, secret, raw process environment, private host path, upgrade-log body or credential. It invokes only fixed read-only dpkg-query and optional mokutil status commands; reads os-release, meminfo, kernel and filesystem available capacity. It never invokes apt, dpkg configuration/repair, package download, Docker, systemd, SQL, Neo4j, swap changes, network requests, reboot or a write operation. The collector **always exits with code 2**, even for complete, clean-looking evidence, so a shell success status can never authorize maintenance. Structured JSON distinguishes observed states. **No report grants maintenance or release approval.** Missing console, root/EFI restore, rollback rehearsal and production admission remain HOLD.
 
 Fixture-only tests:
 
@@ -32,7 +32,7 @@ No workflow or production timer invokes this collector automatically.
 
 ## November 4 strict observation completeness extension
 
-A reported `NO_DPKG_INCOMPLETE_INSTALLED_DETECTED` state is no longer sufficient for exit code 0. The collector additionally requires installed/held `libc6` (not only `rc` residual configuration), parseable Ubuntu OS version, complete read-only memory fields, nonzero available root and EFI capacity, and independently parsed Secure Boot status. Missing EFI, unreadable `mokutil` evidence or missing memory fields yields `observations_complete=false` and exit code 2, even when dpkg counts are zero. Successful collector exit is an informational preflight result only: no root+EFI restore, physical console, rollback rehearsal or maintenance approval is certified. All positive/negative tests use synthetic fixtures; no fleet host was changed.
+A reported `NO_DPKG_INCOMPLETE_INSTALLED_DETECTED` state is never maintenance authorization; the collector always exits nonzero. The collector additionally requires installed/held `libc6` (not only `rc` residual configuration), parseable Ubuntu OS version, complete read-only memory fields, nonzero available root and EFI capacity, and independently parsed Secure Boot status. Missing EFI, unreadable `mokutil` evidence or missing memory fields yields `observations_complete=false`, even when dpkg counts are zero. All command outcomes exit 2; a complete JSON observation is informational only: no root+EFI restore, physical console, rollback rehearsal or maintenance approval is certified. All positive/negative tests use synthetic fixtures; no fleet host was changed.
 
 ## Read-only EFI mount attestation extension (November 4)
 
