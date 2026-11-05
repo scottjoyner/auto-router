@@ -21,6 +21,7 @@ def inventory_packages(output: str) -> dict:
     reinst = 0
     critical: dict[str, dict[str, str]] = {}
     seen_packages: set[str] = set()
+    native_libc_state: str | None = None
     total = 0
     for line in output.splitlines():
         cols = line.split("\t")
@@ -33,6 +34,11 @@ def inventory_packages(output: str) -> dict:
         if package in seen_packages:
             raise ValueError("ambiguous repeated dpkg package identity")
         seen_packages.add(package)
+        # The designated x1-370 host is x86_64. A healthy foreign-architecture
+        # libc6:i386 package must never establish native system glibc readiness.
+        # dpkg may omit the architecture suffix for native packages.
+        if package in {"libc6", "libc6:amd64"}:
+            native_libc_state = status
         total += 1
         # A requested install/hold is complete only when installed; a
         # requested removal is complete only when absent or at rc state.
@@ -59,7 +65,8 @@ def inventory_packages(output: str) -> dict:
     if total == 0 or "libc6" not in critical:
         raise ValueError("no credible package inventory")
     return {"total_packages": total, "incomplete_installed_packages": pending,
-            "reinstallation_required_packages": reinst, "critical_packages": critical}
+            "reinstallation_required_packages": reinst, "critical_packages": critical,
+            "native_amd64_libc_installed": native_libc_state in {"ii ", "hi "}}
 
 
 def _meminfo(path: Path) -> dict[str, int | None]:
@@ -147,7 +154,10 @@ def collect(*, run: Callable = subprocess.run, proc: Path = Path("/proc"),
         # Clean dpkg counters are not sufficient: a host with only residual
         # libc configuration (rc), missing EFI, or unreadable boot evidence
         # must never produce a successful operator-preflight exit.
-        libc_ready = report["dpkg"]["critical_packages"]["libc6"]["state"] in {"ii", "hi"}
+        libc_ready = (
+            report["dpkg"]["native_amd64_libc_installed"] is True
+            and report["dpkg"]["critical_packages"]["libc6"]["state"] in {"ii", "hi"}
+        )
         report["package_state"] = (
             "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED"
             if libc_ready and not report["dpkg"]["incomplete_installed_packages"]
