@@ -20,9 +20,9 @@ DOCKERFILE = (ROOT / "Dockerfile").read_text()
 BASE = {
     "AUTO_ROUTER_BIND": "127.0.0.1",
     "AUTO_ROUTER_HOST_PORT": "8088",
-    "AUTO_ROUTER_ADMIN_TOKEN": "operator-admin-" + "a" * 40,
-    "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN": "assistx-inference-" + "b" * 40,
-    "AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS": "assistx-callback-" + "c" * 40,
+    "AUTO_ROUTER_ADMIN_TOKEN": "router-admin-K2v9Q5m7R3p8L4x6W1a0Z9n2F7h6",
+    "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN": "assistx-inference-P9z2J8w4S6k3B1n5L7x0Y2q9C4",
+    "AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS": "assistx-callback-T3h7E1v9R5p2D8k4Q0z6N1w9J3",
     "AUTO_ROUTER_ASSISTX_BASIC_AUTH_USER": "assistx-router",
     "AUTO_ROUTER_STRICT_OFFLINE": "true",
     "AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED": "true",
@@ -56,6 +56,9 @@ def test_credential_separation_and_code_contract_still_never_grant_cutover():
 @pytest.mark.parametrize(("name", "bad"), [
     ("AUTO_ROUTER_ADMIN_TOKEN", ""),
     ("AUTO_ROUTER_ADMIN_TOKEN", "test"),
+    ("AUTO_ROUTER_ADMIN_TOKEN", "a" * 40),
+    ("AUTO_ROUTER_ADMIN_TOKEN", "abcd1234" * 12),
+    ("AUTO_ROUTER_ADMIN_TOKEN", "change-me" + "Q8w7E6r5T4y3U2i1O9p0" * 2),
     ("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "change-me"),
     ("AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS", "change-me"),
     ("AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS", "a" * 5),
