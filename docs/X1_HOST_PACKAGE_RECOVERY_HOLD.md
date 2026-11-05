@@ -53,3 +53,34 @@ The aggregate read-only collector now denies a clean package-state verdict unles
 ## Fail-closed shell status even on apparently clean package inventory (Nov 4 evening)
 
 The `--read-only` package preflight deliberately exits **2 for every report**, including `observations_complete=true` with `package_state=NO_DPKG_INCOMPLETE_INSTALLED_DETECTED`. This eliminates the implicit-success path where an automation might treat exit `0` as authorization to run `dpkg`, `apt`, EFI updates, swap changes, or reboot. The JSON report retains detailed aggregate observations, with `decision=HOLD` and every production/repair/reboot permission false. A safe maintenance plan still requires independent, tested root+EFI restore images, out-of-band console and isolated-clone recovery rehearsal, beyond this collector's scope. Unit tests verify both clean-looking and incomplete reports exit nonzero.
+
+## Off-host root and EFI image integrity evidence (November 4 late iteration)
+
+A new independent `scripts/verify_x1_offline_recovery_images.py` helps the
+designated restore operator assess **two already-created backup image files**
+stored on a manually designated **isolated offline-media directory**.
+The operator must independently supply pinned root-image and EFI-image
+SHA-256 values from trusted custody records. Example on an *offline review
+machine* (never a live disk or device node):
+
+```bash
+python3 scripts/verify_x1_offline_recovery_images.py \
+  --isolated-offline-media-only \
+  --media-root /mnt/offline-recovery-copy \
+  --root-image /mnt/offline-recovery-copy/x1-root.img \
+  --efi-image /mnt/offline-recovery-copy/x1-efi.img \
+  --expected-root-sha256 "$EXTERNAL_ROOT_SHA256" \
+  --expected-efi-sha256 "$EXTERNAL_EFI_SHA256"
+```
+
+The verifier only reads existing regular, non-hardlinked image files within
+the selected directory, computes streaming SHA-256 digests with bounded
+chunks, compares them with independently supplied values, refuses symlinks,
+unexpected devices, bad paths and changing image metadata, and emits only
+nonsecret aggregate JSON. **It deliberately always exits 2**, even when
+both digests match. File hash agreement is NOT proof of externally witnessed
+source identity, consistent filesystem snapshot, a successful restore,
+usable EFI/GRUB/Shim boot path, complete Neo4j custody, or approval to run
+live maintenance. Those independent gates remain HOLD. Fixture-only unit
+tests verify tampering and unsafe path cases; no production backups have
+yet been inspected by this new tool.
