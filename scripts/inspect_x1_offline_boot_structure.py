@@ -86,8 +86,24 @@ def _valid_primary_gpt_header(data: bytes) -> bool:
     partition_lba = int.from_bytes(sector[72:80], "little")
     partition_count = int.from_bytes(sector[80:84], "little")
     partition_size = int.from_bytes(sector[84:88], "little")
+    partition_crc32 = int.from_bytes(sector[88:92], "little")
+    # A valid primary header alone is insufficient: the partition-entry
+    # array can be corrupted independently while its header CRC remains
+    # correct. Read/check only arrays fitting the bounded offline prefix.
+    # Larger/non-512-sector GPT layouts return unknown, NOT "corrupt".
+    table_bytes = partition_count * partition_size
+    array_offset = partition_lba * 512
+    array_end = array_offset + table_bytes
+    array_within_prefix = (
+        0 < table_bytes <= 65536
+        and 1024 <= array_offset <= len(data)
+        and array_end <= len(data)
+        and partition_lba + (table_bytes + 511) // 512 <= first_lba
+    )
     return (
-        current_lba == 1
+        array_within_prefix
+        and zlib.crc32(data[array_offset:array_end]) & 0xFFFFFFFF == partition_crc32
+        and current_lba == 1
         and backup_lba > 2
         and 2 <= partition_lba < first_lba <= last_lba < backup_lba
         and sector[20:24] == b"\0" * 4
