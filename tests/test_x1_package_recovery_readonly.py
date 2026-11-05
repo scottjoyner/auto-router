@@ -112,6 +112,28 @@ class AuditTests(unittest.TestCase):
         )
         self.assertTrue(native["native_amd64_libc_installed"])
 
+    def test_missing_or_mismatched_core_glibc_is_not_clean(self):
+        base = "libc6:amd64\tii \t2.43-2ubuntu2\n"
+        for additional in (
+            "",
+            "libc-bin\tii \t2.43-2ubuntu2\n",
+            "libc-bin\tii \t2.39-0ubuntu8.9\n"
+            "locales\tii \t2.43-2ubuntu2\n",
+            "libc-bin\tii \t2.43-2ubuntu2\n"
+            "locales\tii \t2.39-0ubuntu8.9\n",
+            "libc-bin\tii \t2.43-2ubuntu2\n"
+            "locales\trc \t2.43-2ubuntu2\n",
+        ):
+            with self.subTest(additional=additional):
+                report = mod.inventory_packages(base + additional)
+                self.assertEqual(report["incomplete_installed_packages"], 0)
+                self.assertFalse(report["glibc_core_version_coherent"])
+        clean = mod.inventory_packages(
+            base + "libc-bin\tii \t2.43-2ubuntu2\n"
+            "locales\tii \t2.43-2ubuntu2\n"
+        )
+        self.assertTrue(clean["glibc_core_version_coherent"])
+
     def test_clean_inventory_still_never_authorizes_repair_or_reboot(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
@@ -121,7 +143,9 @@ class AuditTests(unittest.TestCase):
             def run(argv, **kwargs):
                 commands.append(tuple(argv))
                 if argv[0] == "dpkg-query":
-                    return subprocess.CompletedProcess(argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", "")
+                    return subprocess.CompletedProcess(argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n"
+                        "libc-bin\tii \t2.43-2ubuntu2\n"
+                        "locales\tii \t2.43-2ubuntu2\n", "")
                 if argv[0] == "mokutil":
                     return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
                 raise AssertionError("Unexpected command")
@@ -181,7 +205,9 @@ class AuditTests(unittest.TestCase):
             def run(argv, **_kwargs):
                 if argv[0] == "dpkg-query":
                     return subprocess.CompletedProcess(
-                        argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", ""
+                        argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n"
+                        "libc-bin\tii \t2.43-2ubuntu2\n"
+                        "locales\tii \t2.43-2ubuntu2\n", ""
                     )
                 return subprocess.CompletedProcess(argv, 0, "unexpected SecureBoot text\n", "")
             efi = p / "efi"
@@ -205,7 +231,9 @@ class AuditTests(unittest.TestCase):
             def run(argv, **_kwargs):
                 if argv[0] == "dpkg-query":
                     return subprocess.CompletedProcess(
-                        argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", ""
+                        argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n"
+                        "libc-bin\tii \t2.43-2ubuntu2\n"
+                        "locales\tii \t2.43-2ubuntu2\n", ""
                     )
                 return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
             for mode in ("not-mounted", "ext4", "duplicate", "read-only"):
