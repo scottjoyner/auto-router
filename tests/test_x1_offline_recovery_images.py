@@ -108,6 +108,46 @@ class OfflineImageEvidenceTests(unittest.TestCase):
             self.assertFalse(report["observation_complete"])
             self.assertFalse(report["both_image_digests_match"])
 
+    def test_parent_directory_symlinks_cannot_redirect_offline_backup_reads(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            media, root, efi = fixture(base)
+            root_pin = hashlib.sha256(root.read_bytes()).hexdigest()
+            efi_pin = hashlib.sha256(efi.read_bytes()).hexdigest()
+            nested = media / "real-subdir"
+            nested.mkdir()
+            nested_file = nested / "root.img"
+            nested_file.write_bytes(root.read_bytes())
+            # The leaf is an ordinary file: only a parent directory redirects.
+            link = media / "linked-directory"
+            link.symlink_to(nested, target_is_directory=True)
+            through_link = link / "root.img"
+            outside_parent = base / "outside-parent"
+            outside_parent.symlink_to(base, target_is_directory=True)
+            mirrored_media = outside_parent / "offline-copy"
+            for candidate_media, candidate_root in (
+                (media, through_link),
+                (mirrored_media, mirrored_media / "x1-root.img"),
+            ):
+                with self.subTest(path=candidate_root):
+                    report = mod.inspect(
+                        media_root=candidate_media,
+                        root_image=candidate_root,
+                        efi_image=candidate_media / "x1-efi.img",
+                        expected_root_sha=root_pin,
+                        expected_efi_sha=efi_pin,
+                    )
+                    self.assertFalse(report["observation_complete"])
+                    self.assertFalse(report["both_image_digests_match"])
+                    self.assertEqual(report["decision"], "HOLD")
+            # A legitimate nested path can still be read without a symlink.
+            positive = mod.inspect(
+                media_root=media, root_image=nested_file, efi_image=efi,
+                expected_root_sha=root_pin, expected_efi_sha=efi_pin,
+            )
+            self.assertTrue(positive["both_image_digests_match"])
+            self.assertFalse(positive["recovery_approval_granted"])
+
     def test_malformed_pins_and_relative_image_paths_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             media, root, efi = fixture(Path(temp))
