@@ -37,3 +37,7 @@ A reported `NO_DPKG_INCOMPLETE_INSTALLED_DETECTED` state is no longer sufficient
 ## Read-only EFI mount attestation extension (November 4)
 
 The collector now checks `/proc/self/mountinfo` (metadata-only, bounded to 1 MiB) for exactly one EFI mount record at the requested mountpoint, with a `vfat` filesystem and filesystem root `/`. A directory that simply exists or inherits free space from `/` cannot qualify as a mounted EFI volume. Missing, duplicated or non-VFAT mount records fail the preflight. Synthetic fixtures cover the negative cases, and no raw device paths or mount records are included in the report. This proves only the existence of the expected mount metadata: it does **not** prove the EFI backup is restorable, that a signed boot image will work, or that package repair is safe. Source-only research; production HOLD.
+
+## Native glibc architecture proof (November 4 additional pass)
+
+The x1-370 collector now explicitly requires an installed or held **native AMD64 libc6** package; an installed foreign `libc6:i386` cannot make the Ubuntu x86_64 host appear recovered. The aggregate records only a boolean `native_amd64_libc_installed`, not package source inventories. Fixture-only negative tests prove a foreign-only clean package state does not satisfy the native preflight and a half-installed native libc remains incomplete. This is specific to the documented AMD64 x1-370 host and is not a general ARM recovery collector. Live package repair or reboot remains prohibited by this draft.
