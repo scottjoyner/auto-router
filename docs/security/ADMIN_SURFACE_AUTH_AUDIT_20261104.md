@@ -400,3 +400,24 @@ An intended supplemental Docker-network peer check could not be
 committed in this iteration. Existing hosted integration-smoke still
 checks loopback denial, synthetic positive admin auth, and built-image
 provenance. Neither proves external or live Docker peer access policy.
+
+## Authentication boundary key separation (November 5 iteration)
+
+The runtime `require_admin` dependency now rejects the admin token if
+the **configured** admin value is identical to any of the router's
+internal inference service token, AssistX executor service token, AssistX
+callback Basic-auth password, or route-decision token. This check happens
+on every privileged request, even if candidate-release preflight was
+skipped. It protects `X-Admin-Token`, Bearer and Basic-admin access
+equally; the error contains no credential. Unset unrelated secrets
+remain tolerated, and a missing admin key continues to fail closed.
+An explicitly distinct admin key continues to work in isolated tests.
+
+This is an *additional* defense in source, not evidence the already
+running router has imported it. Stage and review separate key provision
+before cutover. Legacy integrations that reused an internal-service
+credential for admin access will now get 401, by design, and must use
+the appropriate independently scoped operator key. It is **not** safe
+to disable the guard to restore those integrations. The production
+router remains NO-GO until live image/provenance, ingress, authorized
+canaries, service health and rollback gates are independently verified.
