@@ -87,6 +87,14 @@ from auto_router.secure_live import app, assert_mounted_admin_guards
 from auto_router.security import require_admin
 
 assert_mounted_admin_guards(app)
+# Runtime routes must be completely stripped, including previously
+# overlooked read-only job metadata and artifacts endpoints.
+from fastapi.routing import iter_route_contexts
+effective_paths = [context.path for context in iter_route_contexts(app.routes)]
+assert not any(
+    path == '/jobs/agent' or path.startswith('/jobs/agent/')
+    for path in effective_paths
+), effective_paths
 new = FastAPI()
 @new.get('/admin/synthetic-safe', dependencies=[Depends(require_admin)])
 async def safe():
