@@ -32,6 +32,12 @@ from auto_router.secure_live import app, assert_mounted_admin_guards
 import auto_router.security as sec
 
 assert_mounted_admin_guards(app)
+# No inherited agent-job command or artifact endpoints may survive even if
+# they are GET-only. Legacy agent-job API is entirely retired in production.
+from fastapi.routing import iter_route_contexts
+for context in iter_route_contexts(app.routes):
+    candidate = getattr(context, 'path', '') or ''
+    assert not candidate.startswith('/jobs/agent'), candidate
 token = 'synthetic-router-admin-credential'
 sec.get_settings = lambda: SimpleNamespace(admin_token=token)
 raw = {
