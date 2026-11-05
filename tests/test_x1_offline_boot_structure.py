@@ -135,7 +135,7 @@ class BootStructureInspectionTests(unittest.TestCase):
         # Header CRC is recomputed after altering *only* its array CRC.
         forged = bytearray(clean)
         forged[600] ^= 0xFF  # LBA1 offset 88: entry-array CRC field
-        forged[528:532] = b"\\0" * 4
+        forged[528:532] = b"\0" * 4
         forged[528:532] = (
             zlib.crc32(forged[512:604]) & 0xFFFFFFFF
         ).to_bytes(4, "little")
