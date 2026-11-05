@@ -87,6 +87,14 @@ from auto_router.secure_live import app, assert_mounted_admin_guards
 from auto_router.security import require_admin
 
 assert_mounted_admin_guards(app)
+# Runtime routes must be completely stripped, including previously
+# overlooked read-only job metadata and artifacts endpoints.
+from fastapi.routing import iter_route_contexts
+effective_paths = [context.path for context in iter_route_contexts(app.routes)]
+assert not any(
+    path == '/jobs/agent' or path.startswith('/jobs/agent/')
+    for path in effective_paths
+), effective_paths
 new = FastAPI()
 @new.get('/admin/synthetic-safe', dependencies=[Depends(require_admin)])
 async def safe():
@@ -144,6 +152,42 @@ except RuntimeError as exc:
     assert 'lacks compiled admin authentication' in str(exc)
 else:
     raise AssertionError('ungated included /admin route was accepted')
+
+# Retired legacy agent execution must never be reintroduced, even under
+# a correctly admin-gated route. Agent claim authority is not admin authority.
+retired = FastAPI()
+@retired.post('/jobs/agent', dependencies=[Depends(require_admin)])
+async def obsolete_task_route():
+    raise AssertionError('legacy agent route must never execute')
+try:
+    assert_mounted_admin_guards(retired)
+except RuntimeError as exc:
+    assert 'retired agent execution surface' in str(exc)
+else:
+    raise AssertionError('retired /jobs/agent unexpectedly admitted')
+
+retired_nested = FastAPI()
+@retired_nested.post('/jobs/agent/sample/claim', dependencies=[Depends(require_admin)])
+async def obsolete_claim_route():
+    raise AssertionError('legacy claim route must never execute')
+try:
+    assert_mounted_admin_guards(retired_nested)
+except RuntimeError as exc:
+    assert 'retired agent execution surface' in str(exc)
+else:
+    raise AssertionError('retired nested agent action unexpectedly admitted')
+
+retired_mount = FastAPI()
+retired_mount.mount('/jobs/agent', FastAPI())
+try:
+    assert_mounted_admin_guards(retired_mount)
+except RuntimeError as exc:
+    assert (
+        'unsupported mounted admin route type' in str(exc)
+        or 'retired agent execution surface' in str(exc)
+    )
+else:
+    raise AssertionError('retired agent ASGI mount unexpectedly admitted')
 
 # Shadow routes whose *declared* path does not start with /admin still
 # capture privileged requests before they reach a protected endpoint.
