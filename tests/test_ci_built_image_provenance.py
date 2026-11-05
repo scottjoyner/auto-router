@@ -105,6 +105,35 @@ def test_exact_checked_out_code_matches_built_image_then_produces_only_ci_gate(c
     assert all(args[1] in ("inspect","exec") for args in calls)
 
 
+def test_supporting_module_mismatch_denies_even_if_main_files_match(checkout):
+    prior=source_hashes(checkout)
+    (checkout/"src/auto_router/supporting.py").write_bytes(
+        b"new unreviewed helper behavior"
+    )
+    changed=source_hashes(checkout)
+    from scripts.verify_deployed_admin_release_identity import TREE_KEY
+    assert prior[TREE_KEY]!=changed[TREE_KEY]
+    assert all(prior[name]==changed[name] for name in FILES)
+    read,_=fake_docker(prior)
+    with patch("scripts.verify_ci_built_image_provenance.subprocess.run",
+               side_effect=fake_git):
+        receipt=evaluate_ci(root=checkout,docker_read=read,status_probe=deny_all)
+    assert receipt["gate"]=="HOLD"
+    assert receipt["checks"]["installed_source_hashes_match_pinned_build"] is False
+
+
+def test_python_tree_rejects_untracked_symlink_and_multilink(checkout):
+    from scripts.verify_deployed_admin_release_identity import python_tree_hash
+    root=checkout/"src/auto_router"
+    (root/"external.py").symlink_to("main.py")
+    with pytest.raises(ValueError,match="unverifiable"):
+        python_tree_hash(root)
+    (root/"external.py").unlink()
+    (root/"shadow.py").hardlink_to(root/"main.py")
+    with pytest.raises(ValueError,match="unverifiable"):
+        python_tree_hash(root)
+
+
 def test_mismatched_installed_source_refuses_ci_gate(checkout):
     hashes=source_hashes(checkout)
     hashes["security.py"]="0"*64
