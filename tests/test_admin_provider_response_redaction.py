@@ -48,12 +48,14 @@ def client(monkeypatch):
         "unexpected_future_secret": "SECRET_FUTURE_PROVIDER",
     }
     fake = SimpleNamespace(model_dump=lambda: raw)
-    original = router_main.state.providers
-    monkeypatch.setattr(router_main.state, "providers", SimpleNamespace(providers=[fake]))
-    try:
-        yield TestClient(router_main.app, raise_server_exceptions=False), raw
-    finally:
-        monkeypatch.setattr(router_main.state, "providers", original)
+    # AppState initializes provider data during lifespan, which these
+    # socketless tests intentionally never invoke. Monkeypatch must create
+    # the optional member and automatically restore its absence afterward.
+    monkeypatch.setattr(
+        router_main.state, "providers", SimpleNamespace(providers=[fake]),
+        raising=False,
+    )
+    yield TestClient(router_main.app, raise_server_exceptions=False), raw
 
 
 def test_operator_inventory_is_strict_allowlist(client):
