@@ -41,7 +41,7 @@ def assert_mounted_admin_guards(application) -> None:
             admin_count += 1
             # Substitute constrained, harmless values for path parameters;
             # no request is sent and no handler is invoked.
-            admin_paths.add(re.sub(r"\\{[^{}]+\\}", "guard-probe", path))
+            admin_paths.add(re.sub(r"\{[^{}]+\}", "guard-probe", path))
     if admin_count < 1:
         raise RuntimeError("mounted admin surface missing; cannot prove auth contract")
     admin_paths.update({
