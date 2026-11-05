@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zlib
 
 PATH = Path(__file__).resolve().parents[1] / "scripts" / "inspect_x1_offline_boot_structure.py"
 spec = importlib.util.spec_from_file_location("x1_boot_headers", PATH)
@@ -21,6 +22,27 @@ def fat32_header():
     data[14:16] = (32).to_bytes(2, "little")
     data[82:90] = b"FAT32   "
     data[510:512] = b"\x55\xaa"
+    return bytes(data)
+
+
+def valid_primary_gpt():
+    data = bytearray(1024)
+    data[450] = 0xEE  # Protective MBR partition type.
+    data[510:512] = b"\\x55\\xaa"
+    header = bytearray(512)
+    header[:8] = b"EFI PART"
+    header[8:12] = (0x00010000).to_bytes(4, "little")
+    header[12:16] = (92).to_bytes(4, "little")
+    header[24:32] = (1).to_bytes(8, "little")
+    header[32:40] = (1000).to_bytes(8, "little")
+    header[40:48] = (34).to_bytes(8, "little")
+    header[48:56] = (967).to_bytes(8, "little")
+    header[56:72] = b"\\x11" * 16
+    header[72:80] = (2).to_bytes(8, "little")
+    header[80:84] = (128).to_bytes(4, "little")
+    header[84:88] = (128).to_bytes(4, "little")
+    header[16:20] = (zlib.crc32(header[:92]) & 0xFFFFFFFF).to_bytes(4, "little")
+    data[512:1024] = header
     return bytes(data)
 
 
@@ -51,8 +73,7 @@ class BootStructureInspectionTests(unittest.TestCase):
             ]), 2)
 
     def test_recognizes_known_raw_headers_and_does_not_claim_boot(self):
-        gpt = bytearray(520)
-        gpt[512:520] = b"EFI PART"
+        gpt = valid_primary_gpt()
         btrfs = bytearray(0x10048)
         btrfs[0x10040:0x10048] = b"_BHRfS_M"
         cases = [
@@ -67,6 +88,26 @@ class BootStructureInspectionTests(unittest.TestCase):
                 self.assertEqual(mod.root_kind(data), kind)
         self.assertEqual(mod.efi_kind(bytes(gpt)), "raw-gpt-disk-header")
         self.assertEqual(mod.efi_kind(b"not an EFI partition"), "unknown")
+
+    def test_corrupt_primary_gpt_magic_crc_geometry_or_protective_mbr_denied(self):
+        clean = valid_primary_gpt()
+        self.assertTrue(mod._valid_primary_gpt_header(clean))
+        for offset, new_byte in (
+            (512, 0),     # signature, even with intact CRC
+            (528, 0),     # header CRC32
+            (536, 0),     # current LBA (invalid checksum)
+            (450, 0),     # protective MBR
+            (510, 0),     # 0x55AA MBR signature
+        ):
+            mutated = bytearray(clean)
+            mutated[offset] = new_byte
+            with self.subTest(offset=offset):
+                self.assertFalse(mod._valid_primary_gpt_header(mutated))
+                self.assertEqual(mod.root_kind(mutated), "unknown")
+                self.assertEqual(mod.efi_kind(mutated), "unknown")
+        magic_only = bytearray(1024)
+        magic_only[512:520] = b"EFI PART"
+        self.assertEqual(mod.root_kind(magic_only), "unknown")
 
     def test_corrupt_fat_header_is_not_recognized(self):
         baseline = bytearray(fat32_header())
