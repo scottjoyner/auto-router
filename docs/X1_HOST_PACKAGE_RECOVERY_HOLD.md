@@ -147,3 +147,33 @@ restore. Consequently, `gate=HOLD`, `production_repair_or_reboot_permitted=false
 and exit code **2** remain unconditional, even for valid signatures,
 fresh generation and matching bytes. Synthetic ephemeral-key tests only;
 no real backup or signing key was used.
+
+## Off-host raw image structure triage (next iteration)
+
+Added `scripts/inspect_x1_offline_boot_structure.py` as a second
+**read-only, low-I/O** step to run on an isolated offline review machine
+after verifying independently witnessed hashes/signatures. It opens each
+selected regular file through descriptor-relative `O_NOFOLLOW` traversal,
+reads at most 68 KiB per image and reports only known raw on-disk header
+classes (ext, XFS, Btrfs, LUKS, GPT disk; FAT12/16/32 EFI partition).
+It never invokes `mount`, QEMU, `fsck`, root commands, disk recovery,
+package repair or host reboot.
+
+```bash
+python3 -m scripts.inspect_x1_offline_boot_structure \
+  --explicit-off-host-read-only \
+  --media-root /mnt/offline-recovery-copy \
+  --root-image /mnt/offline-recovery-copy/x1-root.img \
+  --efi-image /mnt/offline-recovery-copy/x1-efi.img
+```
+
+The classifications distinguish, for example, an ext partition image
+from a GPT whole-disk image or a LUKS-encrypted image; they do **not**
+prove filesystem integrity, EFI contents, bootloader paths, encrypted-key
+availability, restorable partition alignment or that either file is the
+actual root/EFI backup. Unknown headers are reported without asserting
+corruption. It always returns exit code 2 and `decision=HOLD`. The
+synthetic tests construct ext/FAT/GPT headers in temporary files and
+exercise corrupt/symlink cases. A genuine restore to independent clone
+storage and a witnessed firmware-to-userspace boot remain separate
+mandatory steps.
