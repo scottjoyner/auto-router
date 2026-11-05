@@ -108,7 +108,7 @@ def test_both_supported_linux_partition_guid_formats_match_only_structurally(
 
 @pytest.mark.parametrize("unsupported_root_type", [
     bytes.fromhex("0102030405060708090a0b0c0d0e0f10"),
-    bytes.fromhex("7900deca66c7b34c9ca2a3c0686b7267"),  # Linux LVM GUID
+    bytes.fromhex("79d3d6e607f5c244a23c238f2a3df928"),  # Linux LVM GUID
 ])
 def test_valid_signed_nonroot_or_unsupported_layout_fails_closed(
     unsupported_root_type,
