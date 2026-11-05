@@ -38,6 +38,7 @@ jobs:
             scripts/verify_x1_offline_recovery_images.py \
             scripts/verify_x1_recovery_witness.py \
             scripts/verify_x1_offline_gpt_mirror.py \
+            scripts/verify_x1_offline_partition_linkage.py \
             scripts/verify_x1_offline_recovery_bundle_v2.py \
             scripts/inspect_x1_offline_boot_structure.py
       - name: Execute synthetic negative and positive controls
@@ -48,6 +49,7 @@ jobs:
             tests/test_x1_recovery_witness.py \
             tests/test_x1_offline_boot_structure.py \
             tests/test_x1_offline_gpt_mirror.py \
+            tests/test_x1_offline_partition_linkage.py \
             tests/test_x1_offline_recovery_gate.py \
             tests/test_x1_offline_recovery_bundle_v2.py
       - name: Assert workflow never authorizes live maintenance
