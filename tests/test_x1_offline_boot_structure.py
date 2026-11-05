@@ -26,7 +26,12 @@ def fat32_header():
 
 
 def valid_primary_gpt():
-    data = bytearray(1024)
+    table = bytearray(128 * 128)
+    # Synthetic EFI partition type/unique GUID entry.
+    table[:16] = bytes(range(1, 17))
+    table[16:32] = bytes(range(17, 33))
+    data = bytearray(1024 + len(table))
+    data[1024:] = table
     data[450] = 0xEE  # Protective MBR partition type.
     data[510:512] = b"\x55\xaa"
     header = bytearray(512)
@@ -41,6 +46,7 @@ def valid_primary_gpt():
     header[72:80] = (2).to_bytes(8, "little")
     header[80:84] = (128).to_bytes(4, "little")
     header[84:88] = (128).to_bytes(4, "little")
+    header[88:92] = (zlib.crc32(table) & 0xFFFFFFFF).to_bytes(4, "little")
     header[16:20] = (zlib.crc32(header[:92]) & 0xFFFFFFFF).to_bytes(4, "little")
     data[512:1024] = header
     return bytes(data)
@@ -108,6 +114,32 @@ class BootStructureInspectionTests(unittest.TestCase):
         magic_only = bytearray(1024)
         magic_only[512:520] = b"EFI PART"
         self.assertEqual(mod.root_kind(magic_only), "unknown")
+
+    def test_corrupt_partition_array_does_not_pass_header_crc_alone(self):
+        clean = valid_primary_gpt()
+        self.assertTrue(mod._valid_primary_gpt_header(clean))
+        for offset in (1024, 1033, 17407):
+            mutated = bytearray(clean)
+            mutated[offset] ^= 0xFF
+            with self.subTest(offset=offset):
+                # GPT header CRC remains valid; partition-entry CRC fails.
+                self.assertEqual(
+                    mutated[528:532], clean[528:532],
+                )
+                self.assertFalse(mod._valid_primary_gpt_header(mutated))
+                self.assertEqual(mod.root_kind(mutated), "unknown")
+        self.assertEqual(
+            mod.root_kind(clean[:1024]), "unknown",
+            "a valid GPT header without the entry array cannot be trusted",
+        )
+        # Header CRC is recomputed after altering *only* its array CRC.
+        forged = bytearray(clean)
+        forged[600] ^= 0xFF  # LBA1 offset 88: entry-array CRC field
+        forged[528:532] = b"\\0" * 4
+        forged[528:532] = (
+            zlib.crc32(forged[512:604]) & 0xFFFFFFFF
+        ).to_bytes(4, "little")
+        self.assertFalse(mod._valid_primary_gpt_header(forged))
 
     def test_corrupt_fat_header_is_not_recognized(self):
         baseline = bytearray(fat32_header())
