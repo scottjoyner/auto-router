@@ -27,6 +27,7 @@ from scripts.verify_x1_offline_recovery_images import (
 )
 from scripts.verify_x1_offline_gpt_mirror import inspect as inspect_mirror
 from scripts.verify_x1_offline_partition_linkage import exact_partition_links
+from scripts.verify_x1_offline_clone_copy import inspect_clone
 
 SCHEMA = "x1.root-efi-disk-custody-bundle.v2"
 FIELDS = {
@@ -41,6 +42,7 @@ def verify_bundle(
     efi_image: Path, disk_image: Path, signature_hex: str,
     trusted_public_key_hex: str, high_water_generation: int,
     verify_extents: bool = False,
+    clone_image: Path | None = None,
 ) -> dict:
     report = {
         "schema": "x1.offline-signed-recovery-bundle-v2.v1",
@@ -51,6 +53,9 @@ def verify_bundle(
         "whole_disk_primary_backup_gpt_consistent": False,
         "signed_root_efi_exact_partition_extents_match_disk": False,
         "exact_partition_extent_check_requested": verify_extents is True,
+        "authenticated_offhost_clone_check_requested": clone_image is not None,
+        "clone_copy_matches_signed_disk_digest_and_gpt": False,
+        "independent_physical_clone_boot_witnessed": False,
         "independent_signer_key_custody_verified": False,
         "captured_same_source_snapshot_independently_proven": False,
         "physical_clone_restore_and_uefi_boot_witnessed": False,
@@ -65,6 +70,10 @@ def verify_bundle(
                 or not isinstance(trusted_public_key_hex, str)
                 or SHA256.fullmatch(trusted_public_key_hex) is None
                 or len({root_image, efi_image, disk_image, manifest}) != 4
+                or (clone_image is not None and (
+                    not isinstance(clone_image, Path)
+                    or clone_image in {root_image, efi_image, disk_image, manifest}
+                ))
                 or not media_root.is_absolute()
                 or media_root == Path("/")
                 or media_root.is_symlink()
@@ -149,6 +158,21 @@ def verify_bundle(
                         efi_bytes=witness["efi_bytes"],
                     )
                 )
+        if (images_match and report["whole_disk_primary_backup_gpt_consistent"]
+                and clone_image is not None):
+            # The clone expected SHA/size derive directly from the *same*
+            # validated and signed witness used for all three image files.
+            # Never accept a separate self-declared expected digest here.
+            clone_proof = inspect_clone(
+                media_root=media_root, clone_image=clone_image,
+                authenticated_disk_sha256=witness["disk_sha256"],
+                authenticated_disk_bytes=witness["disk_bytes"],
+            )
+            report["clone_copy_matches_signed_disk_digest_and_gpt"] = (
+                clone_proof.get("observation_complete") is True
+                and clone_proof.get("clone_size_and_sha256_match_pinned_source") is True
+                and clone_proof.get("clone_gpt_structurally_consistent") is True
+            )
         report["observation_complete"] = True
     except (OSError, ValueError, TypeError, UnicodeError,
             json.JSONDecodeError, RuntimeError) as exc:
@@ -173,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--high-water-generation", type=int, required=True)
     parser.add_argument("--verify-exact-partition-extents",
                         action="store_true")
+    parser.add_argument("--clone-image", type=Path, default=None)
     args = parser.parse_args(argv)
     report = verify_bundle(
         media_root=args.media_root, manifest=args.manifest,
@@ -181,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         trusted_public_key_hex=args.trusted_public_key_hex,
         high_water_generation=args.high_water_generation,
         verify_extents=args.verify_exact_partition_extents,
+        clone_image=args.clone_image,
     )
     print(json.dumps(report, sort_keys=True))
     return 2  # No signature or structural classification authorizes repair.
