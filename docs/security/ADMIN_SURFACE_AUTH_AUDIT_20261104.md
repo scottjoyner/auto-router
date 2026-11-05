@@ -380,3 +380,23 @@ The credential gate is not a production cutover by itself. Independent
 image provenance, actual network-side 401 evidence, positive authorized
 client health, off-host state rollback and explicit release approval
 are still mandatory. Production **NO-GO** remains.
+
+## Candidate secret pattern checks (November 5 adjacent iteration)
+
+The candidate-only release preflight now rejects obvious long repeated
+sequences, uniformly repeated characters and embedded `change-me` /
+`example-token` strings, even if their total length exceeds 32.
+It still requires three distinct credentials for router admin, scoped
+service inference and AssistX callback Basic authentication. Tests now
+use unique synthetic values and attack patterned long examples.
+
+**This is a weak-pattern screening heuristic, not cryptographic entropy
+estimation, independent key custody, token rotation, or live Docker
+configuration proof.** It cannot authorize production admission and
+continues to emit only safe booleans and HOLD. Fleet Commander remained
+unreachable; no production credentials were examined.
+
+An intended supplemental Docker-network peer check could not be
+committed in this iteration. Existing hosted integration-smoke still
+checks loopback denial, synthetic positive admin auth, and built-image
+provenance. Neither proves external or live Docker peer access policy.
