@@ -237,3 +237,39 @@ UEFI Secure Boot trust, restored secrets, or a booting OS. Existing
 `decision=HOLD` and exit 2 remain unconditional. Actual independent
 signed recovery media, image custody, clean clone boot, OOB console
 and an owner-approved maintenance plan are not yet verified.
+
+## Unified off-host recovery evidence report (November 5 adjacent iteration)
+
+Run the new source-only `scripts/assess_x1_offline_recovery_gate.py`
+on an isolated evidence workstation, **not on x1-370**, after independently
+acquiring a signed root+EFI backup pair and a whole-disk raw image.
+It invokes the existing verifier for the operator-supplied Ed25519
+signature, independently pinned public key and generation floor,
+root+EFI size/digest evidence, and the bounded primary/backup GPT
+whole-disk inspection. It does **not** trust previously serialized
+report JSON blobs and does not mount, restore, repair or boot anything.
+
+```bash
+python3 -m scripts.assess_x1_offline_recovery_gate \
+  --explicit-independent-offhost-readonly \
+  --media-root /mnt/offhost-recovery \
+  --manifest /mnt/offhost-recovery/manifest.json \
+  --root-image /mnt/offhost-recovery/root.img \
+  --efi-image /mnt/offhost-recovery/efi.img \
+  --disk-image /mnt/offhost-recovery/whole-disk.raw \
+  --signature-hex '<detached-signature-hex>' \
+  --trusted-public-key-hex '<independently-pinned-key-hex>' \
+  --high-water-generation '<independently-witnessed-number>'
+```
+
+All arguments here are placeholders; do **not** use fabricated evidence.
+The output is a short, nonsecret checklist and explicit unmet evidence
+fields. Exit status is always 2 with `decision=HOLD` even if the two
+read-only structural checks succeed. **Crucial distinction:** the root+EFI
+manifest does not sign the whole-disk image, so valid signed partition
+files and a valid GPT mirror do not prove that the artifacts come from
+the same source snapshot. The report always marks
+`whole_disk_linked_to_signed_root_efi_pair=false` and independent key
+custody, clone restore, UEFI boot, OOB console/rollback and owner approval
+as unverified. Such evidence must be acquired in the physical recovery
+workflow before any dpkg/apt, disk, EFI or reboot work.
