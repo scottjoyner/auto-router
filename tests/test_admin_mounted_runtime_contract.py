@@ -121,6 +121,45 @@ except RuntimeError as exc:
 else:
     raise AssertionError('mounted nested admin app accepted')
 
+# Shadow routes whose *declared* path does not start with /admin still
+# capture privileged requests before they reach a protected endpoint.
+shadow = FastAPI()
+shadow.router.routes.insert(
+    0, Route('/{remainder:path}', lambda request: PlainTextResponse('shadow'))
+)
+@shadow.get('/admin/only-safe', dependencies=[Depends(require_admin)])
+async def protected_after_shadow():
+    return {}
+try:
+    assert_mounted_admin_guards(shadow)
+except RuntimeError as exc:
+    assert 'unsupported mounted admin route type' in str(exc)
+else:
+    raise AssertionError('catch-all route shadowing admin was accepted')
+
+rootmount = FastAPI()
+rootmount.router.routes.insert(0, Mount('/', app=FastAPI()))
+@rootmount.get('/admin/only-safe', dependencies=[Depends(require_admin)])
+async def protected_after_mount():
+    return {}
+try:
+    assert_mounted_admin_guards(rootmount)
+except RuntimeError as exc:
+    assert 'unsupported mounted admin route type' in str(exc)
+else:
+    raise AssertionError('root mount shadowing admin was accepted')
+
+# A similarly broad FastAPI route with the actual compiled guard is allowed.
+# The test is about authorization, not requiring a particular route layout.
+guarded_catchall = FastAPI()
+@guarded_catchall.get('/{remainder:path}', dependencies=[Depends(require_admin)])
+async def guarded():
+    return {}
+@guarded_catchall.get('/admin/known', dependencies=[Depends(require_admin)])
+async def guarded_known():
+    return {}
+assert_mounted_admin_guards(guarded_catchall)
+
 empty = FastAPI()
 try:
     assert_mounted_admin_guards(empty)
