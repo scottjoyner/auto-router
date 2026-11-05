@@ -22,22 +22,53 @@ MAX_IMAGE_BYTES = 16 * 1024**4
 
 
 def _under(root: Path, path: Path) -> bool:
-    # Reject symlink to an outside path and path traversal, including parent
-    # symlinks. This is a lexical and canonical containment check, not a
-    # cryptographic statement about the backing storage device.
-    if not path.is_absolute() or ".." in path.parts:
-        return False
+    # This is intentionally lexical. Every component is subsequently opened
+    # with O_NOFOLLOW, so a symlink cannot silently redirect the read outside
+    # the operator-selected media directory between resolve() and open().
+    return (
+        root.is_absolute()
+        and path.is_absolute()
+        and path != root
+        and ".." not in root.parts
+        and ".." not in path.parts
+        and path.is_relative_to(root)
+    )
+
+
+def _open_directory_nofollow(path: Path) -> int:
+    """Walk from / using held directory FDs, rejecting every symlink."""
+    if not path.is_absolute() or ".." in path.parts or path == Path("/"):
+        raise ValueError("invalid offline-media directory")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent = os.open("/", flags)
     try:
-        return path.resolve(strict=True).is_relative_to(root.resolve(strict=True))
-    except (OSError, RuntimeError):
-        return False
+        for component in path.parts[1:]:
+            child = os.open(component, flags, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        return parent
+    except BaseException:
+        os.close(parent)
+        raise
 
 
 def sha256_regular_offline(path: Path, *, media_root: Path) -> tuple[str, int]:
-    if not _under(media_root, path) or path == media_root:
+    if not _under(media_root, path):
         raise ValueError("backup path is not contained in offline-media directory")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
+    components = path.relative_to(media_root).parts
+    parent = _open_directory_nofollow(media_root)
+    try:
+        for component in components[:-1]:
+            child = os.open(
+                component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent,
+            )
+            os.close(parent)
+            parent = child
+        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(components[-1], flags, dir_fd=parent)
+    finally:
+        os.close(parent)
     try:
         initial = os.fstat(fd)
         if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
@@ -92,7 +123,7 @@ def inspect(*, media_root: Path, root_image: Path, efi_image: Path,
                 or media_root.resolve(strict=True).parts[1:2]
                     in {("dev",), ("proc",), ("sys",), ("run",), ("etc",), ("boot",)}):
             raise ValueError("unsafe offline media root")
-        if root_image.resolve(strict=True) == efi_image.resolve(strict=True):
+        if root_image == efi_image:
             raise ValueError("root and EFI images cannot be the same file")
         root_sha, root_bytes = sha256_regular_offline(root_image, media_root=media_root)
         efi_sha, efi_bytes = sha256_regular_offline(efi_image, media_root=media_root)
