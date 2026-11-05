@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
+from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
 import tempfile
@@ -255,6 +258,29 @@ class AuditTests(unittest.TestCase):
                     self.assertFalse(report["efi_mounted_vfat"])
                     self.assertFalse(report["observations_complete"])
                     self.assertEqual(report["decision"], "HOLD")
+
+
+    def test_complete_inventory_can_never_signal_maintenance_authorization(self):
+        for state in ("NO_DPKG_INCOMPLETE_INSTALLED_DETECTED", "INCOMPLETE"):
+            with self.subTest(package_state=state):
+                report = {
+                    "contract": "x1-package-recovery-readonly-v1",
+                    "observations_complete": True,
+                    "package_state": state,
+                    "decision": "HOLD",
+                    "production_change_permitted": False,
+                    "package_repair_permitted": False,
+                    "reboot_permitted": False,
+                }
+                output = io.StringIO()
+                with patch.object(mod, "collect", return_value=report):
+                    with redirect_stdout(output):
+                        rc = mod.main(["--read-only"])
+                self.assertEqual(rc, 2)
+                emitted = json.loads(output.getvalue())
+                self.assertEqual(emitted["decision"], "HOLD")
+                self.assertFalse(emitted["package_repair_permitted"])
+                self.assertFalse(emitted["reboot_permitted"])
 
 
     def test_tool_failure_is_not_false_green(self):
