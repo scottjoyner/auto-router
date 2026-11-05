@@ -93,6 +93,23 @@ class AuditTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 mod.inventory_packages(data)
 
+    def test_foreign_architecture_libc_cannot_impersonate_native_installed(self):
+        foreign_only = mod.inventory_packages(
+            "libc6:i386\tii \t2.43-2ubuntu2\n"
+        )
+        self.assertEqual(foreign_only["incomplete_installed_packages"], 0)
+        self.assertFalse(foreign_only["native_amd64_libc_installed"])
+        mixed = mod.inventory_packages(
+            "libc6:i386\tii \t2.43-2ubuntu2\n"
+            "libc6:amd64\tiHR\t2.39-0ubuntu8.9\n"
+        )
+        self.assertFalse(mixed["native_amd64_libc_installed"])
+        self.assertEqual(mixed["incomplete_installed_packages"], 1)
+        native = mod.inventory_packages(
+            "libc6:amd64\tii \t2.43-2ubuntu2\n"
+        )
+        self.assertTrue(native["native_amd64_libc_installed"])
+
     def test_clean_inventory_still_never_authorizes_repair_or_reboot(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
