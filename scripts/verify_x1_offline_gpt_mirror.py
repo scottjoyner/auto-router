@@ -36,6 +36,46 @@ def _u32(data: bytes, start: int) -> int:
     return int.from_bytes(data[start:start + 4], "little")
 
 
+# UEFI system partition type GUID, serialized in GPT little-endian form.
+# Used only as an x1 boot-readiness indicator; never proof of firmware boot.
+_ESP_TYPE_GUID = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")
+
+
+def _valid_x1_partition_entries(
+    entries: bytes, entry_size: int, first_usable: int, last_usable: int,
+) -> bool:
+    """Require an ESP, coherent extents and unique partition identities."""
+    if not (128 <= entry_size <= 1024 and entry_size % 8 == 0
+            and len(entries) % entry_size == 0):
+        return False
+    used = []
+    unique_guids = set()
+    esp_count = 0
+    zero_guid = b"\\0" * 16
+    for i in range(0, len(entries), entry_size):
+        entry = entries[i:i + entry_size]
+        type_guid, unique_guid = entry[:16], entry[16:32]
+        if type_guid == zero_guid:
+            # Fail closed on half-deleted entries rather than trusting
+            # their unused fields and pretending the table is coherent.
+            if any(entry):
+                return False
+            continue
+        begin = _u64(entry, 32)
+        end = _u64(entry, 40)
+        if (unique_guid == zero_guid or unique_guid in unique_guids
+                or not first_usable <= begin <= end <= last_usable):
+            return False
+        unique_guids.add(unique_guid)
+        used.append((begin, end))
+        if type_guid == _ESP_TYPE_GUID:
+            esp_count += 1
+    if not used or esp_count != 1:
+        return False
+    used.sort()
+    return all(left[1] < right[0] for left, right in zip(used, used[1:]))
+
+
 def _valid_mirror(primary: bytes, last: bytes, backup_table: bytes,
                   total_bytes: int) -> bool:
     if (total_bytes < 1024 * 1024 or total_bytes % SECTOR
@@ -80,6 +120,10 @@ def _valid_mirror(primary: bytes, last: bytes, backup_table: bytes,
         and back_array_lba > _u64(front, 40)
         and zlib.crc32(backup_table) & 0xFFFFFFFF == _u32(last, 88)
         and primary[front_array_start:front_array_end] == backup_table
+        and _valid_x1_partition_entries(
+            backup_table, _u32(front, 84),
+            _u64(front, 40), _u64(front, 48),
+        )
     ):
         return False
     return True
