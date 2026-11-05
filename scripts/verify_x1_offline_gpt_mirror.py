@@ -51,7 +51,7 @@ def _valid_x1_partition_entries(
     used = []
     unique_guids = set()
     esp_count = 0
-    zero_guid = b"\\0" * 16
+    zero_guid = b"\0" * 16
     for i in range(0, len(entries), entry_size):
         entry = entries[i:i + entry_size]
         type_guid, unique_guid = entry[:16], entry[16:32]
