@@ -273,3 +273,52 @@ the same source snapshot. The report always marks
 custody, clone restore, UEFI boot, OOB console/rollback and owner approval
 as unverified. Such evidence must be acquired in the physical recovery
 workflow before any dpkg/apt, disk, EFI or reboot work.
+
+## Single signed root+EFI+whole-disk bundle v2 (November 5 iteration)
+
+The legacy signed root+EFI manifest v1 makes **no** claim that a separate
+whole-disk image belongs to that backup set. New read-only research tool
+`scripts/verify_x1_offline_recovery_bundle_v2.py` supports a *distinct*
+**v2** manifest with fields `schema`, `host_id` (`x1-370`),
+`backup_set_id`, `generation` and SHA-256 + size for **each of root,
+EFI and disk**. All ten fields must be canonically serialized in one
+JSON manifest, covered by **one detached Ed25519 signature** checked
+using an independently supplied trusted public key and high-water
+generation. Disk checksum and bounded primary/secondary GPT mirror
+integrity are both checked on the off-host copy. Unrecognized/legacy
+manifests, duplicate fields, symlinks, forged signatures, invalid or
+mismatched digests, wrong host, rolled-back generation and bad GPT
+are denied. The verifier reads only bounded and nofollow regular files,
+never any block device.
+
+The v2 format is a **future capture/attestation contract**, not a
+license to retroactively re-sign untrusted backups or mint a trust
+root from the damaged x1 host. The trusted signing key, generation
+floor and original capture provenance must originate in independent
+custody. A cryptographically valid bundle proves the signer committed
+to the same manifest **bytes**, not that separately acquired files were
+necessarily captured atomically or from the claimed machine. Even
+with a valid v2 bundle the report explicitly keeps independent
+key custody, original snapshot linkage, clone boot, OOB console,
+rollback and maintenance authorization **unverified**.
+
+Example for an independently signed *real* v2 manifest, without
+substituting invented signature or key material:
+
+```bash
+python3 -m scripts.verify_x1_offline_recovery_bundle_v2 \
+  --explicit-independent-offhost-readonly \
+  --media-root /mnt/offhost-recovery \
+  --manifest /mnt/offhost-recovery/signed-bundle-v2.json \
+  --root-image /mnt/offhost-recovery/root.img \
+  --efi-image /mnt/offhost-recovery/efi.img \
+  --disk-image /mnt/offhost-recovery/whole-disk.raw \
+  --signature-hex '<actual detached v2 signature>' \
+  --trusted-public-key-hex '<external pinned key>' \
+  --high-water-generation '<external generation floor>'
+```
+
+Do not run this script on production x1-370. Always exit **2 / HOLD**,
+with no repairs or restarts, even when all signed image hashes match.
+The earlier v1 pair verifier and combined report are unchanged and
+continue to mark cross-image linkage missing without v2 evidence.
