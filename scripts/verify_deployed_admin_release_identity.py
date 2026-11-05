@@ -21,10 +21,32 @@ CONTAINER = "git-router-1"
 ALLOWED_CONTAINERS = frozenset(("git-router-1", "auto-router-smoke"))
 ENTRYPOINT = "auto_router.secure_live:app"
 FILES = ("main.py", "security.py", "main_live.py", "secure_live.py")
+TREE_KEY = "__python_tree__"
+
+
+def python_tree_hash(root):
+    """Bounded canonical hash of all Python package source, not just four entrypoints."""
+    import hashlib
+    import stat
+    paths = sorted(p for p in root.rglob("*") if p.suffix == ".py" or p.is_symlink())
+    if not 0 < len(paths) <= 512:
+        raise ValueError("unverifiable Python package tree")
+    digest = hashlib.sha256(b"auto-router-python-tree-v1\\0")
+    for path in paths:
+        meta = path.lstat()
+        if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 or meta.st_size > 2_000_000:
+            raise ValueError("unverifiable Python source file")
+        rel = path.relative_to(root).as_posix()
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
 # Executed only inside the existing named container. Does not import app code
 # or read any environment variables, credentials, key files or user data.
 FILE_HASH_CODE = """
-import hashlib,json,sysconfig
+import hashlib,json,sysconfig,stat
 from pathlib import Path
 from importlib.machinery import PathFinder
 root=(Path(sysconfig.get_path('purelib'))/'auto_router').resolve()
@@ -34,8 +56,20 @@ locations=[] if spec is None else list(spec.submodule_search_locations or [])
 if len(locations)!=1 or Path(locations[0]).resolve()!=root:
     raise SystemExit(3)
 names=('main.py','security.py','main_live.py','secure_live.py')
-print(json.dumps({name:hashlib.sha256((root/name).read_bytes()).hexdigest()
-                  for name in names},sort_keys=True))
+paths=sorted(p for p in root.rglob('*') if p.suffix=='.py' or p.is_symlink())
+if not 0<len(paths)<=512:
+    raise SystemExit(4)
+tree=hashlib.sha256(b'auto-router-python-tree-v1\\0')
+for path in paths:
+    meta=path.lstat()
+    if not stat.S_ISREG(meta.st_mode) or meta.st_nlink!=1 or meta.st_size>2000000:
+        raise SystemExit(5)
+    tree.update(path.relative_to(root).as_posix().encode('utf-8'))
+    tree.update(b'\\0')
+    tree.update(hashlib.sha256(path.read_bytes()).digest())
+result={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in names}
+result['__python_tree__']=tree.hexdigest()
+print(json.dumps(result,sort_keys=True))
 """
 
 
@@ -125,7 +159,7 @@ def inspect(read=_run, container: str=CONTAINER) -> dict:
     installed = json.loads(read([
         "docker","exec",container,"python3","-B","-c",FILE_HASH_CODE]))
     if (not isinstance(args,list) or not isinstance(bindings,dict)
-            or set(installed)!=set(FILES)
+            or set(installed)!=set(FILES) | {TREE_KEY}
             or any(not isinstance(s,str) or not HEX64.fullmatch(s)
                    for s in installed.values())):
         raise RuntimeError("container metadata or installed source proof malformed")
@@ -157,8 +191,8 @@ def evaluate(actual: dict, expected_image: str, expected_files: dict,
              *, allow_public_bind: bool=False, status_probe=probe,
              port: int=8088) -> dict:
     expected_image = "sha256:"+_sha(expected_image,"Docker image")
-    if set(expected_files)!=set(FILES):
-        raise ValueError("exactly four installed source hashes are required")
+    if set(expected_files)!=set(FILES) | {TREE_KEY}:
+        raise ValueError("all four entrypoint pins and Python package tree digest required")
     for name,digest in expected_files.items():
         _sha(digest,name)
     if type(port) is not int or port!=8088:
@@ -230,10 +264,12 @@ def main() -> int:
     for name in FILES:
         parser.add_argument("--expected-"+name.removesuffix(".py").replace("_","-")+"-sha256",
                             required=True)
+    parser.add_argument("--expected-python-tree-sha256",required=True)
     parser.add_argument("--allow-public-bind",action="store_true")
     args=parser.parse_args()
     names={name:getattr(args,"expected_"+name.removesuffix(".py")+"_sha256")
            for name in FILES}
+    names[TREE_KEY]=args.expected_python_tree_sha256
     try:
         # Expected values must be from separately reviewed builder provenance.
         # This program NEVER derives desired hashes from the live container.
