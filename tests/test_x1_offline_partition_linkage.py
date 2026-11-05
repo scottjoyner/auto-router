@@ -10,7 +10,7 @@ import tempfile
 import pytest
 
 from scripts.verify_x1_offline_partition_linkage import (
-    exact_partition_links,
+    _LINUX_ROOT_TYPE_GUIDS, exact_partition_links,
 )
 from scripts.verify_x1_offline_recovery_bundle_v2 import verify_bundle
 
@@ -38,7 +38,9 @@ def _aligned_case(base: Path):
     media, manifest, root, efi, disk, meta, private, public = fixture
     image = bytearray(disk.read_bytes())
     second = 1024 + 128
-    image[second:second + 16] = bytes(range(1, 17))
+    image[second:second + 16] = bytes.fromhex(
+        "af3dc60f838472478e793d69d8477de4"
+    )
     image[second + 16:second + 32] = bytes(range(33, 49))
     image[second + 32:second + 40] = ROOT_FIRST.to_bytes(8, "little")
     image[second + 40:second + 48] = ROOT_LAST.to_bytes(8, "little")
@@ -79,6 +81,31 @@ def test_signed_raw_partition_copies_match_exact_whole_disk_extents():
         assert report["exact_partition_extent_check_requested"]
         assert report["signed_root_efi_exact_partition_extents_match_disk"]
         assert not report["captured_same_source_snapshot_independently_proven"]
+        assert not report["production_repair_or_reboot_permitted"]
+        assert report["decision"] == "HOLD"
+
+
+def test_signed_matching_bytes_in_nonlinux_partition_cannot_impersonate_root():
+    # A fully consistent triple-signed backup can still place the root-image
+    # bytes in a Microsoft/unknown GPT partition rather than a Linux root.
+    # The exact byte match must not become root-identity evidence.
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = _aligned_case(Path(tmp))
+        media, manifest, root, efi, disk, meta, private, public = fixture
+        data = bytearray(disk.read_bytes())
+        second = 1024 + 128
+        # Random, structurally legal, non-Linux GPT type GUID.
+        bogus = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
+        assert bogus not in _LINUX_ROOT_TYPE_GUIDS
+        data[second:second + 16] = bogus
+        gpt.rehash_both_gpt_headers(data)
+        disk.write_bytes(data)
+        meta["disk_sha256"] = hashlib.sha256(data).hexdigest()
+        manifest.write_bytes(fixture_mod._canonical(meta))
+        report = _run(fixture)
+        assert report["all_three_image_digests_and_sizes_match_signed_manifest"]
+        assert report["whole_disk_primary_backup_gpt_consistent"]
+        assert not report["signed_root_efi_exact_partition_extents_match_disk"]
         assert not report["production_repair_or_reboot_permitted"]
         assert report["decision"] == "HOLD"
 
