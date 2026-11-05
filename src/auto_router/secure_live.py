@@ -70,7 +70,7 @@ def assert_mounted_admin_guards(application) -> None:
         "/jobs/agent", "/jobs/agent/",
         "/jobs/agent/fixture", "/jobs/agent/fixture/claim",
     }
-    for _leaf, path, pattern in resolved:
+    for _leaf, path, _pattern in resolved:
         if path == "/jobs/agent" or path.startswith("/jobs/agent/"):
             raise RuntimeError("retired agent execution surface must not be mounted")
 
