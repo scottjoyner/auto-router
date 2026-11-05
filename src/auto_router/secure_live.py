@@ -9,7 +9,7 @@ idempotency, iterator-final streaming accounting, and claim-scoped inference aut
 from __future__ import annotations
 
 from fastapi.routing import APIRoute
-from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.routing import Mount, WebSocketRoute
 from auto_router.security import require_admin
 
 import auto_router.main_live as main_live_module
