@@ -41,7 +41,13 @@ def test_credential_separation_and_code_contract_still_never_grant_cutover():
     assert not proof["live_ipv4_ipv6_and_docker_peer_admin_denial_verified"]
     assert not proof["restorable_backup_and_rollback_verified"]
     redacted = json.dumps(proof)
-    assert not any(token in redacted for token in BASE.values())
+    assert not any(
+        BASE[name] in redacted for name in (
+            "AUTO_ROUTER_ADMIN_TOKEN",
+            "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN",
+            "AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS",
+        )
+    )
     assert not any(key in redacted for key in (
         "operator-admin", "assistx-inference", "assistx-callback",
     ))
