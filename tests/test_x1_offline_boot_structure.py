@@ -28,7 +28,7 @@ def fat32_header():
 def valid_primary_gpt():
     data = bytearray(1024)
     data[450] = 0xEE  # Protective MBR partition type.
-    data[510:512] = b"\\x55\\xaa"
+    data[510:512] = b"\x55\xaa"
     header = bytearray(512)
     header[:8] = b"EFI PART"
     header[8:12] = (0x00010000).to_bytes(4, "little")
@@ -37,7 +37,7 @@ def valid_primary_gpt():
     header[32:40] = (1000).to_bytes(8, "little")
     header[40:48] = (34).to_bytes(8, "little")
     header[48:56] = (967).to_bytes(8, "little")
-    header[56:72] = b"\\x11" * 16
+    header[56:72] = b"\x11" * 16
     header[72:80] = (2).to_bytes(8, "little")
     header[80:84] = (128).to_bytes(4, "little")
     header[84:88] = (128).to_bytes(4, "little")
