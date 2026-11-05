@@ -108,22 +108,37 @@ CODE_ROOTS=("/app", "/code", "/workspace", "/opt/auto-router",
 
 
 def code_mounts_safe(mounts: object) -> bool:
-    """Reject source/runtime-path overlays without exposing host mount sources."""
+    """Require an approved, nonshadowing set of runtime mount destinations.
+
+    Inspect destination/type only. Never read or disclose host-side sources,
+    mount content, credentials, or config values. Unknown mounts deny by default.
+    """
     if not isinstance(mounts,list):
         return False
+    seen: set[str] = set()
     for mount in mounts:
         if not isinstance(mount,dict):
             return False
         target=mount.get("Destination")
-        if not isinstance(target,str) or not target.startswith("/") or "/../" in target:
+        mount_type=mount.get("Type")
+        if (not isinstance(target,str) or not target.startswith("/")
+                or "//" in target or "/./" in target or "/../" in target
+                or target.endswith(("/.", "/.."))
+                or target in seen
+                or mount_type not in {"bind","volume"}):
             return False
-        # The CI image has a deliberately mounted, data-only configuration
-        # directory. This exact mount is not an import root; its parent, any
-        # app source mount, and every other /app subtree remain denied.
-        if target=="/app/config":
+        seen.add(target)
+        # Known application config and data mounts are data-only locations.
+        # Secrets must remain in explicitly scoped files under /run/secrets.
+        if target in {"/app/config","/data"}:
             continue
-        if any(target==root or target.startswith(root+"/") for root in CODE_ROOTS):
-            return False
+        if (target.startswith("/run/secrets/")
+                and target != "/run/secrets/"
+                and not target.endswith("/")
+                and all(segment not in {"", ".", ".."}
+                        for segment in target.split("/")[3:])):
+            continue
+        return False
     return True
 
 
