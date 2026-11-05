@@ -322,3 +322,33 @@ Do not run this script on production x1-370. Always exit **2 / HOLD**,
 with no repairs or restarts, even when all signed image hashes match.
 The earlier v1 pair verifier and combined report are unchanged and
 continue to mark cross-image linkage missing without v2 evidence.
+
+## Offline clone-copy integrity gate (new iteration)
+
+New operator-only `scripts/verify_x1_offline_clone_copy.py` can inspect an
+existing **regular-file raw disk clone** on independent offline review media.
+It requires exact SHA-256 and size values that the operator separately
+obtained from an independently authenticated v2 root+EFI+disk manifest.
+The script hashes the clone bytes and, only after a match, inspects its
+primary and secondary GPT structures. It rejects symlinks, unexpectedly
+changed files, mismatched size or digest, unsafe media selection and
+malformed inputs. Output contains only categorical evidence; it neither
+reads the production disk nor creates/restores a clone. All outcomes
+exit 2 / HOLD, including exact byte matches.
+
+For independently supplied real values (not synthetic test examples):
+
+```bash
+python3 -m scripts.verify_x1_offline_clone_copy \
+  --explicit-independent-offhost-readonly \
+  --media-root /mnt/offhost-recovery \
+  --clone-image /mnt/offhost-recovery/isolated-restored-clone.raw \
+  --authenticated-disk-sha256 '<digest from externally verified v2 bundle>' \
+  --authenticated-disk-bytes '<size from externally verified v2 bundle>'
+```
+
+A byte-exact raw-file copy is not proof of a **physical device restore**,
+a UEFI firmware boot, valid userspace or out-of-band console/rollback.
+Existing package repair, disk writes and reboot remain forbidden until
+those distinct witnessed requirements are met. Do not create a new
+signing key on the damaged host just to make the v2 manifest pass.
