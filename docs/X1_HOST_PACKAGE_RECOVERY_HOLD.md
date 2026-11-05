@@ -352,3 +352,25 @@ a UEFI firmware boot, valid userspace or out-of-band console/rollback.
 Existing package repair, disk writes and reboot remain forbidden until
 those distinct witnessed requirements are met. Do not create a new
 signing key on the damaged host just to make the v2 manifest pass.
+
+## Signed backup → cloned-copy integrated review (same-day adjacent iteration)
+
+For the v2 Ed25519 bundle verifier, an *optional* `--clone-image`
+now combines the signed root+EFI+disk hash and GPT verification with
+an offline cloned-disk content check **without accepting a separate
+free-form expected clone hash**. The expected clone digest and byte
+length are taken from the validated canonical signed manifest in the
+same invocation. A forged/rolled-back signature prevents clone
+admission; using the original disk path as its own clone is rejected.
+The clone must be an independently selected, regular nofollow file
+under the same explicitly off-host media root. Example append to the
+earlier signed v2 command:
+
+```
+  --clone-image /mnt/offhost-recovery/isolated-clone-copy.raw
+```
+
+The tool remains entirely read-only, exits 2 / HOLD unconditionally,
+and never claims a physical block-device restore, UEFI firmware boot,
+independent key custody, or live host repair authority. No clone was
+created or inspected on x1-370 during this research iteration.
