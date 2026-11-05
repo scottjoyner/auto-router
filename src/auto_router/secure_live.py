@@ -52,7 +52,11 @@ def assert_mounted_admin_guards(application) -> None:
         pattern = getattr(route, "path_regex", None)
         path = getattr(route, "path", None)
         if not isinstance(path, str) or pattern is None:
-            raise RuntimeError("unverifiable mounted route identity")
+            # Do not leak handler objects/configuration; the type is enough to
+            # identify an unsupported router registration during CI review.
+            raise RuntimeError(
+                f"unverifiable mounted route identity: {type(route).__name__}"
+            )
         # A raw Route, Mount, dynamically parameterized route or websocket
         # that can intercept *any* protected sample needs the same guard.
         if not any(pattern.match(probe) for probe in admin_paths):
