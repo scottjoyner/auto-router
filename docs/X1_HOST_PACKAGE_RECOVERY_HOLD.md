@@ -214,3 +214,26 @@ it does not verify a secondary GPT header, actual source disk size,
 backup custody, the mounted filesystem, EFI bootloader, cloned system
 bootability or Neo4j restore. No backup was read on x1-370. Maintenance
 authorization, image restoration and reboot remain strictly **HOLD**.
+
+## GPT partition semantic integrity on off-host clone evidence (new iteration)
+
+The separate whole-disk GPT mirror verifier now also checks *used*
+partition entries after primary+secondary headers, table CRCs and
+bytewise copies match. It requires a single UEFI system partition
+type GUID, unique nonzero partition GUIDs, start/end sectors within
+the usable GPT LBA range, nonoverlapping used extents and completely
+zero unused entries. This prevents a well-formed recomputed pair of
+GPT CRCs from masking missing EFI partition metadata, duplicate
+partition identity or impossible/overlapping LBAs. Fixture-only tests
+intentionally tamper both tables and recompute both valid checksums,
+then verify the semantic result still fails closed.
+
+This deliberately **x1-specific UEFI readiness** gate can reject a
+healthy but different GPT topology. It is not an error diagnosis or
+a repair instruction; the result is only a bounded, off-host observation.
+A syntactically coherent EFI partition entry still does not prove
+filesystem integrity, a firmware-readable ESP, working GRUB/shim,
+UEFI Secure Boot trust, restored secrets, or a booting OS. Existing
+`decision=HOLD` and exit 2 remain unconditional. Actual independent
+signed recovery media, image custody, clean clone boot, OOB console
+and an owner-approved maintenance plan are not yet verified.
