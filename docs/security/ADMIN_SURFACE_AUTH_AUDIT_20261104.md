@@ -299,3 +299,18 @@ nested and absent admin routes.
 **This does not fix the old live production image by itself.** A verified,
 approved replacement image plus live external/peer 401 denial, known-good
 authenticated clients and secure rollback are still mandatory.
+
+## Catch-all and root-mount shadowing defense (further iteration)
+
+The real `secure_live` process startup contract now checks every compiled
+router path pattern against representative `/admin` URLs, including each
+existing admin template expanded with a synthetic placeholder. A preceding
+Starlette catch-all route (such as `/{path:path}`) or root mount (such as
+`Mount('/')`) that would intercept an admin request is rejected unless
+the matching FastAPI route carries the actual compiled `require_admin`
+dependency. Fixture-only tests cover unguarded catch-all/root mount and
+legitimately guarded catch-all patterns. The import check does not call any
+handler or external endpoint. This is additional defense in depth, not a
+complete proof against arbitrary custom ASGI routing, runtime monkeypatching
+or the still-exposed historic production image. Live network/credential/rollback
+release gates remain P0 HOLD.
