@@ -48,7 +48,7 @@ def assert_mounted_admin_guards(application) -> None:
     resolved = [effective(context) for context in contexts]
     admin_paths = set()
     admin_count = 0
-    for leaf, path, _ in resolved:
+    for _leaf, path, _ in resolved:
         if path == "/admin" or path.startswith("/admin/"):
             admin_count += 1
             # Expand path parameters without making network calls.
