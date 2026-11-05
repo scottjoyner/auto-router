@@ -281,3 +281,21 @@ legitimate operator-client compatibility, independent source
 authority or rollback readiness. Production still needs an
 explicit, controlled rebuild and an identical deployed image
 canary pass before the P0 security gate is closed.
+
+## Production ASGI import-time mounted-route fence (November 4 late iteration)
+
+The secure production entrypoint `auto_router.secure_live` now invokes
+`assert_mounted_admin_guards(app)` immediately after the final middleware
+installation and before exporting the ASGI application. This is runtime
+source code, not merely a CI audit: the production process fails to import
+if any mounted `/admin` or `/admin/*` endpoint is a raw Starlette Route,
+nested Mount, websocket route, or a FastAPI APIRoute without the actual
+compiled `require_admin` dependency. A missing admin surface also fails
+closed. Newly added route decorators cannot silently bypass the compiled
+auth requirement in an approved image. Offline isolated tests exercise
+the real production entrypoint plus synthetic protected, unprotected, raw,
+nested and absent admin routes.
+
+**This does not fix the old live production image by itself.** A verified,
+approved replacement image plus live external/peer 401 denial, known-good
+authenticated clients and secure rollback are still mandatory.
