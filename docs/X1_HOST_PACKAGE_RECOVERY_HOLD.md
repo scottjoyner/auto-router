@@ -84,3 +84,17 @@ usable EFI/GRUB/Shim boot path, complete Neo4j custody, or approval to run
 live maintenance. Those independent gates remain HOLD. Fixture-only unit
 tests verify tampering and unsafe path cases; no production backups have
 yet been inspected by this new tool.
+
+## Offline-media symlink race hardening (further iteration)
+
+The separate image-hash reader no longer trusts a resolve-then-open sequence.
+Every ancestor directory is opened using a held directory file descriptor
+and `O_DIRECTORY|O_NOFOLLOW`; root/EFI image files are opened by descriptor-
+relative `open` with `O_NOFOLLOW`. This rejects redirecting symlink parents,
+including a symlink in the media-root ancestry or a nested backup directory,
+and preserves the existing file type, size, change-during-read and digest
+checks. The verifier remains off-host, explicitly operator-selected, read-only,
+and **always HOLD**. Fixture tests include both symlink-parent negatives
+and a valid nested image. No actual backup media were inspected. Source
+checkpoint custody, bootability, clone restoration and maintenance approval
+remain unsatisfied.
