@@ -216,8 +216,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     report = collect()
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if (report["observations_complete"] is True
-                 and report["package_state"] == "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED") else 2
+    # An apparently clean inventory is not backup/console/restore evidence.
+    # Nonzero is intentional even if observations_complete is True: a generic
+    # shell success status must never become authorization to apt/dpkg/reboot.
+    return 2
 
 
 if __name__ == "__main__":
