@@ -454,3 +454,23 @@ catch-all routes remain admissible only under the separate admin
 namespace interception checks. Tests exercise direct, nested and raw
 mounts. No task handler is executed by these tests and no production
 service has been changed. Live rollout remains NO-GO.
+
+## Root-cause fix for inherited Task metadata exposure (same-day correction)
+
+The new startup check initially failed CI because `main_live` already
+retired only the literal POST `/jobs/agent` route while leaving the
+inherited GET `/jobs/agent/{job_id}` and
+`/jobs/agent/{job_id}/artifacts` routes behind. Those endpoints returned
+job metadata and had not carried the same explicit admin requirement.
+This was an actual source-level route-retirement gap, not just missing
+test coverage. `_remove_retired_inherited_routes()` now strips the
+whole `/jobs/agent` path prefix, and `secure_live` refuses to start if
+any explicit inherited Task route is later reintroduced. The isolated
+mounted-route test inspects the *effective* FastAPI route tree and
+requires that no job status or artifact endpoint remains.
+
+The earlier exact-head CI had failed because the new startup invariant
+correctly detected preexisting mounted routes; no production cutover was
+attempted. The corrected branch must pass newly triggered exact-head CI
+before this implementation can be accepted. The service remains HOLD
+until the actual deployed image and external reachability are inspected.
