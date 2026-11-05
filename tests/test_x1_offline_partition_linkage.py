@@ -33,12 +33,12 @@ EFI_FIRST, EFI_LAST = 34, 100
 ROOT_FIRST, ROOT_LAST = 101, 130
 
 
-def _aligned_case(base: Path):
+def _aligned_case(base: Path, *, root_type: bytes | None = None):
     fixture = fixture_mod._case(base)
     media, manifest, root, efi, disk, meta, private, public = fixture
     image = bytearray(disk.read_bytes())
     second = 1024 + 128
-    image[second:second + 16] = bytes.fromhex(
+    image[second:second + 16] = root_type or bytes.fromhex(
         "af3dc60f838472478e793d69d8477de4"
     )
     image[second + 16:second + 32] = bytes(range(33, 49))
@@ -81,6 +81,46 @@ def test_signed_raw_partition_copies_match_exact_whole_disk_extents():
         assert report["exact_partition_extent_check_requested"]
         assert report["signed_root_efi_exact_partition_extents_match_disk"]
         assert not report["captured_same_source_snapshot_independently_proven"]
+        assert not report["production_repair_or_reboot_permitted"]
+        assert report["decision"] == "HOLD"
+
+
+@pytest.mark.parametrize("linux_root_type", [
+    bytes.fromhex("af3dc60f838472478e793d69d8477de4"),
+    bytes.fromhex("e3bc684fcde8b14d96e7fbcaf984b709"),
+])
+def test_both_supported_linux_partition_guid_formats_match_only_structurally(
+    linux_root_type,
+):
+    # The GPT type is a byte-order-sensitive signal; neither listed type
+    # independently proves that the host actually booted that filesystem.
+    assert linux_root_type in _LINUX_ROOT_TYPE_GUIDS
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = _aligned_case(Path(tmp), root_type=linux_root_type)
+        report = _run(fixture)
+        assert report["all_three_image_digests_and_sizes_match_signed_manifest"]
+        assert report["signed_root_efi_exact_partition_extents_match_disk"]
+        assert not report["captured_same_source_snapshot_independently_proven"]
+        assert not report["physical_clone_restore_and_uefi_boot_witnessed"]
+        assert not report["production_repair_or_reboot_permitted"]
+        assert report["decision"] == "HOLD"
+
+
+@pytest.mark.parametrize("unsupported_root_type", [
+    bytes.fromhex("0102030405060708090a0b0c0d0e0f10"),
+    bytes.fromhex("7900deca66c7b34c9ca2a3c0686b7267"),  # Linux LVM GUID
+])
+def test_valid_signed_nonroot_or_unsupported_layout_fails_closed(
+    unsupported_root_type,
+):
+    assert unsupported_root_type not in _LINUX_ROOT_TYPE_GUIDS
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = _aligned_case(Path(tmp), root_type=unsupported_root_type)
+        report = _run(fixture)
+        assert report["single_manifest_signature_verified_for_supplied_key"]
+        assert report["all_three_image_digests_and_sizes_match_signed_manifest"]
+        assert report["whole_disk_primary_backup_gpt_consistent"]
+        assert not report["signed_root_efi_exact_partition_extents_match_disk"]
         assert not report["production_repair_or_reboot_permitted"]
         assert report["decision"] == "HOLD"
 
