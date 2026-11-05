@@ -121,6 +121,30 @@ except RuntimeError as exc:
 else:
     raise AssertionError('mounted nested admin app accepted')
 
+# FastAPI >=0.137 retains included routers as lazy _IncludedRouter
+# objects. Effective paths must include the prefix, not only the leaf path.
+from fastapi import APIRouter
+included = FastAPI()
+safe_router = APIRouter()
+@safe_router.get('/nested', dependencies=[Depends(require_admin)])
+async def guarded_included():
+    return {}
+included.include_router(safe_router, prefix='/admin')
+assert_mounted_admin_guards(included)
+
+unsafe_included = FastAPI()
+unsafe_router = APIRouter()
+@unsafe_router.get('/nested')
+async def unguarded_included():
+    return {}
+unsafe_included.include_router(unsafe_router, prefix='/admin')
+try:
+    assert_mounted_admin_guards(unsafe_included)
+except RuntimeError as exc:
+    assert 'lacks compiled admin authentication' in str(exc)
+else:
+    raise AssertionError('ungated included /admin route was accepted')
+
 # Shadow routes whose *declared* path does not start with /admin still
 # capture privileged requests before they reach a protected endpoint.
 shadow = FastAPI()
