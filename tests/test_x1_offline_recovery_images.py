@@ -80,12 +80,10 @@ class OfflineImageEvidenceTests(unittest.TestCase):
             outside = Path(temp) / "outside.img"
             outside.write_bytes(b"outside")
             hardlink = media / "hardlink.img"
-            hardlink.hardlink_to(root)
             for root_path, efi_path, media_path in (
                 (root, root, media),
                 (alias, efi, media),
                 (root, outside, media),
-                (root, hardlink, media),
                 (root, media / "not-created.img", media),
                 (root, efi, Path("/")),
                 (root, efi, Path("/dev")),
@@ -99,6 +97,16 @@ class OfflineImageEvidenceTests(unittest.TestCase):
                     self.assertFalse(report["both_image_digests_match"])
                     self.assertFalse(report["observation_complete"])
                     self.assertEqual(report["decision"], "HOLD")
+            # Only make the hardlink after the other negative scenarios:
+            # otherwise the shared source inode itself has link count 2 and
+            # masks why all prior cases fail.
+            hardlink.hardlink_to(root)
+            report = mod.inspect(
+                media_root=media, root_image=hardlink, efi_image=efi,
+                expected_root_sha=good_root, expected_efi_sha=good_efi,
+            )
+            self.assertFalse(report["observation_complete"])
+            self.assertFalse(report["both_image_digests_match"])
 
     def test_malformed_pins_and_relative_image_paths_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:
