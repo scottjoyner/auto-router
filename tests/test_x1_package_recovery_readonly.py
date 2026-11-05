@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 PATH = Path(__file__).resolve().parents[1] / "scripts" / "x1_package_recovery_readonly.py"
 spec = importlib.util.spec_from_file_location("x1_package_recovery_readonly", PATH)
@@ -15,9 +17,9 @@ spec.loader.exec_module(mod)
 
 
 def synthetic_efi_mount(proc: Path, efi: Path, *, filesystem: str = "vfat",
-                        duplicate: bool = False) -> None:
+                        duplicate: bool = False, options: str = "rw,relatime") -> None:
     (proc / "self").mkdir(exist_ok=True)
-    line = f"36 25 8:1 / {efi} rw,relatime - {filesystem} /dev/synthetic rw\n"
+    line = f"36 25 8:1 / {efi} {options} - {filesystem} /dev/synthetic rw\n"
     (proc / "self" / "mountinfo").write_text(line * (2 if duplicate else 1))
 
 
@@ -139,7 +141,16 @@ class AuditTests(unittest.TestCase):
             self.assertFalse(report["package_repair_permitted"])
             self.assertFalse(report["production_change_permitted"])
             self.assertEqual(report["decision"], "HOLD")
-            self.assertEqual([c[0] for c in commands], ["dpkg-query", "mokutil"] * 2)
+            with patch.object(mod.os, "uname", return_value=SimpleNamespace(
+                release="test-kernel", machine="aarch64"
+            )):
+                wrong_host = mod.collect(run=run, proc=p, etc=p, root=p, efi=efi)
+            self.assertEqual(wrong_host["package_state"],
+                             "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
+            self.assertFalse(wrong_host["target_architecture_verified"])
+            self.assertFalse(wrong_host["observations_complete"])
+            self.assertEqual(wrong_host["decision"], "HOLD")
+            self.assertEqual([c[0] for c in commands], ["dpkg-query", "mokutil"] * 3)
 
     def test_residual_config_libc_is_not_accepted_as_installed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -197,7 +208,7 @@ class AuditTests(unittest.TestCase):
                         argv, 0, "libc6:amd64\tii \t2.43-2ubuntu2\n", ""
                     )
                 return subprocess.CompletedProcess(argv, 0, "SecureBoot enabled\n", "")
-            for mode in ("not-mounted", "ext4", "duplicate"):
+            for mode in ("not-mounted", "ext4", "duplicate", "read-only"):
                 with self.subTest(mode=mode):
                     if mode == "not-mounted":
                         (p / "self").mkdir(exist_ok=True)
@@ -205,8 +216,11 @@ class AuditTests(unittest.TestCase):
                             "36 25 8:1 / /unrelated rw - vfat /dev/synthetic rw\n"
                         )
                     else:
-                        synthetic_efi_mount(p, efi, filesystem="ext4" if mode == "ext4" else "vfat",
-                                            duplicate=mode == "duplicate")
+                        synthetic_efi_mount(
+                            p, efi, filesystem="ext4" if mode == "ext4" else "vfat",
+                            duplicate=mode == "duplicate",
+                            options="ro,relatime" if mode == "read-only" else "rw,relatime",
+                        )
                     report = mod.collect(run=run, proc=p, etc=p, root=p, efi=efi)
                     self.assertEqual(report["package_state"],
                                      "NO_DPKG_INCOMPLETE_INSTALLED_DETECTED")
