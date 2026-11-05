@@ -49,9 +49,20 @@ from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.strict_assistx_routes import install_strict_assistx_route_guard
 
-_RETIRED_INHERITED_PATHS = {
-    "/jobs/agent",
-}
+_RETIRED_INHERITED_PREFIX = "/jobs/agent"
+
+
+def _is_retired_inherited_agent_route(path: object) -> bool:
+    """Retire the entire legacy job namespace, not only its POST root.
+
+    Legacy GET /jobs/agent/{job_id} and /artifacts otherwise remain mounted
+    and may leak job metadata even after the executor POST was removed.
+    """
+    return (
+        isinstance(path, str)
+        and (path == _RETIRED_INHERITED_PREFIX
+             or path.startswith(_RETIRED_INHERITED_PREFIX + "/"))
+    )
 
 _ORIGINAL_DISPATCH = main_module._dispatch
 _ORIGINAL_DISPATCH_STREAM = main_module._dispatch_stream
@@ -71,7 +82,7 @@ def _remove_retired_inherited_routes() -> None:
     app.router.routes = [
         route
         for route in app.router.routes
-        if getattr(route, "path", None) not in _RETIRED_INHERITED_PATHS
+        if not _is_retired_inherited_agent_route(getattr(route, "path", None))
     ]
 
 
@@ -279,7 +290,7 @@ register_memory_routes(app, state)
 app.include_router(fleet_router)
 
 
-@app.get("/admin/admission")
+@app.get("/admin/admission", dependencies=[Depends(require_admin)])
 async def admission_status(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -297,14 +308,14 @@ async def admission_status(
     }
 
 
-@app.get("/admin/runtime-projection")
+@app.get("/admin/runtime-projection", dependencies=[Depends(require_admin)])
 async def runtime_projection_status(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     return _projection_manager().status()
 
 
-@app.post("/admin/runtime-projection")
+@app.post("/admin/runtime-projection", dependencies=[Depends(require_admin)])
 async def apply_runtime_projection(
     payload: dict[str, Any] = Body(...),
     _: None = Depends(require_admin),
