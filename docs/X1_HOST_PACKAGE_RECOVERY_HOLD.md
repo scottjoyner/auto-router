@@ -41,3 +41,7 @@ The collector now checks `/proc/self/mountinfo` (metadata-only, bounded to 1 MiB
 ## Native glibc architecture proof (November 4 additional pass)
 
 The x1-370 collector now explicitly requires an installed or held **native AMD64 libc6** package; an installed foreign `libc6:i386` cannot make the Ubuntu x86_64 host appear recovered. The aggregate records only a boolean `native_amd64_libc_installed`, not package source inventories. Fixture-only negative tests prove a foreign-only clean package state does not satisfy the native preflight and a half-installed native libc remains incomplete. This is specific to the documented AMD64 x1-370 host and is not a general ARM recovery collector. Live package repair or reboot remains prohibited by this draft.
+
+## Verified host and EFI write-mode preflight (same-day iteration)
+
+The read-only evidence collector now requires `uname().machine == x86_64`, in addition to native AMD64 libc6, to prevent interpreting an inventory from another host architecture as x1-370 recovery evidence. Its bounded EFI mountinfo check also requires a read-write (`rw`) VFat mount rather than merely any VFAT directory or read-only mount. Tests exercise a synthetic ARM64 host and read-only EFI mounts, both returning HOLD. These are observations about the host's current configuration, not authorization to remount EFI, repair glibc, rewrite firmware or reboot. The independently restorable root/EFI images, physical console and clone rehearsal are still mandatory.
