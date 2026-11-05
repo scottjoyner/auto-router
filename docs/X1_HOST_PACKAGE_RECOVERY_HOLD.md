@@ -98,3 +98,52 @@ and **always HOLD**. Fixture tests include both symlink-parent negatives
 and a valid nested image. No actual backup media were inspected. Source
 checkpoint custody, bootability, clone restoration and maintenance approval
 remain unsatisfied.
+
+## Independently signed recovery-pair witness verification (new iteration)
+
+Added `scripts/verify_x1_recovery_witness.py` to verify an **already-created**
+root/EFI image pair against a compact externally signed Ed25519 manifest.
+This closes a trust gap in the earlier comparison against two plain SHA-256
+strings, which could otherwise be copied from the same untrusted host or
+backup and falsely treated as independent custody.
+
+The proposed version-1 witness manifest is strict canonical JSON (no
+trailing newline; keys sorted; ASCII JSON; compact separators), containing
+exactly `schema=x1.root-efi-custody-pair.v1`, `host_id=x1-370`,
+`backup_set_id` (unique lowercase identifier), numeric `generation`,
+`root_sha256`, `efi_sha256`, and `root_bytes`/`efi_bytes`. An
+independent custodian signs **those exact canonical bytes** with an Ed25519
+private key that **must never reside on the fleet host** or its backup.
+The verifier accepts only a separately pinned public key, detached signature
+and **minimum permitted generation from external custody**. It checks a
+bounded no-follow manifest, duplicate/noncanonical keys, signature,
+generation floor, and both image digests *and sizes*. Unknown or missing
+fields, forged signatures, stale generations and mismatched images fail
+closed. All output omits actual paths, digest values and signing keys.
+
+On an isolated offline review machine, after separately obtaining
+the trusted public key, signature and monotonic high-water generation from
+the independent custodian, invoke:
+
+```bash
+python3 -m scripts.verify_x1_recovery_witness \
+  --independently-witnessed-offline-only \
+  --media-root /mnt/offline-recovery-copy \
+  --manifest /mnt/offline-recovery-copy/x1-recovery-witness.json \
+  --root-image /mnt/offline-recovery-copy/x1-root.img \
+  --efi-image /mnt/offline-recovery-copy/x1-efi.img \
+  --signature-hex "$EXTERNAL_WITNESS_SIGNATURE_HEX" \
+  --trusted-public-key-hex "$EXTERNAL_WITNESS_PUBLIC_KEY_HEX" \
+  --high-water-generation "$EXTERNAL_WITNESS_MIN_GENERATION"
+```
+
+This **cannot verify that the supplied public key or generation floor
+really came from an independent source**; the report explicitly marks
+`independent_key_custody_verified=false`. The owner must corroborate
+these through an out-of-band trusted channel. The witness also cannot
+prove the source snapshots were coherent, that an image is bootable,
+the actual host's UUID/boot map, Neo4j consistency, or a successful clone
+restore. Consequently, `gate=HOLD`, `production_repair_or_reboot_permitted=false`
+and exit code **2** remain unconditional, even for valid signatures,
+fresh generation and matching bytes. Synthetic ephemeral-key tests only;
+no real backup or signing key was used.
