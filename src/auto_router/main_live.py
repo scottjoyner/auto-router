@@ -50,7 +50,13 @@ from auto_router.settings import get_settings
 from auto_router.strict_assistx_routes import install_strict_assistx_route_guard
 
 _RETIRED_INHERITED_PATHS = {
+    # The strict production entrypoint does not serve the legacy agent
+    # execution API, including job polling and artifact retrieval. Removing
+    # only the POST root left two inherited GET routes mounted, which the
+    # newer secure_live import guard correctly refuses.
     "/jobs/agent",
+    "/jobs/agent/{job_id}",
+    "/jobs/agent/{job_id}/artifacts",
 }
 
 _ORIGINAL_DISPATCH = main_module._dispatch
