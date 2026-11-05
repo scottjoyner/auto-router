@@ -307,7 +307,11 @@ def main() -> int:
             "error_type":type(e).__name__,
         }
     print(json.dumps(result,sort_keys=True))
-    return 0 if result["gate"]=="PASS_PRE_CUTOVER_INSPECTION_ONLY" else 2
+    # Even a passing evidence inspection is not production release approval.
+    # A zero status could accidentally trigger downstream cutover automation.
+    # Consumers must inspect the typed JSON evidence and separately obtain a
+    # human-approved, independently verified release decision.
+    return 2
 
 
 if __name__=="__main__":
