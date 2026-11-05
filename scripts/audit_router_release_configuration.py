@@ -24,16 +24,33 @@ _PLACEHOLDERS = frozenset({
 })
 
 
+def _nontrivial_credential(value: str) -> bool:
+    """Reject obviously patterned fixtures, not a claim of entropy proof."""
+    if (not isinstance(value, str) or not 32 <= len(value) <= 4096
+            or value.strip() != value
+            or not all(32 <= ord(char) <= 126 for char in value)):
+        return False
+    lowered = value.lower()
+    if (lowered in _PLACEHOLDERS
+            or any(word in lowered for word in (
+                "change-me", "replace-me", "example-token",
+                "synthetic-token", "sample-password",
+            ))
+            or len(set(value)) < 8
+            or any(value[i:i + 12] == value[i] * 12
+                   for i in range(len(value) - 11))):
+        return False
+    # Pure repeated patterns (including a repeated 32-character phrase)
+    # are not suitable as independently generated deployment credentials.
+    for width in range(1, min(len(value) // 2, 64) + 1):
+        if len(value) % width == 0 and value == value[:width] * (len(value) // width):
+            return False
+    return True
+
+
 def check(env: dict[str, str], compose: str, dockerfile: str) -> dict:
     values = [env.get(key, "") for key in _SECRET_FIELDS]
-    configured = all(
-        isinstance(value, str)
-        and 32 <= len(value) <= 4096
-        and value.strip() == value
-        and value.lower() not in _PLACEHOLDERS
-        and all(32 <= ord(char) <= 126 for char in value)
-        for value in values
-    )
+    configured = all(_nontrivial_credential(value) for value in values)
     separated = configured and all(
         not hmac.compare_digest(values[i], values[j])
         for i in range(len(values))
