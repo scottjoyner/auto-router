@@ -336,3 +336,47 @@ paths for some nested non-HTTP route types, unknown effective-route shape
 or missing regex continues to fail closed rather than authorizing a
 production startup. Real live deployment/network/client rollback gates
 remain separate.
+
+## Deployment credential fallback and candidate release audit (new iteration)
+
+The repository's Compose release source previously supplied a literal
+`change-me` password if `AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS` was
+missing, while it did not explicitly pass `AUTO_ROUTER_ADMIN_TOKEN`
+to the router container. This made callback credential configuration
+unsafe or ambiguous even though protected admin routes deny if the
+admin token is unset.
+
+The Compose default password fallback has now been removed: missing
+callback credentials resolve to an empty value and must fail downstream
+authentication. The admin credential is explicitly propagated through
+`AUTO_ROUTER_ADMIN_TOKEN`, defaulting to empty/fail-closed. The CI
+integration overlay retains only isolated synthetic fixture credentials;
+no actual fleet secret has been retrieved, rotated, printed or used.
+
+Added `scripts/audit_router_release_configuration.py` for a trusted
+operator's **candidate environment review**. It checks only categorical
+booleans: explicitly loopback-bound host port, configured strong
+distinct admin/service/callback credentials, safe runtime flags,
+the absence of a `change-me` fallback, exact source defaults and
+the `auto_router.secure_live:app` Dockerfile entrypoint.
+It prints **no credential values, hashes, lengths or file paths**;
+it never reads secrets from arbitrary files or invokes Docker; every
+invocation exits code 2 / HOLD even when all candidate checks pass.
+It does *not* prove the deployed image is the audited one, external
+IPv4/IPv6 or Docker-peer admin denial, positive authorized operations,
+client compatibility or restorable rollback.
+
+Run only after a separately approved local secret-manager environment
+has been loaded:
+
+```bash
+python3 -m scripts.audit_router_release_configuration \
+  --explicit-read-only-candidate-review \
+  --compose-file docker-compose.yml \
+  --dockerfile Dockerfile
+```
+
+The credential gate is not a production cutover by itself. Independent
+image provenance, actual network-side 401 evidence, positive authorized
+client health, off-host state rollback and explicit release approval
+are still mandatory. Production **NO-GO** remains.
