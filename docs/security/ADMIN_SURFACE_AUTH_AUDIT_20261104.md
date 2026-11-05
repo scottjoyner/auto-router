@@ -440,3 +440,17 @@ This requires authorized-client compatibility review; clients that
 deliberately send both operator headers and Bearer credentials must select
 a single approved method. It does NOT establish that the running
 production image uses this source. P0 live release HOLD remains.
+
+## Retired agent Task endpoint startup veto (same-day adjacent iteration)
+
+`secure_live.assert_mounted_admin_guards()` now rejects an explicitly
+mounted `/jobs/agent` endpoint or nested `/jobs/agent/*` action,
+even if it carries the ordinary `require_admin` operator dependency.
+Machine Task claim, heartbeat and finalization authority must only be
+provided by independently scoped signed node and claim contracts, not
+resurrected as an operator-admin endpoint. Raw ASGI mounts that could
+intercept those paths are also rejected. Existing guarded generic
+catch-all routes remain admissible only under the separate admin
+namespace interception checks. Tests exercise direct, nested and raw
+mounts. No task handler is executed by these tests and no production
+service has been changed. Live rollout remains NO-GO.
