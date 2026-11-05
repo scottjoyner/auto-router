@@ -177,3 +177,20 @@ synthetic tests construct ext/FAT/GPT headers in temporary files and
 exercise corrupt/symlink cases. A genuine restore to independent clone
 storage and a witnessed firmware-to-userspace boot remain separate
 mandatory steps.
+
+## Primary GPT structure integrity gate (November 5 iteration)
+
+Previously raw disk backups were classified as GPT solely by the
+`EFI PART` magic at LBA 1. The read-only inspector now requires a
+protective MBR, the standard header size and reserved fields, coherent
+current/backup/usable LBA geometry, nonzero disk GUID and plausible
+partition-array metadata **and verifies the primary header CRC32**.
+A magic-only or corrupted header now reports `unknown` rather than
+`raw-gpt-disk-header`. Synthetic tests corrupt signature, CRC, LBA
+and protective MBR and verify each rejects classification.
+
+This **does not validate** the secondary GPT header, partition entries,
+partition-array CRC, EFI directory contents, filesystem metadata,
+bootloader, drive identity, or actual restorable boot. The bounded
+off-host classification remains independent of the signed root/EFI pair
+and always exits 2 / HOLD. No fleet disks were inspected.
