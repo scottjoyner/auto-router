@@ -1,0 +1,32 @@
+name: Admin provider inventory redaction (synthetic)
+
+on:
+  push:
+    branches:
+      - security/admin-providers-redacted-20261105
+  pull_request:
+    branches:
+      - fix/admin-route-auth-hardening-20261104
+
+permissions:
+  contents: read
+
+jobs:
+  redacted-provider-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable candidate source without retained credential
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Compile changed source and regression tests
+        run: python -m py_compile src/auto_router/main.py tests/test_admin_provider_response_redaction.py
+      - name: Execute response redaction and authenticated inventory regressions
+        run: python -m pytest -q tests/test_admin_provider_response_redaction.py tests/test_provider_inventory_auth_proof.py
