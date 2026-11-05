@@ -92,15 +92,15 @@ class BootStructureInspectionTests(unittest.TestCase):
     def test_corrupt_primary_gpt_magic_crc_geometry_or_protective_mbr_denied(self):
         clean = valid_primary_gpt()
         self.assertTrue(mod._valid_primary_gpt_header(clean))
-        for offset, new_byte in (
-            (512, 0),     # signature, even with intact CRC
-            (528, 0),     # header CRC32
-            (536, 0),     # current LBA (invalid checksum)
-            (450, 0),     # protective MBR
-            (510, 0),     # 0x55AA MBR signature
+        for offset in (
+            512,  # signature, even with intact CRC
+            528,  # header CRC32
+            536,  # current LBA (invalid checksum)
+            450,  # protective MBR
+            510,  # 0x55AA MBR signature
         ):
             mutated = bytearray(clean)
-            mutated[offset] = new_byte
+            mutated[offset] ^= 0xFF
             with self.subTest(offset=offset):
                 self.assertFalse(mod._valid_primary_gpt_header(mutated))
                 self.assertEqual(mod.root_kind(mutated), "unknown")
