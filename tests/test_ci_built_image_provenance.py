@@ -82,10 +82,12 @@ def fake_git(args,**kwargs):
     assert args[:3]==["git","-C",args[2]]
     if args[-2:]==["rev-parse","HEAD"]:
         return subprocess.CompletedProcess(args,0,"b"*40+"\n","")
-    if args[3:6]==["ls-files","--error-unmatch","--"]:
+    if args[3:6]==["ls-files","--cached","--"]:
+        assert args[6:]==["src/auto_router"]
         return subprocess.CompletedProcess(args,0,
-            "".join(f"{path}\n" for path in args[6:]),"")
-    if args[3:6]==["status","--porcelain","--"]:
+            "".join(f"src/auto_router/{name}\n" for name in FILES),"")
+    if args[3:6]==["status","--porcelain","--untracked-files=all"]:
+        assert args[6:]==["--","src/auto_router"]
         return subprocess.CompletedProcess(args,0,"","")
     raise AssertionError(f"unapproved Git subcommand in proof: {args}")
 
@@ -134,6 +136,37 @@ def test_python_tree_rejects_untracked_symlink_and_multilink(checkout):
         python_tree_hash(root)
 
 
+def test_untracked_support_module_cannot_pass_even_if_image_matches(checkout):
+    (checkout/"src/auto_router/extra.py").write_bytes(b"unreviewed plugin")
+    read,_=fake_docker(source_hashes(checkout))
+    with patch("scripts.verify_ci_built_image_provenance.subprocess.run",
+               side_effect=fake_git):
+        receipt=evaluate_ci(root=checkout,docker_read=read,status_probe=deny_all)
+    assert receipt["gate"]=="HOLD"
+    assert receipt["checks"]["installed_source_hashes_match_pinned_build"] is True
+    assert receipt["checks"]["all_python_source_files_git_tracked"] is False
+
+
+def test_package_wide_git_status_flags_changed_support_module(checkout):
+    (checkout/"src/auto_router/extra.py").write_bytes(b"reviewed extension")
+    def staged_git(args,**kwargs):
+        if args[3:6]==["ls-files","--cached","--"]:
+            return subprocess.CompletedProcess(args,0,
+                "".join(f"src/auto_router/{name}\n" for name in FILES)
+                +"src/auto_router/extra.py\n","")
+        if args[3:6]==["status","--porcelain","--untracked-files=all"]:
+            return subprocess.CompletedProcess(args,0,
+                " M src/auto_router/extra.py\n","")
+        return fake_git(args,**kwargs)
+    read,_=fake_docker(source_hashes(checkout))
+    with patch("scripts.verify_ci_built_image_provenance.subprocess.run",
+               side_effect=staged_git):
+        receipt=evaluate_ci(root=checkout,docker_read=read,status_probe=deny_all)
+    assert receipt["checks"]["all_python_source_files_git_tracked"] is True
+    assert receipt["checks"]["reviewed_source_files_unmodified"] is False
+    assert receipt["gate"]=="HOLD"
+
+
 def test_mismatched_installed_source_refuses_ci_gate(checkout):
     hashes=source_hashes(checkout)
     hashes["security.py"]="0"*64
@@ -170,7 +203,7 @@ def test_modified_reviewed_checkout_source_denies_even_if_built_image_matches(ch
     read,_=fake_docker(source_hashes(checkout))
     def dirty_git(args,**kwargs):
         result=fake_git(args,**kwargs)
-        if args[3:6]==["status","--porcelain","--"]:
+        if args[3:6]==["status","--porcelain","--untracked-files=all"]:
             return subprocess.CompletedProcess(args,0," M src/auto_router/security.py\n","")
         return result
     with patch("scripts.verify_ci_built_image_provenance.subprocess.run",
