@@ -59,6 +59,19 @@ def assert_mounted_admin_guards(application) -> None:
         "/admin", "/admin/", "/admin/__guard_probe__",
         "/admin/__guard_probe__/nested",
     })
+    # FastAPI's supported effective-route iterator does not consistently
+    # expose the Mount node itself. Audit top-level ASGI mounts separately:
+    # /admin/private may hide its own child routes and Mount('/') can
+    # intercept the entire admin namespace before any guarded endpoint.
+    for top in application.routes:
+        if not isinstance(top, (Mount, WebSocketRoute)):
+            continue
+        path = getattr(top, "path", None)
+        regex = getattr(top, "path_regex", None)
+        if (not isinstance(path, str) or regex is None
+                or path == "/admin" or path.startswith("/admin/")
+                or any(regex.match(probe) for probe in admin_paths)):
+            raise RuntimeError("unsupported mounted admin route type")
     for leaf, _, pattern in resolved:
         if not any(pattern.match(probe) for probe in admin_paths):
             continue
