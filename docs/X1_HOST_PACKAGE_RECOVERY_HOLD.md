@@ -45,3 +45,7 @@ The x1-370 collector now explicitly requires an installed or held **native AMD64
 ## Verified host and EFI write-mode preflight (same-day iteration)
 
 The read-only evidence collector now requires `uname().machine == x86_64`, in addition to native AMD64 libc6, to prevent interpreting an inventory from another host architecture as x1-370 recovery evidence. Its bounded EFI mountinfo check also requires a read-write (`rw`) VFat mount rather than merely any VFAT directory or read-only mount. Tests exercise a synthetic ARM64 host and read-only EFI mounts, both returning HOLD. These are observations about the host's current configuration, not authorization to remount EFI, repair glibc, rewrite firmware or reboot. The independently restorable root/EFI images, physical console and clone rehearsal are still mandatory.
+
+## Core glibc version-consistency preflight — additional iteration
+
+The aggregate read-only collector now denies a clean package-state verdict unless native AMD64 `libc6`, `libc-bin`, and `locales` all appear installed/held with exactly matching package versions. This catches a missing libc-bin/locales or a cross-release partially staged glibc cohort even if `dpkg-query` has no `iU`/`iHR` records. The check is conservative and **does not** prove package dependencies, GRUB/Shim, signed boot or a verified system restore. Synthetic fixtures cover missing, differing and removed glibc-core records. No package writes or repair were attempted; restoration and console gate remain P0 HOLD.
