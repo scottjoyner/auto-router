@@ -194,3 +194,23 @@ partition-array CRC, EFI directory contents, filesystem metadata,
 bootloader, drive identity, or actual restorable boot. The bounded
 off-host classification remains independent of the signed root/EFI pair
 and always exits 2 / HOLD. No fleet disks were inspected.
+
+## GPT partition-entry table integrity (next fleet iteration)
+
+In addition to the primary GPT header CRC and protective MBR, the
+off-host read-only inspector now requires the **partition-entry array
+CRC32** in the header to match the array's actual bytes in its bounded
+68-KiB prefix. It checks that array extent/entry geometry fit the
+small supported region before classifying the image as a recognized GPT
+disk. A corrupt partition entry, forged table CRC or missing/truncated
+entry array must now yield `unknown`. Synthetic fixtures include a
+valid first partition entry, CRCs for header and array, and independent
+tampering of header and partition-array bytes.
+
+GPT layouts with non-512-byte logical sectors or unusually large entry
+arrays may be reported `unknown` rather than unsafe assumptions of
+corruption. This only checks the bounded **primary** header and entries:
+it does not verify a secondary GPT header, actual source disk size,
+backup custody, the mounted filesystem, EFI bootloader, cloned system
+bootability or Neo4j restore. No backup was read on x1-370. Maintenance
+authorization, image restoration and reboot remain strictly **HOLD**.
