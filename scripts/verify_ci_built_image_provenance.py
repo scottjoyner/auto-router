@@ -79,18 +79,29 @@ def evaluate_ci(*, root: Path=ROOT, docker_read=_run,
     checks["reviewed_checkout_commit_pinned"]=(
         revision.returncode==0 and len(sha)==40 and
         all(ch in "0123456789abcdef" for ch in sha))
-    paths=[f"src/auto_router/{name}" for name in FILES]
+    # A matching built image is not sufficient when a supporting module in
+    # the checkout was never committed. Pin the entire *.py package source set
+    # to Git, not only the four entrypoint files.
+    code=root/"src"/"auto_router"
+    python_paths={
+        f"src/auto_router/{p.relative_to(code).as_posix()}"
+        for p in code.rglob("*") if p.suffix==".py"
+    }
     tracked=subprocess.run(
-        ["git","-C",str(root),"ls-files","--error-unmatch","--",*paths],
+        ["git","-C",str(root),"ls-files","--cached","--","src/auto_router"],
         capture_output=True,text=True,check=False,timeout=4,
     )
     clean=subprocess.run(
-        ["git","-C",str(root),"status","--porcelain","--",*paths],
+        ["git","-C",str(root),"status","--porcelain",
+         "--untracked-files=all","--","src/auto_router"],
         capture_output=True,text=True,check=False,timeout=4,
     )
-    checks["all_four_reviewed_source_files_tracked"]=(
-        tracked.returncode==0 and
-        set(tracked.stdout.splitlines())==set(paths)
+    tracked_python={
+        path for path in tracked.stdout.splitlines() if path.endswith(".py")
+    }
+    checks["all_python_source_files_git_tracked"]=(
+        tracked.returncode==0 and bool(python_paths)
+        and tracked_python==python_paths
     )
     checks["reviewed_source_files_unmodified"]=(
         clean.returncode==0 and clean.stdout==""
