@@ -75,7 +75,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B \
  --expected-main-sha256 "$APPROVED_MAIN_SHA256" \
  --expected-security-sha256 "$APPROVED_SECURITY_SHA256" \
  --expected-main-live-sha256 "$APPROVED_MAIN_LIVE_SHA256" \
- --expected-secure-live-sha256 "$APPROVED_SECURE_LIVE_SHA256"
+ --expected-secure-live-sha256 "$APPROVED_SECURE_LIVE_SHA256" \
+ --expected-python-tree-sha256 "$APPROVED_PYTHON_TREE_SHA256"
 ```
 
 The default assumes loopback-only publishing. Operators
