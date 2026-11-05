@@ -1,0 +1,43 @@
+name: X1 signed root-partition type fence (synthetic, HOLD)
+
+on:
+  push:
+    branches:
+      - research/x1-root-partition-type-fence-20261105
+  pull_request:
+    branches:
+      - research/x1-host-package-recovery-readonly-20261104
+
+permissions:
+  contents: read
+
+jobs:
+  offline-root-partition-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source without retained credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install fixture-only dependencies
+        run: python -m pip install pytest cryptography
+      - name: Compile off-host verifiers
+        run: |
+          python -m py_compile scripts/verify_x1_offline_partition_linkage.py scripts/verify_x1_offline_recovery_bundle_v2.py tests/test_x1_offline_partition_linkage.py
+      - name: Execute signed-copy and forged-root partition negative cases
+        run: |
+          python -m pytest -q tests/test_x1_offline_partition_linkage.py tests/test_x1_offline_recovery_bundle_v2.py tests/test_x1_offline_gpt_mirror.py
+      - name: Assert source continues to deny automatic repair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          code = Path("scripts/verify_x1_offline_recovery_bundle_v2.py").read_text()
+          assert '"HOLD"' in code
+          assert "return 2" in code
+          print("Offline validation only; live repair/reboot remains HOLD")
+          PY

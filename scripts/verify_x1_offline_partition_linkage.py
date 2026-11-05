@@ -23,6 +23,16 @@ from scripts.verify_x1_offline_recovery_images import (
 CHUNK = 4 * 1024 * 1024
 MAX_MATCH_CANDIDATES = 4
 
+# On x86_64, an arbitrary non-ESP GPT partition is not sufficient evidence
+# of a Linux root partition. This explicitly supports Linux filesystem data
+# and the Discoverable Partitions Specification x86-64 root type. LVM,
+# encrypted and other layouts remain unproven/HOLD until the owner supplies
+# independently verified partition identity; do not guess or promote them.
+_LINUX_ROOT_TYPE_GUIDS = frozenset({
+    bytes.fromhex("af3dc60f838472478e793d69d8477de4"),  # Linux filesystem data
+    bytes.fromhex("e3bc684fcde8b14d96e7fbcaf984b709"),  # Linux root x86-64
+})
+
 
 def _digest_ranges(media_root: Path, disk_image: Path,
                    candidates: list[tuple[int, int]],
@@ -111,7 +121,7 @@ def exact_partition_links(
         start = first * 512
         if part[:16] == _ESP_TYPE_GUID and part_length == efi_bytes:
             efi_candidates.append((start, part_length))
-        if part[:16] != _ESP_TYPE_GUID and part_length == root_bytes:
+        if part[:16] in _LINUX_ROOT_TYPE_GUIDS and part_length == root_bytes:
             root_candidates.append((start, part_length))
     if (not efi_candidates or not root_candidates
             or len(efi_candidates) > MAX_MATCH_CANDIDATES
