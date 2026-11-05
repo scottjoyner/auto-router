@@ -26,6 +26,7 @@ from scripts.verify_x1_offline_recovery_images import (
     MAX_IMAGE_BYTES, sha256_regular_offline,
 )
 from scripts.verify_x1_offline_gpt_mirror import inspect as inspect_mirror
+from scripts.verify_x1_offline_partition_linkage import exact_partition_links
 
 SCHEMA = "x1.root-efi-disk-custody-bundle.v2"
 FIELDS = {
@@ -39,6 +40,7 @@ def verify_bundle(
     *, media_root: Path, manifest: Path, root_image: Path,
     efi_image: Path, disk_image: Path, signature_hex: str,
     trusted_public_key_hex: str, high_water_generation: int,
+    verify_extents: bool = False,
 ) -> dict:
     report = {
         "schema": "x1.offline-signed-recovery-bundle-v2.v1",
@@ -47,6 +49,8 @@ def verify_bundle(
         "generation_floor_satisfied": False,
         "all_three_image_digests_and_sizes_match_signed_manifest": False,
         "whole_disk_primary_backup_gpt_consistent": False,
+        "signed_root_efi_exact_partition_extents_match_disk": False,
+        "exact_partition_extent_check_requested": verify_extents is True,
         "independent_signer_key_custody_verified": False,
         "captured_same_source_snapshot_independently_proven": False,
         "physical_clone_restore_and_uefi_boot_witnessed": False,
@@ -127,10 +131,24 @@ def verify_bundle(
         )
         if images_match:
             mirror = inspect_mirror(media_root, disk_image)
-            report["whole_disk_primary_backup_gpt_consistent"] = (
+            mirror_ok = (
                 mirror.get("observation_complete") is True
                 and mirror.get("primary_backup_gpt_and_array_match") is True
             )
+            report["whole_disk_primary_backup_gpt_consistent"] = mirror_ok
+            if mirror_ok and verify_extents is True:
+                # Optional additional whole-disk I/O on detached media only.
+                # This detects independently signed but inconsistent raw
+                # partition copies without inventing a source-capture witness.
+                report["signed_root_efi_exact_partition_extents_match_disk"] = (
+                    exact_partition_links(
+                        media_root=media_root, disk_image=disk_image,
+                        root_sha256=witness["root_sha256"],
+                        root_bytes=witness["root_bytes"],
+                        efi_sha256=witness["efi_sha256"],
+                        efi_bytes=witness["efi_bytes"],
+                    )
+                )
         report["observation_complete"] = True
     except (OSError, ValueError, TypeError, UnicodeError,
             json.JSONDecodeError, RuntimeError) as exc:
@@ -153,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--signature-hex", required=True)
     parser.add_argument("--trusted-public-key-hex", required=True)
     parser.add_argument("--high-water-generation", type=int, required=True)
+    parser.add_argument("--verify-exact-partition-extents",
+                        action="store_true")
     args = parser.parse_args(argv)
     report = verify_bundle(
         media_root=args.media_root, manifest=args.manifest,
@@ -160,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         disk_image=args.disk_image, signature_hex=args.signature_hex,
         trusted_public_key_hex=args.trusted_public_key_hex,
         high_water_generation=args.high_water_generation,
+        verify_extents=args.verify_exact_partition_extents,
     )
     print(json.dumps(report, sort_keys=True))
     return 2  # No signature or structural classification authorizes repair.
