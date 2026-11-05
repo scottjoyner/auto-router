@@ -71,6 +71,17 @@ async def require_admin(
     if not _admin_credential_is_separate(token):
         raise _unauthorized("Administrative credential configuration rejected")
 
+    # Reject ambiguous authentication even when one supplied credential
+    # happens to be valid. A proxy may preserve duplicate headers differently
+    # from FastAPI dependencies; never select an arbitrary first/last token.
+    admin_headers = request.headers.getlist("x-admin-token")
+    auth_headers = request.headers.getlist("authorization")
+    if (len(admin_headers) > 1 or len(auth_headers) > 1
+            or (admin_headers and auth_headers)):
+        raise _unauthorized("Ambiguous administrative authentication")
+    if auth_headers and bearer is None and basic is None:
+        raise _unauthorized("Unsupported administrative authentication")
+
     provided: list[str] = []
     if x_admin_token:
         provided.append(x_admin_token.strip())
