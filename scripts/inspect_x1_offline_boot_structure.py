@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import zlib
 
 from scripts.verify_x1_offline_recovery_images import (
     MAX_IMAGE_BYTES,
@@ -59,8 +60,46 @@ def _prefix(media_root: Path, image: Path) -> bytes:
         os.close(fd)
 
 
+def _valid_primary_gpt_header(data: bytes) -> bool:
+    """Validate bounded primary GPT header, not the partition array or backup.
+
+    This is header-integrity triage only, not a complete disk validation.
+    Never infer a bootable disk from the result.
+    """
+    sector = data[512:1024]
+    if (len(sector) != 512 or sector[:8] != b"EFI PART"
+            or data[510:512] != b"\\x55\\xaa"
+            or data[450] != 0xEE):
+        return False
+    header_size = int.from_bytes(sector[12:16], "little")
+    if not 92 <= header_size <= 512:
+        return False
+    header = bytearray(sector[:header_size])
+    expected_crc = int.from_bytes(header[16:20], "little")
+    header[16:20] = b"\\0" * 4
+    if zlib.crc32(header) & 0xFFFFFFFF != expected_crc:
+        return False
+    current_lba = int.from_bytes(sector[24:32], "little")
+    backup_lba = int.from_bytes(sector[32:40], "little")
+    first_lba = int.from_bytes(sector[40:48], "little")
+    last_lba = int.from_bytes(sector[48:56], "little")
+    partition_lba = int.from_bytes(sector[72:80], "little")
+    partition_count = int.from_bytes(sector[80:84], "little")
+    partition_size = int.from_bytes(sector[84:88], "little")
+    return (
+        current_lba == 1
+        and backup_lba > 2
+        and 2 <= partition_lba < first_lba <= last_lba < backup_lba
+        and sector[20:24] == b"\\0" * 4
+        and sector[56:72] != b"\\0" * 16
+        and 1 <= partition_count <= 16384
+        and 128 <= partition_size <= 1024
+        and partition_size % 8 == 0
+    )
+
+
 def root_kind(data: bytes) -> str:
-    if len(data) >= 520 and data[512:520] == b"EFI PART":
+    if _valid_primary_gpt_header(data):
         return "raw-gpt-disk-header"
     if data.startswith(b"LUKS\xba\xbe"):
         return "luks-encrypted-volume"
@@ -74,7 +113,7 @@ def root_kind(data: bytes) -> str:
 
 
 def efi_kind(data: bytes) -> str:
-    if len(data) >= 520 and data[512:520] == b"EFI PART":
+    if _valid_primary_gpt_header(data):
         return "raw-gpt-disk-header"
     if len(data) < 512 or data[510:512] != b"\x55\xaa":
         return "unknown"
