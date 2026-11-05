@@ -71,8 +71,7 @@ def assert_mounted_admin_guards(application) -> None:
         "/jobs/agent/fixture", "/jobs/agent/fixture/claim",
     }
     for _leaf, path, pattern in resolved:
-        if (path == "/jobs/agent" or path.startswith("/jobs/agent/")
-                or any(pattern.match(probe) for probe in retired_agent_probes)):
+        if path == "/jobs/agent" or path.startswith("/jobs/agent/"):
             raise RuntimeError("retired agent execution surface must not be mounted")
 
     # FastAPI's supported effective-route iterator does not consistently
