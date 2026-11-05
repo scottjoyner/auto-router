@@ -421,3 +421,22 @@ the appropriate independently scoped operator key. It is **not** safe
 to disable the guard to restore those integrations. The production
 router remains NO-GO until live image/provenance, ingress, authorized
 canaries, service health and rollback gates are independently verified.
+
+## Multiple-credential ambiguity denied at runtime (new iteration)
+
+A single valid admin credential is no longer sufficient when the same HTTP
+request contains conflicting or duplicated authentication headers. The
+`require_admin` boundary now rejects more than one `X-Admin-Token` field,
+more than one `Authorization` field, and combinations of the two, even if
+any individual value is valid. Unsupported Authorization schemes are denied
+rather than silently ignored alongside a valid admin header. Synthetic
+single-header X-Admin-Token, Basic and Bearer requests remain permitted
+when correctly configured. The test is deliberately no-lifespan, GET-only,
+without production secrets. The explicit purpose is to prevent proxies and
+FastAPI middleware from choosing different first/last credentials in
+ambiguous requests.
+
+This requires authorized-client compatibility review; clients that
+deliberately send both operator headers and Bearer credentials must select
+a single approved method. It does NOT establish that the running
+production image uses this source. P0 live release HOLD remains.
