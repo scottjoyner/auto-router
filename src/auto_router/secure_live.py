@@ -53,8 +53,6 @@ def assert_mounted_admin_guards(application) -> None:
             admin_count += 1
             # Expand path parameters without making network calls.
             admin_paths.add(re.sub(r"\{[^{}]+\}", "guard-probe", path))
-    if admin_count < 1:
-        raise RuntimeError("mounted admin surface missing; cannot prove auth contract")
     admin_paths.update({
         "/admin", "/admin/", "/admin/__guard_probe__",
         "/admin/__guard_probe__/nested",
@@ -72,6 +70,8 @@ def assert_mounted_admin_guards(application) -> None:
                 or path == "/admin" or path.startswith("/admin/")
                 or any(regex.match(probe) for probe in admin_paths)):
             raise RuntimeError("unsupported mounted admin route type")
+    if admin_count < 1:
+        raise RuntimeError("mounted admin surface missing; cannot prove auth contract")
     for leaf, _, pattern in resolved:
         if not any(pattern.match(probe) for probe in admin_paths):
             continue
