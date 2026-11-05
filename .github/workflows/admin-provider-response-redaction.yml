@@ -27,6 +27,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -e '.[dev]'
       - name: Compile changed source and regression tests
-        run: python -m py_compile src/auto_router/main.py tests/test_admin_provider_response_redaction.py
+        run: python -m py_compile src/auto_router/main.py tests/test_admin_provider_response_redaction.py tests/test_admin_provider_secure_live_entrypoint.py
       - name: Execute response redaction and authenticated inventory regressions
-        run: python -m pytest -q tests/test_admin_provider_response_redaction.py tests/test_provider_inventory_auth_proof.py
+        run: python -m pytest -q tests/test_admin_provider_response_redaction.py tests/test_provider_inventory_auth_proof.py tests/test_admin_provider_secure_live_entrypoint.py
