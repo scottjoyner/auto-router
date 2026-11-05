@@ -314,3 +314,25 @@ handler or external endpoint. This is additional defense in depth, not a
 complete proof against arbitrary custom ASGI routing, runtime monkeypatching
 or the still-exposed historic production image. Live network/credential/rollback
 release gates remain P0 HOLD.
+
+## FastAPI lazy include-router compatibility (November 4 CI regression and correction)
+
+The first implementation of the shadow-route guard failed exact-head hosted CI:
+FastAPI 0.162.0 / Starlette 1.10.0 retains included routers as
+`_IncludedRouter` objects with no direct `.path` or `.path_regex`;
+the running ASGI fixture failed startup and therefore **must not be deployed**.
+We corrected the contract to use FastAPI's supported
+`fastapi.routing.iter_route_contexts(app.routes)` effective view,
+not a flat application route list. It expands included prefixed routers
+into their effective paths while preserving the original leaf endpoint
+and compiled dependency. Tests cover both a protected and unprotected
+nested `APIRouter` included under `/admin`, and synthetic root-mount
+and catch-all shadowing. The previously failing CI commit is explicitly
+superseded; only the new branch-head independent CI result may be cited
+as passing after verification.
+
+Because FastAPI has historically had inconsistencies exposing effective
+paths for some nested non-HTTP route types, unknown effective-route shape
+or missing regex continues to fail closed rather than authorizing a
+production startup. Real live deployment/network/client rollback gates
+remain separate.
