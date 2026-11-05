@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.verify_deployed_admin_release_identity as deployed_module
 from scripts.admin_auth_readonly_canary import ADMIN_PATHS
 from scripts.verify_deployed_admin_release_identity import (
     FILES, TREE_KEY, FILE_HASH_CODE, _identity_lease, _sha, code_mounts_safe, evaluate, inspect,
@@ -332,6 +333,32 @@ def test_container_restart_makes_identity_lease_change():
     def before(args):return LEASE
     def after(args):return IMAGE+"|2026-11-04T16:03:00.000Z|true"
     assert _identity_lease(before)!=_identity_lease(after)
+
+
+def test_readonly_proof_never_exits_success_even_when_inspection_passes(
+    monkeypatch, capsys,
+):
+    argv=[sys.argv[0], "--expected-image-sha256", "a"*64]
+    for name in FILES:
+        argv += [
+            "--expected-" + name.removesuffix(".py").replace("_", "-") + "-sha256",
+            FILES_HASHES[name],
+        ]
+    argv += ["--expected-python-tree-sha256", FILES_HASHES[TREE_KEY]]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(deployed_module, "inspect", lambda: _proof())
+    monkeypatch.setattr(deployed_module, "_identity_lease", lambda: LEASE)
+    for verdict in ("PASS_PRE_CUTOVER_INSPECTION_ONLY", "HOLD"):
+        monkeypatch.setattr(deployed_module, "evaluate", lambda *args, **kwargs: {
+            "gate": verdict,
+            "production_ready": False,
+            "checks": {},
+        })
+        assert deployed_module.main() == 2
+        evidence=json.loads(capsys.readouterr().out)
+        assert evidence["gate"] == verdict
+        assert evidence["production_ready"] is False
+        assert evidence["checks"]["same_running_container_through_probe"] is True
 
 
 def test_cli_requires_all_image_and_source_identity_pins_before_network():
