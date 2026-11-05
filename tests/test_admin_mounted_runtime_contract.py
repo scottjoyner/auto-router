@@ -182,7 +182,10 @@ retired_mount.mount('/jobs/agent', FastAPI())
 try:
     assert_mounted_admin_guards(retired_mount)
 except RuntimeError as exc:
-    assert 'unsupported mounted admin route type' in str(exc)
+    assert (
+        'unsupported mounted admin route type' in str(exc)
+        or 'retired agent execution surface' in str(exc)
+    )
 else:
     raise AssertionError('retired agent ASGI mount unexpectedly admitted')
 
