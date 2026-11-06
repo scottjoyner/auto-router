@@ -77,9 +77,9 @@ def test_only_expected_safe_get_paths_and_fail_closed_image_not_implied():
     assert "no Docker peer/WAN/IPv6" in mod.audit([])["limitations"]
 
 
-def test_extended_admin_inventory_has_20_unique_static_get_paths():
+def test_extended_admin_inventory_has_15_unique_mounted_static_get_paths():
     paths = mod.EXTENDED_ADMIN_GETS
-    assert len(paths) == 20
+    assert len(paths) == 15
     assert len(paths) == len(set(paths))
     assert paths[:len(mod.ADMIN_GETS)] == mod.ADMIN_GETS
     assert all(path.startswith("/admin/") and "{" not in path
@@ -113,7 +113,19 @@ def test_extended_cli_checks_every_admin_path_with_no_credentials():
         rc = mod.main(["--target", "http://127.0.0.1:8088", "--extended"])
     result = json.loads(output.getvalue())
     assert rc == 0
-    assert len(called) == 21
+    assert len(called) == 16
     assert result["credentials_sent"] is False
     assert result["release_decision"] == "HOLD"
     assert result["probe_result"] == "PASS"
+
+
+def test_admin_method_contract_includes_exact_mounted_paths():
+    methods = mod.EXPECTED_ADMIN_METHODS
+    assert len(methods) == 19
+    assert {path for method, path in methods if method == "GET"} == set(mod.EXTENDED_ADMIN_GETS)
+    assert {path for method, path in methods if method == "POST"} == {
+        "/admin/load", "/admin/circuits/reset",
+        "/admin/circuits/reset/guard-probe", "/admin/runtime-projection",
+    }
+    assert all(method in {"GET", "POST"} and path.startswith("/admin/")
+               for method, path in methods)
