@@ -24,10 +24,10 @@ ADMIN_GETS = (
     "/admin/agent-jobs",
 )
 
-# Exact static GET paths from the stacked Router security candidate. This
-# intentionally excludes all mutation methods and templated/dynamic routes.
-# Use --extended only when all listed routes are expected to be mounted.
-# A 404 remains a FAIL: absence is not evidence that a route is guarded.
+# Pinned exact effective GET inventory from PR #135 secure_live mounted ASGI.
+# A missing route (404) is not an authentication pass. Never infer coverage
+# from dormant source registrars that aren't present in this exact build.
+# The paired real-ASGI test checks these paths against the mounted app.
 EXTENDED_ADMIN_GETS = ADMIN_GETS + (
     "/admin/quota",
     "/admin/providers/health",
@@ -38,16 +38,21 @@ EXTENDED_ADMIN_GETS = ADMIN_GETS + (
     "/admin/circuits",
     "/admin/admission",
     "/admin/runtime-projection",
-    "/admin/agent-clis",
-    "/admin/backlog/assistx/config",
-    "/admin/services",
-    "/admin/outbox",
     "/admin/ops/summary",
     "/admin/ops/preflight",
     "/admin/memory",
-    "/admin/live-models",
 )
 
+# Include POST paths for *offline* candidate route-identity assertions only.
+# The network ingress audit sends GET requests exclusively.
+EXPECTED_ADMIN_METHODS = frozenset(
+    [("GET", path) for path in EXTENDED_ADMIN_GETS] + [
+        ("POST", "/admin/load"),
+        ("POST", "/admin/circuits/reset"),
+        ("POST", "/admin/circuits/reset/guard-probe"),
+        ("POST", "/admin/runtime-projection"),
+    ]
+)
 
 class _RejectRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -131,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Exact credential-free origin. Repeat for each distinct ingress path.")
     parser.add_argument("--timeout", type=float, default=3.0)
     parser.add_argument("--extended", action="store_true",
-                        help="Probe all 20 expected static candidate admin GET paths; absent paths fail closed.")
+                        help="Probe all 15 mounted candidate admin GET paths; absent paths fail closed.")
     args = parser.parse_args(argv)
     if not 0.1 <= args.timeout <= 10.0:
         parser.error("timeout must be between 0.1 and 10 seconds")
