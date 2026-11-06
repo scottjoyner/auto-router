@@ -12,9 +12,15 @@ on:
       - tests/test_admin_mounted_runtime_contract.py
       - tests/test_admin_provider_secure_live_entrypoint.py
       - tests/test_admin_provider_response_redaction.py
+      - tests/test_admin_credential_scope_collision.py
+      - tests/test_router_candidate_release_config.py
+      - scripts/audit_router_release_configuration.py
+
       - src/auto_router/main.py
       - src/auto_router/secure_live.py
       - src/auto_router/security.py
+      - docker-compose.yml
+      - Dockerfile
       - .github/workflows/router-anonymous-admin-ingress.yml
   workflow_dispatch:
 
@@ -53,4 +59,6 @@ jobs:
             tests/test_mounted_admin_get_http_denial.py \
             tests/test_admin_mounted_runtime_contract.py \
             tests/test_admin_provider_secure_live_entrypoint.py \
-            tests/test_admin_provider_response_redaction.py
+            tests/test_admin_provider_response_redaction.py \
+            tests/test_admin_credential_scope_collision.py \
+            tests/test_router_candidate_release_config.py
