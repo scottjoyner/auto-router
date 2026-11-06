@@ -1,0 +1,27 @@
+name: x1 rescue USB read-only admission (synthetic)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/x1_rescue_usb_readonly.py'
+      - 'tests/test_x1_rescue_usb_readonly.py'
+      - '.github/workflows/x1-rescue-usb-readonly.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  usb-source-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check pytest
+      - run: python -B -m compileall -q scripts/x1_rescue_usb_readonly.py tests/test_x1_rescue_usb_readonly.py
+      - run: PYTHONPATH=. python -B -m pytest -q -p no:cacheprovider tests/test_x1_rescue_usb_readonly.py
