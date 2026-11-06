@@ -24,6 +24,30 @@ ADMIN_GETS = (
     "/admin/agent-jobs",
 )
 
+# Exact static GET paths from the stacked Router security candidate. This
+# intentionally excludes all mutation methods and templated/dynamic routes.
+# Use --extended only when all listed routes are expected to be mounted.
+# A 404 remains a FAIL: absence is not evidence that a route is guarded.
+EXTENDED_ADMIN_GETS = ADMIN_GETS + (
+    "/admin/quota",
+    "/admin/providers/health",
+    "/admin/context/graph",
+    "/admin/placement",
+    "/admin/agent-workers",
+    "/admin/usage",
+    "/admin/circuits",
+    "/admin/admission",
+    "/admin/runtime-projection",
+    "/admin/agent-clis",
+    "/admin/backlog/assistx/config",
+    "/admin/services",
+    "/admin/outbox",
+    "/admin/ops/summary",
+    "/admin/ops/preflight",
+    "/admin/memory",
+    "/admin/live-models",
+)
+
 
 class _RejectRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -65,13 +89,14 @@ def probe_status(origin: str, path: str, timeout: float) -> tuple[int | None, st
         return None, type(exc).__name__
 
 
-def audit(origins: list[str], timeout: float = 3.0) -> dict:
+def audit(origins: list[str], timeout: float = 3.0,
+          paths: tuple[str, ...] = ADMIN_GETS) -> dict:
     """HOLD always, including when every explicitly provided probe passes."""
     reports = []
     for origin in origins:
         results = []
         for path, allowed in [("/health", (200,))] + [
-            (path, (401, 403)) for path in ADMIN_GETS
+            (path, (401, 403)) for path in paths
         ]:
             status, error = probe_status(origin, path, timeout)
             results.append({
@@ -92,6 +117,7 @@ def audit(origins: list[str], timeout: float = 3.0) -> dict:
         "probe_result": "PASS" if passed else "FAIL",
         "release_decision": "HOLD",
         "origins": reports,
+        "admin_paths_checked": list(paths),
         "limitations": (
             "Only listed origins tested; no Docker peer/WAN/IPv6 coverage is implied. "
             "No authenticated positive smoke, signer custody, rollback, or deployment authority."
@@ -104,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", action="append", required=True, metavar="URL",
                         help="Exact credential-free origin. Repeat for each distinct ingress path.")
     parser.add_argument("--timeout", type=float, default=3.0)
+    parser.add_argument("--extended", action="store_true",
+                        help="Probe all 20 expected static candidate admin GET paths; absent paths fail closed.")
     args = parser.parse_args(argv)
     if not 0.1 <= args.timeout <= 10.0:
         parser.error("timeout must be between 0.1 and 10 seconds")
@@ -113,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if len(set(origins)) != len(origins):
         parser.error("duplicate origins cannot substitute for independent ingress paths")
-    result = audit(origins, timeout=args.timeout)
+    result = audit(origins, timeout=args.timeout,
+                   paths=EXTENDED_ADMIN_GETS if args.extended else ADMIN_GETS)
     json.dump(result, sys.stdout, sort_keys=True, indent=2)
     sys.stdout.write("\n")
     return 0 if result["probe_result"] == "PASS" else 1
