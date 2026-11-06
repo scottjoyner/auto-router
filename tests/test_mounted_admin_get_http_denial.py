@@ -43,7 +43,7 @@ for context in iter_route_contexts(app.routes):
     if isinstance(leaf, APIRoute) and path.startswith("/admin/"):
         for method in leaf.methods.intersection({"GET", "POST", "PUT", "PATCH", "DELETE"}):
             # This is synthetic only; never use a real object identifier.
-            routes.add((method, re.sub(r"\\{[^{}]+\\}", "guard-probe", path)))
+            routes.add((method, re.sub(r"\{[^{}]+\}", "guard-probe", path)))
 assert 19 <= len(routes) <= 64, sorted(routes)
 must_exist = {
     ("GET", "/admin/providers"),
