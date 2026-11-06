@@ -1,15 +1,13 @@
 name: Router mounted admin startup security (offline)
 
 on:
+  # Run for every proposed change: other modules can register, shadow, or
+  # remount admin routes. Path filters would miss a new unsafe route outside
+  # main.py/secure_live.py, defeating this startup invariant as a CI gate.
   pull_request:
     branches: [main]
-    paths:
-      - src/auto_router/secure_live.py
-      - src/auto_router/main.py
-      - src/auto_router/main_live.py
-      - src/auto_router/security.py
-      - tests/test_secure_live_admin_import_guard.py
-      - .github/workflows/router-mounted-admin-startup.yml
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
