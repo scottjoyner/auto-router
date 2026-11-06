@@ -13,7 +13,10 @@ import sys
 
 def test_every_mounted_admin_method_denies_anonymous_and_wrong_token():
     root = Path(__file__).resolve().parents[1]
-    env = os.environ.copy()
+    # Do not inherit potentially sensitive runtime/service credentials into
+    # the synthetic CI subprocess. The test must run with fake-only settings.
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT", "WINDIR")
+           if k in os.environ}
     env.update({
         "AUTO_ROUTER_STRICT_OFFLINE": "true",
         "AUTO_ROUTER_DATABASE_URL": "sqlite:///:memory:",
@@ -31,6 +34,7 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute, iter_route_contexts
 import auto_router.security as security
 from auto_router.secure_live import app, assert_mounted_admin_guards
+from tools.router_admin_ingress_audit import EXPECTED_ADMIN_METHODS
 
 assert_mounted_admin_guards(app)
 security.get_settings = lambda: SimpleNamespace(
@@ -44,17 +48,12 @@ for context in iter_route_contexts(app.routes):
         for method in leaf.methods.intersection({"GET", "POST", "PUT", "PATCH", "DELETE"}):
             # This is synthetic only; never use a real object identifier.
             routes.add((method, re.sub(r"\{[^{}]+\}", "guard-probe", path)))
-assert 19 <= len(routes) <= 64, sorted(routes)
-must_exist = {
-    ("GET", "/admin/providers"),
-    ("GET", "/admin/context"),
-    ("GET", "/admin/agent-jobs"),
-    ("POST", "/admin/load"),
-    ("POST", "/admin/circuits/reset"),
-    ("POST", "/admin/circuits/reset/guard-probe"),
-    ("POST", "/admin/runtime-projection"),
+# Fail if a router addition silently introduces or deletes admin routes.
+# A source-only list of paths isn't proof: compare the actual mounted ASGI app.
+assert routes == EXPECTED_ADMIN_METHODS, {
+    "missing": sorted(EXPECTED_ADMIN_METHODS - routes),
+    "unexpected": sorted(routes - EXPECTED_ADMIN_METHODS),
 }
-assert must_exist <= routes, sorted(must_exist - routes)
 
 client = TestClient(app, raise_server_exceptions=False)
 for method, path in sorted(routes):
