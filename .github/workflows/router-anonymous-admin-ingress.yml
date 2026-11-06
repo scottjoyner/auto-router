@@ -37,7 +37,7 @@ jobs:
           for path in ("tools/router_admin_ingress_audit.py", "tests/test_router_admin_ingress_audit.py"):
               ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
           PY
-      - name: Run 13 offline synthetic regressions
+      - name: Run 16 offline synthetic regressions
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python -B -m pytest -q -p no:cacheprovider tests/test_router_admin_ingress_audit.py
