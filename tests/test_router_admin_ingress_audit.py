@@ -75,3 +75,45 @@ def test_main_prints_no_secret_and_never_approves_release():
 def test_only_expected_safe_get_paths_and_fail_closed_image_not_implied():
     assert mod.ADMIN_GETS == ("/admin/providers", "/admin/context", "/admin/agent-jobs")
     assert "no Docker peer/WAN/IPv6" in mod.audit([])["limitations"]
+
+
+def test_extended_admin_inventory_has_20_unique_static_get_paths():
+    paths = mod.EXTENDED_ADMIN_GETS
+    assert len(paths) == 20
+    assert len(paths) == len(set(paths))
+    assert paths[:len(mod.ADMIN_GETS)] == mod.ADMIN_GETS
+    assert all(path.startswith("/admin/") and "{" not in path
+               and "?" not in path for path in paths)
+    assert "/admin/quota" in paths
+    assert "/admin/runtime-projection" in paths
+
+
+def test_extended_gate_fails_on_other_legacy_admin_get():
+    def statuses(origin, path, timeout):
+        if path == "/health":
+            return 200, None
+        if path == "/admin/quota":
+            return 200, None
+        return 401, None
+    with patch.object(mod, "probe_status", side_effect=statuses):
+        result = mod.audit(["http://127.0.0.1:8088"],
+                           paths=mod.EXTENDED_ADMIN_GETS)
+    assert result["probe_result"] == "FAIL"
+    assert result["release_decision"] == "HOLD"
+    assert result["admin_paths_checked"] == list(mod.EXTENDED_ADMIN_GETS)
+
+
+def test_extended_cli_checks_every_admin_path_with_no_credentials():
+    called = []
+    def statuses(origin, path, timeout):
+        called.append(path)
+        return (200 if path == "/health" else 403), None
+    output = io.StringIO()
+    with patch.object(mod, "probe_status", side_effect=statuses), redirect_stdout(output):
+        rc = mod.main(["--target", "http://127.0.0.1:8088", "--extended"])
+    result = json.loads(output.getvalue())
+    assert rc == 0
+    assert len(called) == 21
+    assert result["credentials_sent"] is False
+    assert result["release_decision"] == "HOLD"
+    assert result["probe_result"] == "PASS"
