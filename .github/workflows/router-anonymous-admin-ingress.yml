@@ -9,6 +9,12 @@ on:
       - tools/router_admin_ingress_audit.py
       - tests/test_router_admin_ingress_audit.py
       - tests/test_mounted_admin_get_http_denial.py
+      - tests/test_admin_mounted_runtime_contract.py
+      - tests/test_admin_provider_secure_live_entrypoint.py
+      - tests/test_admin_provider_response_redaction.py
+      - src/auto_router/main.py
+      - src/auto_router/secure_live.py
+      - src/auto_router/security.py
       - .github/workflows/router-anonymous-admin-ingress.yml
   workflow_dispatch:
 
@@ -38,7 +44,13 @@ jobs:
           for path in ("tools/router_admin_ingress_audit.py", "tests/test_router_admin_ingress_audit.py", "tests/test_mounted_admin_get_http_denial.py"):
               ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
           PY
-      - name: Run 16 offline synthetic regressions
+      - name: Run ingress, mounted admin, and positive redaction contracts
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -B -m pytest -q -p no:cacheprovider tests/test_router_admin_ingress_audit.py tests/test_mounted_admin_get_http_denial.py
+        run: |
+          python -B -m pytest -q -p no:cacheprovider \
+            tests/test_router_admin_ingress_audit.py \
+            tests/test_mounted_admin_get_http_denial.py \
+            tests/test_admin_mounted_runtime_contract.py \
+            tests/test_admin_provider_secure_live_entrypoint.py \
+            tests/test_admin_provider_response_redaction.py
