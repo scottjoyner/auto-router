@@ -211,3 +211,109 @@ def verify_local_stage_bundle(bundle, *, expected_checkpoint_sha256):
             "server_reported_prefill_tps_p50": round(median(native_prefill_rates),3),
             "server_reported_decode_tps_p50": round(median(native_decode_rates),3),
             "benchmark_summary": result}
+
+
+def classify_existing_gpu_context(evidence):
+    """Classify passive LFM3 GPU-client data WITHOUT authorizing acceleration.
+
+    Actual LFM3 GPU token execution requires an authenticated, correlated
+    generation witness, not a process flag, accumulated DRM counter, or a
+    local file supplied by the process owner. This is an offline pure checker.
+    """
+    import re
+
+    result = {
+        "decision": "HOLD",
+        "reason": "missing_stable_gpu_context",
+        "gpu_context_observed": False,
+        "historical_compute_engine_time_observed": False,
+        "compute_delta_ns": 0,
+        "accelerator_verified": False,
+        "production_authorized": False,
+    }
+
+    def parse_ns(value):
+        if type(value) is not str or re.fullmatch(r"[0-9]{1,22} ns", value) is None:
+            return None
+        number = int(value[:-3])
+        return number if 0 <= number < 2**63 else None
+
+    def parse_vram(value):
+        if type(value) is not str:
+            return None
+        match = re.fullmatch(r"([0-9]{1,10}) (KiB|MiB)", value)
+        if not match:
+            return None
+        return int(match.group(1)) * (1024 if match.group(2) == "MiB" else 1)
+
+    if type(evidence) is not dict:
+        return result
+    if evidence.get("schema") != "lfm3.joyner.gpu-process.read-only.v1":
+        return result
+    if evidence.get("hostname") != "joyner":
+        return result
+    for authority_claim in (
+        "production_authorized",
+        "backend_dispatch_correlated_to_tokens",
+        "authenticated_generation_receipt",
+        "model_checkpoint_sha256_verified",
+        "independent_gpu_execution_witness",
+    ):
+        if evidence.get(authority_claim) is not False:
+            return result
+    before, after = evidence.get("before"), evidence.get("after")
+    if type(before) is not dict or type(after) is not dict:
+        return result
+    fields = ("pid", "process_starttime_ticks", "model_basename",
+              "alias", "port", "host", "gpu_layers_requested")
+    if any(before.get(field) != after.get(field) for field in fields):
+        return result
+    if (type(before.get("pid")) is not int or before["pid"] < 1
+            or type(before.get("process_starttime_ticks")) is not int
+            or before["process_starttime_ticks"] < 1
+            or type(before.get("model_basename")) is not str
+            or not before["model_basename"].endswith(".gguf")
+            or "/" in before["model_basename"]
+            or type(before.get("alias")) is not str or not before["alias"].strip()
+            or before.get("host") != "127.0.0.1"
+            or before.get("port") != "19175"
+            or before.get("gpu_layers_requested") != "99"):
+        return result
+    first = before.get("drm_clients")
+    second = after.get("drm_clients")
+    if type(first) is not list or type(second) is not list:
+        return result
+    if not 1 <= len(first) <= 8 or not 1 <= len(second) <= 8:
+        return result
+
+    def find_discrete(clients):
+        found = []
+        for client in clients:
+            if type(client) is not dict:
+                return None
+            device, metrics = client.get("device"), client.get("metrics")
+            if type(device) is not str or type(metrics) is not dict:
+                return None
+            if (device != "/dev/dri/renderD128"
+                    or metrics.get("drm-pdev") != "0000:03:00.0"):
+                continue
+            if (metrics.get("drm-driver") != "amdgpu"
+                    or type(metrics.get("drm-client-id")) is not str
+                    or not metrics["drm-client-id"].isdigit()):
+                return None
+            vram = parse_vram(metrics.get("drm-resident-vram"))
+            counter = parse_ns(metrics.get("drm-engine-compute"))
+            if vram is None or vram <= 0 or counter is None:
+                return None
+            found.append((metrics["drm-client-id"], vram, counter))
+        return found[0] if len(found) == 1 else None
+
+    a = find_discrete(first)
+    b = find_discrete(second)
+    if a is None or b is None or a[0] != b[0] or b[2] < a[2]:
+        return result
+    result["gpu_context_observed"] = True
+    result["historical_compute_engine_time_observed"] = a[2] > 0 or b[2] > 0
+    result["compute_delta_ns"] = b[2] - a[2]
+    result["reason"] = "gpu_context_present_unproven_tokens"
+    return result
