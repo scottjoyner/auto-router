@@ -90,3 +90,17 @@ Five warm requests are research only. The true server-reported median
 decode speed is NOT interchangeable with the aggregator's simplistic
 token-count/time-derived metric. This PR establishes no GPU/NPU performance,
 independent external measurement custody, or production SLO.
+
+## Passive GPU-client context is not LFM3 accelerator proof
+
+The pure classify_existing_gpu_context classifier checks a matched process
+identity and stable AMD DRM client with VRAM residency and historical compute
+engine counters. It ALWAYS returns decision HOLD and accelerator_verified=false
+even for a positive compute-counter change without an independently
+authenticated request and backend witness. No service calls, shell access,
+credential reads, driver operations or GPU token generation are performed.
+
+A real Joyner passive evidence sample is held in the local fleet lab only;
+only synthetic cases and pure checks ship in this PR. Joyner /v1/models
+returns HTTP 401 without credentials. Do not bypass authentication or treat
+-ngl 99 as proof. x1-370's measured baseline is CPU-only (-ngl 0).
