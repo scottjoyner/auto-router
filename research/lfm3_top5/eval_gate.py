@@ -165,3 +165,102 @@ def evaluate_bound_witnessed(report: Mapping, baseline: Mapping | None, *,
     # An existing PASS_TO_REVIEW with an exactly approved independent binding may be
     # permitted; an existing HOLD (e.g. research-only evidence) is surfaced unchanged.
     return gate
+
+# Research-only attestation signature protocol. NOT native SGNC receipt proof;
+# not a substitute for independent key custody / external anti-rollback.
+_RESEARCH_ATTESTATION_DOMAIN = "LFM3-RESEARCH-EVAL-ATTESTATION-v1"
+_RESEARCH_ATTESTATION_FIELDS = frozenset((
+    "domain", "key_id", "epoch", "candidate_run_id",
+    "candidate_checkpoint_sha256", "baseline_run_id",
+    "baseline_checkpoint_sha256", "workload_sha256",
+    "candidate_report_sha256", "baseline_report_sha256",
+))
+
+
+def verify_signed_evaluation(
+    report: Mapping,
+    baseline: Mapping | None,
+    *,
+    attestation,
+    trusted_public_keys,
+    minimum_epoch,
+) -> Gate:
+    """Verify Ed25519 over exact canonical candidate and baseline reports.
+
+    No private-key use, fetching, trust-on-first-use, or key auto-enrollment.
+    The caller must independently obtain a pinned Ed25519 raw public key and
+    external minimum epoch. The returned PASS_TO_REVIEW has *research* scope;
+    signer custody and a real external monotonic high-water are not proved.
+    """
+    import hashlib
+    import json
+    try:
+        base = evaluate(report, baseline)
+    except (TypeError, ValueError, OverflowError):
+        return Gate("HOLD", ("malformed_evaluation",), {}, ("", ""))
+    if base.decision == "FAIL":
+        return base
+
+    def reject():
+        return Gate("HOLD", tuple(sorted(set(base.reasons) | {"attestation_unverified"})),
+                    base.fractions, base.comparison_key)
+
+    if not isinstance(report, Mapping) or not isinstance(baseline, Mapping):
+        return reject()
+    if (type(minimum_epoch) is not int or not 1 <= minimum_epoch < 2**63
+            or not isinstance(attestation, dict)
+            or set(attestation) != {"claim", "signature_hex"}
+            or not isinstance(trusted_public_keys, Mapping)):
+        return reject()
+
+    claim = attestation.get("claim")
+    signature_hex = attestation.get("signature_hex")
+    if (not isinstance(claim, dict)
+            or set(claim) != _RESEARCH_ATTESTATION_FIELDS
+            or claim.get("domain") != _RESEARCH_ATTESTATION_DOMAIN):
+        return reject()
+    key_id = claim.get("key_id")
+    epoch = claim.get("epoch")
+    if (type(key_id) is not str or not 1 <= len(key_id) <= 128
+            or type(epoch) is not int or not minimum_epoch <= epoch < 2**63):
+        return reject()
+    key_hex = trusted_public_keys.get(key_id)
+    if (not isinstance(key_hex, str) or len(key_hex) != 64
+            or any(char not in "0123456789abcdef" for char in key_hex)
+            or not isinstance(signature_hex, str) or len(signature_hex) != 128
+            or any(char not in "0123456789abcdef" for char in signature_hex)):
+        return reject()
+    try:
+        canonical = lambda value: json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False,
+        ).encode("utf-8")
+        source_bytes = canonical(report)
+        baseline_bytes = canonical(baseline)
+        signed_claim = canonical(claim)
+        if any(len(data) > 65536 for data in (source_bytes, baseline_bytes, signed_claim)):
+            return reject()
+        identities = {
+            "candidate_run_id": report.get("run_id"),
+            "candidate_checkpoint_sha256": report.get("checkpoint_sha256"),
+            "baseline_run_id": baseline.get("run_id"),
+            "baseline_checkpoint_sha256": baseline.get("checkpoint_sha256"),
+            "workload_sha256": report.get("workload_sha256"),
+            "candidate_report_sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "baseline_report_sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+        }
+        if (any(type(value) is not str or not value for value in identities.values())
+                or any(claim.get(name) != value for name, value in identities.items())):
+            return reject()
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        trusted = Ed25519PublicKey.from_public_bytes(bytes.fromhex(key_hex))
+        trusted.verify(
+            bytes.fromhex(signature_hex),
+            (_RESEARCH_ATTESTATION_DOMAIN + "\n").encode("utf-8") + signed_claim,
+        )
+    except Exception:
+        # A bad signature, malformed JSON, unsupported payload or rejected
+        # public key all fail closed. This interface never authenticates a
+        # caller-supplied/unpinned public key or masks an existing quality FAIL.
+        return reject()
+    return base
