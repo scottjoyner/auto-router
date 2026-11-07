@@ -127,6 +127,42 @@ jobs:
             sleep 3
           done
           test "$healthy" = "true"
+      - name: Verify all six administrative GET routes deny anonymous reads in the built Docker image
+        # Runs against the actual strict-offline ASGI container started above.
+        # No credentials, response bodies, live POSTs, or production services.
+        run: python3 -B scripts/admin_auth_readonly_canary.py --port 8088
+      - name: Test anonymous admin access from an independent Docker bridge peer
+        # Runs a second container against the exact built CI image, on the
+        # isolated smoke bridge. No real credentials or user host mounts.
+        run: |
+          image_id=$(docker inspect --format '{{.Image}}' auto-router-smoke)
+          test -n "$image_id"
+          docker run --rm --network auto-router-smoke \
+            --volume "$PWD/scripts:/canary-scripts:ro" \
+            --env CI=true --env GITHUB_ACTIONS=true \
+            --env AUTO_ROUTER_CI_DOCKER_PEER=true \
+            "$image_id" python -B /canary-scripts/ci_admin_docker_peer.py
+      - name: Verify positive and negative synthetic operator auth on safe admin GETs
+        # Hosted fixture-only check. The credential is a committed synthetic
+        # Compose fixture; no production token, provider-health read, or write.
+        run: |
+          python3 -B -m scripts.admin_positive_auth_ci_canary \
+            --explicit-ci-synthetic-only
+      - name: Verify built Docker image contains the exact reviewed checkout source
+        # Bind the ephemeral rebuilt image ID and its installed Python bytes to
+        # this checkout's git commit; this does not approve any production image.
+        run: |
+          PYTHONPATH=. python3 -B scripts/verify_ci_built_image_provenance.py \
+            --explicit-ci-smoke-only \
+            --out ci-artifacts/router-ci-built-image.json
+      - name: Retain read-only build provenance receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-router-built-image-provenance
+          path: ci-artifacts/router-ci-built-image.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify health, offline models, authenticated inference, route surface, admission, projection, and admin auth gate
         run: |
           curl -sf http://127.0.0.1:8088/health > /tmp/router-health.json

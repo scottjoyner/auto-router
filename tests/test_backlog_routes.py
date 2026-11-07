@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -54,6 +56,11 @@ class _FakePolicyState:
 
 
 def test_backlog_burn_down_uses_real_dispatch_path(monkeypatch, tmp_path) -> None:
+    token = "synthetic-backlog-route-auth-test-only"
+    monkeypatch.setattr(
+        "auto_router.security.get_settings",
+        lambda: SimpleNamespace(admin_token=token),
+    )
     state = _FakePolicyState(EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}"))
     app = FastAPI()
     register_backlog_routes(app, state)
@@ -81,9 +88,17 @@ def test_backlog_burn_down_uses_real_dispatch_path(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("auto_router.backlog_routes.AssistXTaskClient.fetch_backlog_candidates", fake_fetch)
     monkeypatch.setattr("auto_router.backlog_routes.dispatch_outbox_cycle", fake_dispatch)
 
+    # The unauthenticated path must not reach any backlog fetch or dispatch.
+    unauthorized = client.post(
+        "/admin/backlog/burn-down?source=assistx&limit=1&dispatch_limit=1",
+        json={"tasks": []},
+    )
+    assert unauthorized.status_code == 401
+
     response = client.post(
         "/admin/backlog/burn-down?source=assistx&limit=1&dispatch_limit=1",
         json={"tasks": []},
+        headers={"X-Admin-Token": token},
     )
 
     assert response.status_code == 200
