@@ -11,7 +11,7 @@ from .inference_contract import Sample
 from .route_guard import verify_delegation
 from .context_guard import build_verified_context
 from .benchmark_report import assess_repeatability
-from .eval_gate import evaluate_witnessed
+from .eval_gate import evaluate_bound_witnessed
 
 
 def build_lfm3_research_advisory(
@@ -27,7 +27,7 @@ def build_lfm3_research_advisory(
     eval_report: Mapping,
     baseline_report: Mapping,
     witness_digest: str,
-    approved_witnesses,
+    approved_bindings,
 ) -> dict:
     """Return a deterministic, non-authoritative PASS/HOLD breakdown.
 
@@ -65,9 +65,9 @@ def build_lfm3_research_advisory(
         evidence["fleet_benchmark"] = "HOLD"
 
     try:
-        evaluation = evaluate_witnessed(
+        evaluation = evaluate_bound_witnessed(
             eval_report, baseline_report, witness_digest=witness_digest,
-            approved_witnesses=approved_witnesses,
+            approved_bindings=approved_bindings,
         )
         evidence["evaluation"] = (
             "PASS_RESEARCH_ONLY" if evaluation.decision == "PASS_TO_REVIEW" else "HOLD"
