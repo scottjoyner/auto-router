@@ -11,7 +11,7 @@ from .inference_contract import Sample
 from .route_guard import verify_delegation
 from .context_guard import build_verified_context
 from .benchmark_report import assess_repeatability
-from .eval_gate import evaluate_bound_witnessed
+from .eval_gate import evaluate_bound_witnessed, verify_signed_evaluation
 
 
 def build_lfm3_research_advisory(
@@ -28,6 +28,9 @@ def build_lfm3_research_advisory(
     baseline_report: Mapping,
     witness_digest: str,
     approved_bindings,
+    signed_attestation=None,
+    trusted_public_keys=None,
+    minimum_epoch=None,
 ) -> dict:
     """Return a deterministic, non-authoritative PASS/HOLD breakdown.
 
@@ -69,6 +72,17 @@ def build_lfm3_research_advisory(
             eval_report, baseline_report, witness_digest=witness_digest,
             approved_bindings=approved_bindings,
         )
+        # Caller-provided digest/binding metadata alone is not authenticity.
+        # Even a PASS from the synthetic bound-witness gate MUST be backed by
+        # an independently pinned Ed25519 public-key signature over both entire
+        # candidate/baseline reports and a caller-supplied monotonic epoch.
+        if evaluation.decision == "PASS_TO_REVIEW":
+            evaluation = verify_signed_evaluation(
+                eval_report, baseline_report,
+                attestation=signed_attestation,
+                trusted_public_keys=trusted_public_keys,
+                minimum_epoch=minimum_epoch,
+            )
         evidence["evaluation"] = (
             "PASS_RESEARCH_ONLY" if evaluation.decision == "PASS_TO_REVIEW" else "HOLD"
         )
