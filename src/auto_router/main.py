@@ -534,22 +534,22 @@ async def dashboard_summary(request: Request) -> Any:
     )
 
 
-@app.get("/admin/quota")
+@app.get("/admin/quota", dependencies=[Depends(require_admin)])
 async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [snapshot.model_dump() for snapshot in state.quota.snapshots(state.providers.enabled())]}
 
 
-@app.get("/admin/providers/health")
+@app.get("/admin/providers/health", dependencies=[Depends(require_admin)])
 async def admin_provider_health(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": await _provider_health_reports()}
 
 
-@app.get("/admin/context")
+@app.get("/admin/context", dependencies=[Depends(require_admin)])
 async def admin_context(_: None = Depends(require_admin)) -> dict[str, Any]:
     return state.context.model_dump()
 
 
-@app.get("/admin/context/graph")
+@app.get("/admin/context/graph", dependencies=[Depends(require_admin)])
 async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {
         "revision": state.context.revision,
@@ -559,19 +559,19 @@ async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any
     }
 
 
-@app.get("/admin/providers")
+@app.get("/admin/providers", dependencies=[Depends(require_admin)])
 async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
-@app.get("/admin/placement")
+@app.get("/admin/placement", dependencies=[Depends(require_admin)])
 async def admin_placement(_: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import compute_plan
 
     return compute_plan(state)
 
 
-@app.post("/admin/load")
+@app.post("/admin/load", dependencies=[Depends(require_admin)])
 async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
 
@@ -579,36 +579,36 @@ async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)
     return await reconcile_once(state, apply=do_apply)
 
 
-@app.get("/admin/agent-workers")
+@app.get("/admin/agent-workers", dependencies=[Depends(require_admin)])
 async def admin_agent_workers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
 
 
-@app.get("/admin/usage")
+@app.get("/admin/usage", dependencies=[Depends(require_admin)])
 async def admin_usage(limit: int = 50, _: None = Depends(require_admin)) -> dict[str, Any]:
     return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
 
 
-@app.get("/admin/circuits")
+@app.get("/admin/circuits", dependencies=[Depends(require_admin)])
 async def admin_circuits(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
 
 
-@app.post("/admin/circuits/reset")
+@app.post("/admin/circuits/reset", dependencies=[Depends(require_admin)])
 async def admin_circuits_reset(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear all circuit breakers (recover from tripped providers immediately)."""
     cleared = state.circuits.reset()
     return {"cleared": cleared}
 
 
-@app.post("/admin/circuits/reset/{owner:path}")
+@app.post("/admin/circuits/reset/{owner:path}", dependencies=[Depends(require_admin)])
 async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear a single circuit breaker by owner (provider/model)."""
     cleared = state.circuits.reset(owner)
     return {"owner": owner, "cleared": cleared}
 
 
-@app.get("/admin/agent-jobs")
+@app.get("/admin/agent-jobs", dependencies=[Depends(require_admin)])
 async def admin_agent_jobs(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"jobs": [record_as_dict(record) for record in state.agent_jobs.list_records()]}
 

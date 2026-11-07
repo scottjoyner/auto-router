@@ -19,7 +19,11 @@ def assistx_client() -> httpx.Client:
 
 @pytest.fixture
 def router_client() -> httpx.Client:
-    return httpx.Client(base_url=ROUTER_URL, timeout=10)
+    # Integration tests that inspect protected provider inventory must supply
+    # real operator credentials through the environment; never embed tokens.
+    admin_token = os.getenv("AUTO_ROUTER_ADMIN_TOKEN", "").strip()
+    headers = {"X-Admin-Token": admin_token} if admin_token else {}
+    return httpx.Client(base_url=ROUTER_URL, timeout=10, headers=headers)
 
 
 @pytest.fixture
