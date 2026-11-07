@@ -110,3 +110,104 @@ def assess_repeatability(rows, *, min_samples=5, verified_accelerator_digests=()
         "decode_tokens_per_sec_p95": result.decode_tokens_per_sec_p95,
         "accelerator_verified": result.accelerator_verified,
     }
+
+
+def verify_local_stage_bundle(bundle, *, expected_checkpoint_sha256):
+    """Check five CPU-only local-stage receipts against separately pinned GGUF digest.
+
+    Does not authenticate server IDs, checkpoint custody, timing hardware or
+    external witnesses. PASS_RESEARCH_ONLY means the bounded *provided* report
+    is internally consistent; it never authorizes routing or claims GPU/NPU.
+    """
+    held = {"decision": "HOLD", "reason": "unverified_local_stage_bundle",
+            "observations": 0, "production_authorized": False,
+            "accelerator_verified": False}
+    def digest(value):
+        return (type(value) is str and len(value) == 64
+                and all(char in "0123456789abcdef" for char in value))
+
+    if (not isinstance(bundle, dict)
+            or not digest(expected_checkpoint_sha256)
+            or bundle.get("checkpoint_sha256") != expected_checkpoint_sha256
+            or not digest(bundle.get("workload_sha256"))
+            or bundle.get("schema") != "lfm3.real.cpu-stage.5x.v1"
+            or bundle.get("scope") != "loopback-only-public-synthetic-prompt"
+            or bundle.get("result") != "PASS_RESEARCH_ONLY"
+            or bundle.get("backend") != "llama.cpp CPU-only -ngl 0"
+            or type(bundle.get("model")) is not str or not bundle["model"].strip()
+            or type(bundle.get("model_bytes")) is not int
+            or bundle["model_bytes"] <= 1_000_000_000
+            or type(bundle.get("requested_generations")) is not int
+            or bundle["requested_generations"] != 5
+            or type(bundle.get("actual_generations_attempted")) is not int
+            or bundle["actual_generations_attempted"] != 5
+            or bundle.get("production_authorized") is not False
+            or bundle.get("accelerator_verified") is not False
+            or bundle.get("independent_measurement_witness") is not False):
+        return held
+    rows, meta = bundle.get("rows"), bundle.get("request_meta")
+    if (type(rows) is not list or type(meta) is not list
+            or len(rows) != 5 or len(meta) != 5):
+        return held
+    seen = set()
+    native_prefill_rates = []
+    native_decode_rates = []
+    for row, observation in zip(rows, meta):
+        if type(row) is not dict or type(observation) is not dict:
+            return held
+        identifier = observation.get("observation_id")
+        if (type(identifier) is not str or not identifier.strip()
+                or identifier in seen or row.get("observation_id") != identifier):
+            return held
+        seen.add(identifier)
+        if (observation.get("finish_reason") != "stop"
+                or observation.get("answer") != "READY"
+                or observation.get("model") != bundle["model"]
+                or row.get("checkpoint_sha256") != expected_checkpoint_sha256
+                or row.get("workload_sha256") != bundle["workload_sha256"]
+                or row.get("sampling_hash") != bundle["workload_sha256"]
+                or row.get("quantization") != "Q4_K_M"
+                or row.get("context_tokens") != 4096
+                or row.get("max_output_tokens") != 24
+                or row.get("accelerator_verified") is not False
+                or not _positive(observation.get("end_to_end_ms"))):
+            return held
+        usage = observation.get("usage")
+        timings = observation.get("server_timings")
+        if not isinstance(usage, dict) or not isinstance(timings, dict):
+            return held
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            if type(usage.get(key)) is not int or usage[key] < 1:
+                return held
+        for key in ("prompt_n", "predicted_n"):
+            if type(timings.get(key)) is not int or timings[key] < 1:
+                return held
+        if (usage["prompt_tokens"] + usage["completion_tokens"] != usage["total_tokens"]
+                or usage["completion_tokens"] != timings["predicted_n"]
+                or usage["prompt_tokens"] < timings["prompt_n"]
+                or row.get("prompt_tokens") != timings["prompt_n"]
+                or row.get("output_tokens") != timings["predicted_n"]):
+            return held
+        for native_key, sink in (("prompt_per_second", native_prefill_rates),
+                                 ("predicted_per_second", native_decode_rates)):
+            if not _positive(timings.get(native_key)):
+                return held
+            sink.append(timings[native_key])
+        for key, row_field in (("prompt_ms", "prefill_ms"),
+                               ("predicted_ms", "decode_ms")):
+            if (not _positive(timings.get(key))
+                    or type(row.get(row_field)) not in (int, float)
+                    or not _positive(row[row_field])
+                    or row[row_field] != timings[key]):
+                return held
+    result = assess_repeatability(rows)
+    if result["decision"] != "PASS_RESEARCH_ONLY" or result["accelerator_verified"]:
+        return held
+    return {"decision": "PASS_RESEARCH_ONLY",
+            "reason": "five_internal_cpu_receipts_checked_only",
+            "observations": 5, "checkpoint_sha256": expected_checkpoint_sha256,
+            "production_authorized": False, "accelerator_verified": False,
+            "independent_measurement_witness": False,
+            "server_reported_prefill_tps_p50": round(median(native_prefill_rates),3),
+            "server_reported_decode_tps_p50": round(median(native_decode_rates),3),
+            "benchmark_summary": result}
