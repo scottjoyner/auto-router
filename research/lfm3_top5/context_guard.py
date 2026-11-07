@@ -12,6 +12,23 @@ from dataclasses import dataclass
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
+_DEFAULT_MAX_RECORDS = 64
+_MAX_RECORDS_LIMIT = 1_000
+
+
+def _validate_max_records(max_records: int) -> None:
+    """``max_records`` must be a literal int in 1..1000 (fail closed otherwise)."""
+    if type(max_records) is not int or not 1 <= max_records <= _MAX_RECORDS_LIMIT:
+        raise ValueError("invalid_max_records")
+
+
+def _validate_rows(rows, max_records: int) -> None:
+    """Rows must be a list/tuple within the configured record cap."""
+    if not isinstance(rows, (list, tuple)):
+        raise ValueError("invalid_rows")
+    if len(rows) > max_records:
+        raise ValueError("excessive_rows")
+
 
 @dataclass(frozen=True)
 class Context:
@@ -21,12 +38,14 @@ class Context:
     consumed_characters: int
 
 
-def build_context(rows, *, max_chars=1600, allowed_classes=("public_synthetic",)) -> Context:
+def build_context(rows, *, max_chars=1600, max_records=64, allowed_classes=("public_synthetic",)) -> Context:
     """Fail closed on collisions BEFORE selecting records, regardless of input order."""
     if type(max_chars) is not int or not 1 <= max_chars <= 100_000:
         raise ValueError("invalid_budget")
+    _validate_max_records(max_records)
     if not isinstance(allowed_classes, (list, tuple, frozenset, set)):
         raise ValueError("invalid_allowed_classes")
+    _validate_rows(rows, max_records)
     exclusions: dict[str, int] = {}
 
     def skip(reason):
@@ -97,7 +116,7 @@ def build_context(rows, *, max_chars=1600, allowed_classes=("public_synthetic",)
     return Context(result, tuple(selected), exclusions, total)
 
 
-def build_verified_context(rows, *, verifier, max_chars=1600, allowed_classes=("public_synthetic",)) -> Context:
+def build_verified_context(rows, *, verifier, max_chars=1600, max_records=64, allowed_classes=("public_synthetic",)) -> Context:
     """Run independent verifier verdicts, then delegate selection to build_context.
 
     Fail closed: only a literal boolean True from the caller-supplied ``verifier``
@@ -109,9 +128,15 @@ def build_verified_context(rows, *, verifier, max_chars=1600, allowed_classes=("
     The verifier must be callable; otherwise ``ValueError("invalid_verifier")`` is
     raised. Each record handed to the verifier is a deep defensive copy, so caller
     mutations cannot reach the source row and the original input is never mutated.
+
+    The record cap (``max_records``, default 64, literal int 1..1000) is validated
+    before any verifier invocation, so an excessive input fails closed without
+    consuming verifier resources.
     """
     if not callable(verifier):
         raise ValueError("invalid_verifier")
+    _validate_max_records(max_records)
+    _validate_rows(rows, max_records)
     verified_rows = []
     for row in rows:
         if not isinstance(row, dict):
@@ -130,4 +155,4 @@ def build_verified_context(rows, *, verifier, max_chars=1600, allowed_classes=("
         accepted = copy.deepcopy(row)
         accepted["signature_checked_upstream"] = True
         verified_rows.append(accepted)
-    return build_context(verified_rows, max_chars=max_chars, allowed_classes=allowed_classes)
+    return build_context(verified_rows, max_chars=max_chars, max_records=max_records, allowed_classes=allowed_classes)
