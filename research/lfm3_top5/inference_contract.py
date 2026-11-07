@@ -54,11 +54,19 @@ def sample_once(url: str, caller, *, previous_attempts=0, max_latency_ms=10000,
         return Sample("HOLD", "missing_or_invalid_token_usage", 1, round(elapsed, 3))
     if expected_model is not None and response.get("model") != expected_model:
         return Sample("HOLD", "model_identity_mismatch", 1, round(elapsed, 3))
+    if "total_tokens" in usage:
+        reported_total_tokens = usage.get("total_tokens")
+        if (type(reported_total_tokens) is not int
+                or reported_total_tokens != usage.get("prompt_tokens") + usage.get("completion_tokens")):
+            return Sample("HOLD", "inconsistent_total_tokens", 1, round(elapsed, 3))
     if elapsed > max_latency_ms:
         return Sample("HOLD", "latency_cap_exceeded", 1, round(elapsed, 3))
     finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
-    if finish_reason == "length":
+    if finish_reason is None:
+        if expected_model is not None:
+            return Sample("HOLD", "missing_finish_reason", 1, round(elapsed, 3))
+    elif finish_reason == "length":
         return Sample("HOLD", "truncated_response", 1, round(elapsed, 3))
-    if finish_reason is not None and finish_reason != "stop":
+    elif finish_reason != "stop":
         return Sample("HOLD", "nonstop_finish_reason", 1, round(elapsed, 3))
     return Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, round(elapsed, 3))
