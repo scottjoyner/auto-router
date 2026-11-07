@@ -64,9 +64,16 @@ def _archive_identity(path: Path, source_sha: str) -> str:
             if not isinstance(record, dict) or record.get("RepoTags") != [expected_tag]:
                 raise ReleaseHold("archive image tag does not match exact source SHA")
             config_name = record.get("Config")
-            if (not isinstance(config_name, str)
-                    or not re.fullmatch(r"[a-f0-9]{64}\.json", config_name)):
+            # Docker's classic archive uses <config-sha>.json; the modern
+            # containerd-backed save format stores blobs/sha256/<config-sha>.
+            # Neither format may resolve outside the archive root.
+            if not isinstance(config_name, str):
                 raise ReleaseHold("invalid Docker archive config filename")
+            legacy = re.fullmatch(r"([a-f0-9]{64})\.json", config_name)
+            content_addressed = re.fullmatch(r"blobs/sha256/([a-f0-9]{64})", config_name)
+            if not legacy and not content_addressed:
+                raise ReleaseHold("invalid Docker archive config filename")
+            expected_config_digest = (legacy or content_addressed).group(1)
             image = _json_member(archive, config_name, 8 * 1024 * 1024)
             if not isinstance(image, dict):
                 raise ReleaseHold("invalid image configuration")
@@ -76,11 +83,15 @@ def _archive_identity(path: Path, source_sha: str) -> str:
                 "org.opencontainers.image.revision"
             ) != source_sha:
                 raise ReleaseHold("embedded image revision is not the pinned source SHA")
-            # Docker image ID identifies the SHA-256 of config JSON. Do not
-            # trust an arbitrary producer-supplied image ID from the manifest.
-            return "sha256:" + hashlib.sha256(
-                archive.extractfile(archive.getmember(config_name)).read()
-            ).hexdigest()
+            # Docker image ID identifies the SHA-256 of config JSON. Confirm
+            # the tar entry's content-addressed name agrees with its bytes.
+            blob = archive.extractfile(archive.getmember(config_name))
+            if blob is None:
+                raise ReleaseHold("Docker archive config unreadable")
+            config_sha256 = hashlib.sha256(blob.read()).hexdigest()
+            if not hmac.compare_digest(config_sha256, expected_config_digest):
+                raise ReleaseHold("Docker image config content digest mismatch")
+            return "sha256:" + config_sha256
     except (OSError, tarfile.TarError) as exc:
         raise ReleaseHold("Docker archive unreadable or malformed") from exc
 
