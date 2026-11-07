@@ -45,6 +45,13 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Router serves immutable, locally vendored JS from the installed wheel.
+# Without package-data these files exist in the source tree but disappear in
+# the site-packages image, and read-only startup previously tried to recreate
+# their directories at runtime.
+[tool.setuptools.package-data]
+auto_router = ["static/vendor/*.js"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
