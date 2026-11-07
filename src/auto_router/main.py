@@ -253,45 +253,11 @@ def _context_projection_summary() -> dict[str, Any]:
     }
 
 
-async def _backlog_burn_loop() -> None:
-    """Autonomously burn AssistX backlog so idle fleet compute is used.
-
-    Calls the same burn-down path an operator would, on a timer. Gated by
-    AUTO_ROUTER_ASSISTX_TASKS_URL being configured (otherwise no-op).
-    """
-    from auto_router.settings import get_settings as _settings
-
-    await asyncio.sleep(15)
-    interval = int(getattr(_settings(), "backlog_burn_interval_seconds", 60) or 60)
-    logger.info("backlog-burn loop started (interval=%ss)", interval)
-    while True:
-        try:
-            # Power brake: never burn backlog while any node is off DAILY power
-            # (CONSERVE/SURVIVE) — batch jobs are the first thing an outage
-            # sacrifices (FLEET-STANDARD-LOADOUTS.md rule 6).
-            off_daily = {h: s["profile"] for h, s in _power_state_by_node().items() if s["profile"] != "daily"}
-            if off_daily:
-                logger.info("backlog-burn skipped: nodes off DAILY power: %s", off_daily)
-                await asyncio.sleep(interval)
-                continue
-            url = f"http://127.0.0.1:{_settings().port}/admin/backlog/burn-down"
-            async with httpx.AsyncClient() as client:
-                r = await client.post(
-                    url,
-                    json={"tasks": []},
-                    params={"source": "assistx", "limit": 25, "queue": "backlog", "dispatch_limit": 25},
-                    timeout=60,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    sel = data.get("summary", {}).get("selected", 0)
-                    if sel:
-                        logger.info("backlog-burn selected %s task(s)", sel)
-                else:
-                    logger.warning("backlog-burn returned %s", r.status_code)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("backlog-burn loop error: %s", exc)
-        await asyncio.sleep(interval)
+# Legacy autonomous backlog burner intentionally removed. It attempted an
+# unauthenticated, looping POST to /admin/backlog/burn-down, which is not a
+# mounted reconciled-route contract. Retrying with an operator admin token
+# would turn background work into a shared-admin bypass. Productive machine
+# dispatch requires independent source-owned Task admission and scoped claims.
 
 
 async def lifespan(_: FastAPI):
@@ -311,10 +277,10 @@ async def lifespan(_: FastAPI):
     placement_task = None
     if RECONCILE_SECONDS > 0:
         placement_task = asyncio.create_task(placement_reconcile_task())
-    # Autonomous backlog-burn: periodically pull AssistX backlog candidates and
-    # burn them down so idle fleet compute is consumed without manual triggers.
-    # Reuses the same /admin/backlog/burn-down logic via self-POST.
-    backlog_burn_task = asyncio.create_task(_backlog_burn_loop())
+    # P0 HOLD: do not launch an unauthenticated self-admin backlog writer.
+    # No automatic Task dispatch until exact machine principals, signed slot
+    # capacity, Task claim lease CAS and independent effect receipts exist.
+    backlog_burn_task = None
     try:
         yield
     finally:
@@ -559,9 +525,46 @@ async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any
     }
 
 
+# Operator inventory must never serialize raw ProviderConfig. The provider
+# schema contains headers, api_key_env/file and access/base URLs (including
+# possible userinfo and query credentials). Treat additions to those schemas
+# as secret by default rather than relying on a growing denylist.
+_ADMIN_PROVIDER_FIELDS = frozenset({
+    "id", "name", "type", "node_id", "runtime_instance_id", "runtime_kind",
+    "enabled", "parallel_slots", "queue_limit", "priority", "quota_class",
+    "routing_roles", "worker_mode", "allow_agent_runtime",
+    "allow_code_execution", "models",
+})
+_ADMIN_MODEL_FIELDS = frozenset({
+    "alias", "provider_model", "capabilities", "context_window",
+    "quantization", "worker_mode",
+})
+
+
+def _redacted_admin_provider(provider: Any) -> dict[str, Any]:
+    raw = provider.model_dump()
+    if not isinstance(raw, dict):
+        raise ValueError("unexpected provider inventory data")
+    redacted = {key: value for key, value in raw.items()
+                if key in _ADMIN_PROVIDER_FIELDS and key != "models"}
+    models = raw.get("models", [])
+    if not isinstance(models, list):
+        raise ValueError("unexpected provider model inventory")
+    redacted["models"] = [
+        {key: value for key, value in model.items()
+         if key in _ADMIN_MODEL_FIELDS} if isinstance(model, dict)
+        else model if isinstance(model, str)
+        else {} for model in models
+    ]
+    return redacted
+
+
 @app.get("/admin/providers", dependencies=[Depends(require_admin)])
 async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
-    return {"providers": [provider.model_dump() for provider in state.providers.providers]}
+    return {"providers": [
+        _redacted_admin_provider(provider)
+        for provider in state.providers.providers
+    ]}
 
 
 @app.get("/admin/placement", dependencies=[Depends(require_admin)])

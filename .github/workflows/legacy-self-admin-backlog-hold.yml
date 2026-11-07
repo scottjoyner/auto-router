@@ -1,0 +1,30 @@
+name: Legacy Self-Admin Backlog HOLD (Synthetic)
+on:
+  pull_request:
+    branches:
+      - main
+      - fix/admin-route-auth-hardening-20261104
+    paths:
+      - src/auto_router/main.py
+      - src/auto_router/main_live.py
+      - src/auto_router/secure_live.py
+      - tests/test_no_legacy_self_admin_backlog.py
+      - .github/workflows/legacy-self-admin-backlog-hold.yml
+permissions:
+  contents: read
+jobs:
+  source-only-no-auto-admin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact source under no-socket synthetic contracts
+        run: |
+          python -B -m py_compile src/auto_router/main.py tests/test_no_legacy_self_admin_backlog.py
+          python -B -m pip install pytest
+          python -B -m pytest tests/test_no_legacy_self_admin_backlog.py -q
