@@ -93,6 +93,8 @@ jobs:
           # The preceding smoke deliberately skips lifespan. This additional
           # gate verifies initialized state, so a 401/403-only artifact cannot
           # masquerade as a working authorized administrative API.
+          # A private /tmp tmpfs SQLite FILE is required: separate connections
+          # to sqlite :memory: have separate schemas and falsely fail startup.
           timeout --signal=TERM --kill-after=3s 40s \
           docker run --rm -i \
             --network none --read-only --cap-drop ALL \
@@ -101,7 +103,7 @@ jobs:
             --tmpfs /tmp:rw,nosuid,noexec,size=64m \
             -e PYTHONDONTWRITEBYTECODE=1 \
             -e AUTO_ROUTER_STRICT_OFFLINE=true \
-            -e AUTO_ROUTER_DATABASE_URL=sqlite:///:memory: \
+            -e AUTO_ROUTER_DATABASE_URL=sqlite:////tmp/router-lifespan-acceptance.sqlite3 \
             -e AUTO_ROUTER_DATABASE_PLACEMENT_REQUIRED=false \
             -e AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT=true \
             -e AUTO_ROUTER_MEMORY_ENABLED=false \
