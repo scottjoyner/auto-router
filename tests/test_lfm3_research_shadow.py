@@ -1,5 +1,9 @@
 """Synthetic-only LFM3 adapter tests: no live provider/router/SGNC authority."""
 import hashlib
+import json
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from research.lfm3_top5 import (
     CREATES_PROVIDER_ELIGIBILITY,
@@ -52,7 +56,7 @@ def fixture():
                           "provenance_rejection", "latency")
             },
         }
-    return {
+    args = {
         "stage_sample": Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, 50.0),
         "model_id": MODEL, "child_sessions": 1,
         "parent_receipt": dict(receipt), "child_receipt": dict(receipt),
@@ -69,6 +73,32 @@ def fixture():
            "workload_sha256": "eval-workload",
         }},
     }
+    # Fresh test-only signing key per fixture, never a production credential.
+    private = Ed25519PrivateKey.generate()
+    public = private.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw).hex()
+    candidate=args["eval_report"]
+    baseline=args["baseline_report"]
+    def canonical(data):
+        return json.dumps(data,sort_keys=True,separators=(",",":"),
+                          ensure_ascii=True,allow_nan=False).encode("utf-8")
+    domain="LFM3-RESEARCH-EVAL-ATTESTATION-v1"
+    claim={
+        "domain":domain,
+        "key_id":"synthetic-reviewer",
+        "epoch":9,
+        "candidate_run_id":candidate["run_id"],
+        "candidate_checkpoint_sha256":candidate["checkpoint_sha256"],
+        "baseline_run_id":baseline["run_id"],
+        "baseline_checkpoint_sha256":baseline["checkpoint_sha256"],
+        "workload_sha256":candidate["workload_sha256"],
+        "candidate_report_sha256":hashlib.sha256(canonical(candidate)).hexdigest(),
+        "baseline_report_sha256":hashlib.sha256(canonical(baseline)).hexdigest(),
+    }
+    signature=private.sign((domain+"\n").encode()+canonical(claim))
+    args["signed_attestation"]={"claim":claim,"signature_hex":signature.hex()}
+    args["trusted_public_keys"]={"synthetic-reviewer":public}
+    args["minimum_epoch"]=9
+    return args
 
 
 def test_positive_lab_evidence_only_advisory():
@@ -162,7 +192,7 @@ def test_vendored_sources_equal_frozen_lab_commit_hashes():
     from pathlib import Path
     package = Path(__file__).resolve().parents[1] / "research" / "lfm3_top5"
     manifest = json.loads((package / "VENDOR_PROVENANCE.json").read_text())
-    assert manifest["source_lab_commit"] == "c180b21"
+    assert manifest["source_lab_commit"] == "811d150"
     assert len(manifest["vendor_sha256"]) == 5
     for name, expected in manifest["vendor_sha256"].items():
         actual = hashlib.sha256((package / name).read_bytes()).hexdigest()
@@ -207,3 +237,41 @@ def test_memory_batch_cap_holds_without_running_verifier():
     outcome=build_lfm3_research_advisory(**args)
     assert outcome["gates"]["sensorgraft"]=="HOLD"
     assert not touched
+
+
+
+def test_unsigned_legacy_binding_is_no_longer_sufficient():
+    args=fixture()
+    args["signed_attestation"]=None
+    result=build_lfm3_research_advisory(**args)
+    assert result["gates"]["evaluation"]=="HOLD"
+    assert result["decision"]=="HOLD"
+    assert result["production_authorized"] is False
+
+
+def test_unknown_signer_cannot_upgrade_evaluation():
+    args=fixture()
+    args["trusted_public_keys"]={}
+    result=build_lfm3_research_advisory(**args)
+    assert result["gates"]["evaluation"]=="HOLD"
+
+
+def test_signed_attestation_epoch_rollback_holds():
+    args=fixture()
+    args["minimum_epoch"]=10
+    result=build_lfm3_research_advisory(**args)
+    assert result["gates"]["evaluation"]=="HOLD"
+
+
+def test_signature_cannot_promote_changed_metrics_even_same_run():
+    args=fixture()
+    args["eval_report"]["training_opt_in"]=True
+    result=build_lfm3_research_advisory(**args)
+    assert result["gates"]["evaluation"]=="HOLD"
+
+
+def test_research_advisory_always_disclaims_production_even_with_signature():
+    result=build_lfm3_research_advisory(**fixture())
+    assert result["decision"]=="RESEARCH_CANDIDATE"
+    assert result["production_authorized"] is False
+    assert result["creates_provider_eligibility"] is False
