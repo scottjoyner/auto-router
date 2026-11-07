@@ -26,7 +26,8 @@ def _add(tar: tarfile.TarFile, name: str, content: bytes) -> None:
 
 
 def _fixture_archive(tmp_path: Path, *, revision: str = GOOD_SHA,
-                     tag_sha: str = GOOD_SHA, raw_route: bool = False) -> Path:
+                     tag_sha: str = GOOD_SHA, raw_route: bool = False,
+                     modern: bool = False, corrupt_config_digest: bool = False) -> Path:
     config = {
         "architecture": "amd64",
         "config": {
@@ -34,7 +35,11 @@ def _fixture_archive(tmp_path: Path, *, revision: str = GOOD_SHA,
         },
     }
     blob = json.dumps(config, sort_keys=True).encode()
-    config_name = hashlib.sha256(blob).hexdigest() + ".json"
+    content_digest = hashlib.sha256(blob).hexdigest()
+    digest_name = "0" * 64 if corrupt_config_digest else content_digest
+    config_name = (
+        f"blobs/sha256/{digest_name}" if modern else f"{digest_name}.json"
+    )
     docker_manifest = [{
         "Config": config_name,
         "RepoTags": [f"local/router-release:{tag_sha}"],
@@ -128,3 +133,20 @@ def test_missing_docker_manifest_does_not_create_release_manifest(tmp_path):
     with pytest.raises(ReleaseHold, match="absent"):
         create(archive, tmp_path / "manifest.json", GOOD_SHA)
     assert not (tmp_path / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("modern", [True, False])
+def test_both_docker_config_archive_formats_are_content_addressed(tmp_path, modern):
+    archive = _fixture_archive(tmp_path, modern=modern)
+    target = tmp_path / "manifest.json"
+    manifest = create(archive, target, GOOD_SHA)
+    assert verify(
+        archive, target, GOOD_SHA, manifest["archive_sha256"]
+    )["integrity_result"] == "PASS"
+
+
+@pytest.mark.parametrize("modern", [True, False])
+def test_wrong_content_addressed_config_is_not_accepted(tmp_path, modern):
+    archive = _fixture_archive(tmp_path, modern=modern, corrupt_config_digest=True)
+    with pytest.raises(ReleaseHold, match="config content digest mismatch"):
+        create(archive, tmp_path / "release-manifest.json", GOOD_SHA)
