@@ -71,3 +71,22 @@ from allocating an entire unbounded JSON report prior to rejecting it.
 The verifier remains separated from real SGNC cryptographic receipts, operator
 key custody, and trusted external anti-rollback state. It grants no production
 release or routing authority.
+
+## Real local CPU sample: synthetic-only contract in PR
+
+The source lab now has an observed five-request CPU-only GGUF trial and a
+separately executed read-only SHA-256 check of the full local model file.
+The raw source evidence remains on x1-370 in the lab repository; it is NOT
+exported here or sent to hosted free models.
+
+The vendored benchmark_report.py contains pure verify_local_stage_bundle,
+which requires a separately supplied checkpoint SHA-256, five distinct
+server receipt IDs and matching per-request native timing and usage fields.
+It also checks the exact -ngl 0 CPU-only backend and rejects any assertion
+of externally verified hardware acceleration or production admission.
+Synthetic negative tests run without network or model loading.
+
+Five warm requests are research only. The true server-reported median
+decode speed is NOT interchangeable with the aggregator's simplistic
+token-count/time-derived metric. This PR establishes no GPU/NPU performance,
+independent external measurement custody, or production SLO.
