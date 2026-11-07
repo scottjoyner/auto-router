@@ -45,3 +45,17 @@ is established by these synthetic inputs. Production admission remains HOLD.
 
 13 isolated synthetic integration tests passed locally. Hosted exact-head CI is
 a separate confirmation and must not be claimed until it executes.
+
+## Signed evaluation attestation (research protocol v1)
+
+The research advisory now requires an Ed25519-verified signed claim as well as
+its previous bound-witness metadata. No unsigned/bare-digest approval passes.
+Signature verification uses the caller-pinned Ed25519 public key, exact complete
+candidate and frozen baseline JSON SHA-256s, domain separation, and an explicit
+externally supplied minimum epoch. Test private keys are generated in memory,
+never used for production. The local cryptographic verifier has no signer API.
+
+This research protocol is NOT native SensorGraft/SGNC proof and is NOT evidence
+of external trusted key custody or anti-rollback durability. Production routing
+and release remain HOLD. The scoped workflow installs only pytest and
+cryptography on a hosted runner; it does not contact external inference APIs.
