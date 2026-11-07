@@ -59,3 +59,15 @@ This research protocol is NOT native SensorGraft/SGNC proof and is NOT evidence
 of external trusted key custody or anti-rollback durability. Production routing
 and release remain HOLD. The scoped workflow installs only pytest and
 cryptography on a hosted runner; it does not contact external inference APIs.
+
+## Bounded signed report serialization
+
+The Ed25519 verifier preflights the actual report object tree and fails closed
+on giant string leaves, unbounded node counts, invalid input types, depth greater
+than 32, or encoded canonical JSON over 65,536 bytes. The canonical JSON bytes
+for accepted small reports are unchanged. This protects research test runners
+from allocating an entire unbounded JSON report prior to rejecting it.
+
+The verifier remains separated from real SGNC cryptographic receipts, operator
+key custody, and trusted external anti-rollback state. It grants no production
+release or routing authority.
