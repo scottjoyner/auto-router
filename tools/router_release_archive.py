@@ -115,14 +115,18 @@ def verify(archive: Path, manifest_file: Path, pinned_source: str,
     if any(manifest.get(key) != value for key, value in {
         "schema": SCHEMA, "repository": REPO, "source_sha": pinned_source,
         "archive_name": archive.name, "image_tag": f"local/router-release:{pinned_source}",
-        "archive_bytes": archive.stat().st_size,
         "attestation_verified": False, "release_decision": "HOLD",
     }.items()):
         raise ReleaseHold("manifest identity mismatch")
+    # Check the externally pinned digest BEFORE self-reported size. An attacker
+    # appending bytes must yield a clear cryptographic integrity failure, not
+    # a misleading benign-looking manifest metadata mismatch.
     digest = _sha256(archive)
     if not (hmac.compare_digest(digest, pinned_archive_sha256)
             and hmac.compare_digest(digest, str(manifest.get("archive_sha256")))):
         raise ReleaseHold("artifact SHA-256 mismatch")
+    if manifest.get("archive_bytes") != archive.stat().st_size:
+        raise ReleaseHold("manifest archive size mismatch")
     image_id = _archive_identity(archive, pinned_source)
     if not IMAGE_ID.fullmatch(image_id) or image_id != manifest.get("image_id"):
         raise ReleaseHold("Docker archive embedded image ID mismatch")
