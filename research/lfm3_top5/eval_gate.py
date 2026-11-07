@@ -231,14 +231,67 @@ def verify_signed_evaluation(
             or any(char not in "0123456789abcdef" for char in signature_hex)):
         return reject()
     try:
-        canonical = lambda value: json.dumps(
-            value, sort_keys=True, separators=(",", ":"),
-            ensure_ascii=True, allow_nan=False,
-        ).encode("utf-8")
-        source_bytes = canonical(report)
-        baseline_bytes = canonical(baseline)
-        signed_claim = canonical(claim)
-        if any(len(data) > 65536 for data in (source_bytes, baseline_bytes, signed_claim)):
+        _CANONICAL_MAX_BYTES = 65536
+
+        def canonical_limited(value: object) -> bytes | None:
+            """Bound individual leaves *before* JSONEncoder allocates fragments.
+
+            Encoder output is streamed with a strict 64 KiB cap. This defends
+            against both accumulated output and giant single string leaves,
+            without trusting arbitrary custom object serialization behavior.
+            """
+            nodes = 0
+            lower_bound = 0
+
+            def preflight(obj: object, depth: int = 0) -> bool:
+                nonlocal nodes, lower_bound
+                nodes += 1
+                if depth > 32 or nodes > 4096:
+                    return False
+                if type(obj) is str:
+                    lower_bound += len(obj)
+                    return lower_bound <= _CANONICAL_MAX_BYTES
+                if type(obj) is dict:
+                    if len(obj) > 4096:
+                        return False
+                    for key, nested in obj.items():
+                        if type(key) is not str:
+                            return False
+                        lower_bound += len(key)
+                        if lower_bound > _CANONICAL_MAX_BYTES:
+                            return False
+                        if not preflight(nested, depth + 1):
+                            return False
+                    return True
+                if type(obj) in (list, tuple):
+                    if len(obj) > 4096:
+                        return False
+                    return all(preflight(item, depth + 1) for item in obj)
+                return type(obj) in (int, float, bool, type(None))
+
+            if not preflight(value):
+                return None
+            encoder = json.JSONEncoder(
+                sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False,
+            )
+            buffer = bytearray()
+            for fragment in encoder.iterencode(value):
+                # ensure_ascii=True guarantees ASCII; compare length before
+                # encoding or extending, never allocate unbounded output bytes.
+                if len(fragment) > _CANONICAL_MAX_BYTES - len(buffer):
+                    return None
+                buffer.extend(fragment.encode("ascii"))
+            return bytes(buffer)
+
+        source_bytes = canonical_limited(report)
+        if source_bytes is None:
+            return reject()
+        baseline_bytes = canonical_limited(baseline)
+        if baseline_bytes is None:
+            return reject()
+        signed_claim = canonical_limited(claim)
+        if signed_claim is None:
             return reject()
         identities = {
             "candidate_run_id": report.get("run_id"),
