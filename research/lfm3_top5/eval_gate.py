@@ -112,3 +112,56 @@ def evaluate_witnessed(report: Mapping, baseline: Mapping | None, *,
     # An existing PASS_TO_REVIEW with an approved witness may be permitted; an
     # existing HOLD (e.g. research-only evidence) is surfaced unchanged.
     return gate
+
+
+_BINDING_FIELDS = (
+    "candidate_run_id",
+    "candidate_checkpoint_sha256",
+    "baseline_run_id",
+    "baseline_checkpoint_sha256",
+    "workload_sha256",
+)
+
+
+def _binding_is_exact(metadata: object, report: Mapping, baseline: Mapping | None) -> bool:
+    """True only when an approved binding matches the supplied report/baseline identities."""
+    if not isinstance(metadata, Mapping) or not isinstance(report, Mapping):
+        return False
+    expected = {
+        "candidate_run_id": report.get("run_id"),
+        "candidate_checkpoint_sha256": report.get("checkpoint_sha256"),
+        "baseline_run_id": baseline.get("run_id") if isinstance(baseline, Mapping) else None,
+        "baseline_checkpoint_sha256": baseline.get("checkpoint_sha256") if isinstance(baseline, Mapping) else None,
+        "workload_sha256": report.get("workload_sha256"),
+    }
+    for field in _BINDING_FIELDS:
+        if field not in metadata or metadata[field] != expected[field]:
+            return False
+    return True
+
+
+def evaluate_bound_witnessed(report: Mapping, baseline: Mapping | None, *,
+                             witness_digest: str, approved_bindings) -> Gate:
+    """Fail-closed gate that additionally requires an approved external witness.
+
+    The witness digest must be a lowercase 64-hex digest and the approved binding
+    for that digest must independently and exactly match the candidate and frozen
+    baseline identities supplied in the report and baseline.  Only an exact
+    matching independent binding may permit PASS_TO_REVIEW; FAIL is never masked and
+    HOLD is never upgraded by approval alone.
+    """
+    gate = evaluate(report, baseline)
+    if gate.decision == "FAIL":
+        # An existing FAIL is never masked or downgraded by witness state.
+        return gate
+    approved = (
+        isinstance(witness_digest, str)
+        and _valid_witness_digest(witness_digest)
+        and isinstance(approved_bindings, Mapping)
+        and _binding_is_exact(approved_bindings.get(witness_digest), report, baseline)
+    )
+    if not approved:
+        return Gate("HOLD", tuple(sorted({*gate.reasons, "witness_unavailable"})), gate.fractions, gate.comparison_key)
+    # An existing PASS_TO_REVIEW with an exactly approved independent binding may be
+    # permitted; an existing HOLD (e.g. research-only evidence) is surfaced unchanged.
+    return gate
