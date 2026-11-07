@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "0d447c6",
+  "source_lab_commit": "c180b21",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -10,11 +10,11 @@
     "eval_gate.py": "p5-eval-gates/eval_gate.py"
   },
   "vendor_sha256": {
-    "inference_contract.py": "22674438f499a29142e2c9446a9cd4ce30d903cc46928953eb174d31fc719234",
-    "route_guard.py": "fdb5549348f6508a2ba8e3450cd17d39a686cf5eac669bc5cfc7cc3268771202",
-    "context_guard.py": "9dc16906d9b2e3a54539e03943eb1fc2b2cacd6569c8b6eb98c075e590562611",
-    "benchmark_report.py": "03e2895ec9c32760b80a3cf014f0a08a90fe4ec942ab18c7bd3193ad0074a79f",
-    "eval_gate.py": "f797d99fe868f9e5aafd92c43f569d9f45702a9230950d16c761eff1c3603c2e"
+    "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
+    "route_guard.py": "170f88e11aac315c7e5dd2a4c7779e282fb408bb5c84a0175b8b3558fef26361",
+    "context_guard.py": "83ea9431e0de27369b052cef7b033fdb873e2fcd97226cb1a48035d09d325eaf",
+    "benchmark_report.py": "54cd4d8c91856d5fed16947e0add801413d0dec2a2a19084af0f7e2943e45b8e",
+    "eval_gate.py": "5e497a32f6b3e8d853ba38eb3ce879718eb8ade8bf86fbb933b3ce5f29a63d1f"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106"
 }

@@ -17,7 +17,7 @@ def fixture():
     receipt = {
         "models": [MODEL],
         "session_reported_cost": 0,
-        "cost_receipts_missing": 0,
+        "cost_receipts_missing": 0, "cost_receipts_present": 1,
         "token_usage_reported": 24,
         "finish_reasons": ["stop"],
     }
@@ -57,10 +57,17 @@ def fixture():
         "model_id": MODEL, "child_sessions": 1,
         "parent_receipt": dict(receipt), "child_receipt": dict(receipt),
         "trace_rows": [row], "signature_verifier": lambda _row: True,
-        "bench_rows": [dict(bench) for _ in range(5)],
+        "bench_rows": [{**bench,"observation_id":"synthetic-"+str(i)} for i in range(5)],
         "eval_report": eval_result("candidate", "trial", False),
         "baseline_report": eval_result("baseline", "frozen-baseline", True),
-        "witness_digest": SHA, "approved_witnesses": frozenset([SHA]),
+        "witness_digest": SHA,
+        "approved_bindings": {SHA: {
+           "candidate_run_id": "trial",
+           "candidate_checkpoint_sha256": "candidate",
+           "baseline_run_id": "frozen-baseline",
+           "baseline_checkpoint_sha256": "baseline",
+           "workload_sha256": "eval-workload",
+        }},
     }
 
 
@@ -113,7 +120,7 @@ def test_single_synthetic_benchmark_cannot_qualify():
 
 def test_missing_external_evaluation_witness_cannot_promote():
     args = fixture()
-    args["approved_witnesses"] = frozenset()
+    args["approved_bindings"] = {}
     result = build_lfm3_research_advisory(**args)
     assert result["gates"]["evaluation"] == "HOLD"
 
@@ -155,8 +162,48 @@ def test_vendored_sources_equal_frozen_lab_commit_hashes():
     from pathlib import Path
     package = Path(__file__).resolve().parents[1] / "research" / "lfm3_top5"
     manifest = json.loads((package / "VENDOR_PROVENANCE.json").read_text())
-    assert manifest["source_lab_commit"] == "0d447c6"
+    assert manifest["source_lab_commit"] == "c180b21"
     assert len(manifest["vendor_sha256"]) == 5
     for name, expected in manifest["vendor_sha256"].items():
         actual = hashlib.sha256((package / name).read_bytes()).hexdigest()
         assert actual == expected
+
+
+
+def test_reused_evaluation_witness_cannot_authorize_different_trial():
+    args=fixture()
+    args["eval_report"]["run_id"]="trial-replayed"
+    outcome=build_lfm3_research_advisory(**args)
+    assert outcome["gates"]["evaluation"]=="HOLD"
+    assert outcome["decision"]=="HOLD"
+    assert outcome["production_authorized"] is False
+
+
+def test_duplicate_benchmark_ids_do_not_prove_repeatability():
+    args=fixture()
+    for row in args["bench_rows"]:
+        row["observation_id"]="identical-replayed-probe"
+    outcome=build_lfm3_research_advisory(**args)
+    assert outcome["gates"]["fleet_benchmark"]=="HOLD"
+
+
+def test_missing_positive_cost_receipts_fail_even_when_sum_zero():
+    args=fixture()
+    args["parent_receipt"]["cost_receipts_present"]=0
+    outcome=build_lfm3_research_advisory(**args)
+    assert outcome["gates"]["agent_cost_and_identity"]=="HOLD"
+
+
+def test_memory_batch_cap_holds_without_running_verifier():
+    args=fixture()
+    trace=args["trace_rows"][0]
+    args["trace_rows"]=[{**trace,"trace_id":"trace"+str(i),
+                         "source_id":"synthetic-"+str(i)} for i in range(65)]
+    touched=[]
+    def witness(record):
+        touched.append(record)
+        return True
+    args["signature_verifier"]=witness
+    outcome=build_lfm3_research_advisory(**args)
+    assert outcome["gates"]["sensorgraft"]=="HOLD"
+    assert not touched

@@ -116,6 +116,14 @@ def verify_delegation(expected_model, child_sessions, parent, child) -> Choice:
     if type(child_missing) is not int or child_missing != 0:
         return _hold("child_cost_receipts_missing")
 
+    # At least one cost receipt must actually be present (literal positive int, never boolean).
+    parent_present = parent.get("cost_receipts_present")
+    child_present = child.get("cost_receipts_present")
+    if type(parent_present) is not int or parent_present <= 0:
+        return _hold("parent_cost_receipts_not_present")
+    if type(child_present) is not int or child_present <= 0:
+        return _hold("child_cost_receipts_not_present")
+
     # Reported token usage must be a positive integer (never boolean).
     parent_tokens = parent.get("token_usage_reported")
     child_tokens = child.get("token_usage_reported")

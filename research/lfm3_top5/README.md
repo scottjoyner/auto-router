@@ -27,3 +27,21 @@ Local smoke:
 
 The optional GitHub workflow runs only these tests; it never uses production
 credentials or network inference. Do not represent local pass as hosted CI.
+
+## November 7 evidence hardening
+
+The five component files are byte-identical to the frozen LFM3 lab at commit
+c180b21, as checked by VENDOR_PROVENANCE.json and the integration tests.
+
+The integration now requires model-pinned explicit stop and consistent total
+tokens; real positive zero-cost session receipts on both agents; a fail-closed
+64-record memory batch cap enforced before invoking the trusted verifier;
+unique benchmark observation IDs; and an approved external witness metadata
+binding to the exact candidate and baseline run/checkpoint and workload IDs.
+
+The checks are *research interface contracts only*. Neither external cryptographic
+signature verification nor independent provider billing or measurement sampling
+is established by these synthetic inputs. Production admission remains HOLD.
+
+13 isolated synthetic integration tests passed locally. Hosted exact-head CI is
+a separate confirmation and must not be claimed until it executes.
