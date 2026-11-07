@@ -94,6 +94,27 @@ def test_stage_mismatch_blocks_advisory():
     assert result["production_authorized"] is False
 
 
+def test_forged_or_malformed_stage_sample_fails_closed():
+    malformed = (
+        Sample("PASS_SAMPLE_ONLY", "wrong_reason", 1, 50.0),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", True, 50.0),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1.0, 50.0),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, True),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, -1.0),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, float("nan")),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, float("inf")),
+        Sample("PASS_SAMPLE_ONLY", "one_generation_observed", 1, float("-inf")),
+    )
+    for sample in malformed:
+        args = fixture()
+        args["stage_sample"] = sample
+        outcome = build_lfm3_research_advisory(**args)
+        assert outcome["gates"]["runtime"] == "HOLD"
+        assert outcome["decision"] == "HOLD"
+        assert outcome["production_authorized"] is False
+        assert outcome["live_requests_sent"] == 0
+
+
 def test_unverified_free_cost_blocks_advisory():
     args = fixture()
     args["child_receipt"]["session_reported_cost"] = False

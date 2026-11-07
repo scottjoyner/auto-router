@@ -6,6 +6,7 @@ All evidence inputs must be independently validated before any external promotio
 """
 from __future__ import annotations
 
+import math
 from typing import Mapping, Callable
 from .inference_contract import Sample
 from .route_guard import verify_delegation
@@ -36,12 +37,18 @@ def build_lfm3_research_advisory(
     accepted their inputs. The caller cannot turn it into an authorization.
     """
     evidence = {}
-    evidence["runtime"] = (
-        "PASS_RESEARCH_ONLY"
-        if type(stage_sample) is Sample and stage_sample.decision == "PASS_SAMPLE_ONLY"
-        and stage_sample.attempts == 1 and stage_sample.latency_ms is not None
-        else "HOLD"
+    # The advisory must not trust a caller-forged success Sample. A boolean
+    # attempt count or a NaN/negative/infinite latency is not stage evidence.
+    stage_valid = (
+        type(stage_sample) is Sample
+        and stage_sample.decision == "PASS_SAMPLE_ONLY"
+        and stage_sample.reason == "one_generation_observed"
+        and type(stage_sample.attempts) is int and stage_sample.attempts == 1
+        and type(stage_sample.latency_ms) in (int, float)
+        and math.isfinite(stage_sample.latency_ms)
+        and stage_sample.latency_ms >= 0
     )
+    evidence["runtime"] = "PASS_RESEARCH_ONLY" if stage_valid else "HOLD"
 
     receipt = verify_delegation(model_id, child_sessions, parent_receipt, child_receipt)
     evidence["agent_cost_and_identity"] = (

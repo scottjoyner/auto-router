@@ -43,5 +43,8 @@ The checks are *research interface contracts only*. Neither external cryptograph
 signature verification nor independent provider billing or measurement sampling
 is established by these synthetic inputs. Production admission remains HOLD.
 
-13 isolated synthetic integration tests passed locally. Hosted exact-head CI is
-a separate confirmation and must not be claimed until it executes.
+14 isolated synthetic integration tests passed locally, including malformed
+stage Sample rejection. The advisory now checks the exact success reason, a
+literal integer attempt count, and finite nonnegative latency. This cannot
+authenticate a caller-supplied Sample or grant production authority. Hosted
+exact-head CI is a separate confirmation and must not be claimed until it executes.
