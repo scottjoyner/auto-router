@@ -56,6 +56,20 @@ def comparable(a: Summary,b: Summary):
     return a.comparison_key==b.comparison_key
 
 
+def _observation_id_problem(rows):
+    seen=set()
+    for row in rows:
+        if not isinstance(row,dict):
+            return "malformed_rows"
+        observation_id=row.get("observation_id")
+        if not isinstance(observation_id,str) or not observation_id.strip():
+            return "missing_or_invalid_observation_id"
+        if observation_id in seen:
+            return "duplicate_observation_id"
+        seen.add(observation_id)
+    return None
+
+
 def assess_repeatability(rows, *, min_samples=5, verified_accelerator_digests=()):
     """Pure advisory gate for at least N matched observations on ONE node.
 
@@ -67,6 +81,10 @@ def assess_repeatability(rows, *, min_samples=5, verified_accelerator_digests=()
                 "observations": 0, "accelerator_verified": False}
     if not isinstance(rows, (list, tuple)):
         return {"decision": "HOLD", "reason": "malformed_rows",
+                "observations": 0, "accelerator_verified": False}
+    problem=_observation_id_problem(rows)
+    if problem is not None:
+        return {"decision": "HOLD", "reason": problem,
                 "observations": 0, "accelerator_verified": False}
     try:
         summaries = summarize(rows,
