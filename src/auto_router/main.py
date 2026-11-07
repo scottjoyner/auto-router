@@ -373,8 +373,14 @@ install_logging_middleware(app)
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 static_dir = Path(__file__).resolve().parent / "static"
-static_dir.mkdir(exist_ok=True)
-(static_dir / "vendor").mkdir(exist_ok=True)
+# The runtime serves immutable, vendored JavaScript baked into the wheel.
+# Never create directories inside site-packages: the production container
+# should be able to start with a read-only root and a non-root UID.
+# A partial/incorrect image must fail at import rather than silently mount
+# an empty static directory or download a CDN fallback.
+for required_asset in ("vendor/htmx.min.js", "vendor/tailwind.min.js"):
+    if not (static_dir / required_asset).is_file():
+        raise RuntimeError("packaged offline Router static asset missing")
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
