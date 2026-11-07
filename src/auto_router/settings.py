@@ -110,6 +110,18 @@ class Settings(BaseSettings):
                 db_path = os.path.join(os.getcwd(), db_path)
             return os.path.join(os.path.dirname(os.path.abspath(db_path)), "latency_ema.json")
         return os.path.join(os.getcwd(), "data", "latency_ema.json")
+    @property
+    def agent_jobs_path(self) -> str:
+        """Keep agent-job artifacts alongside the configured SQLite state.
+
+        The Router's production /data volume persists router.sqlite3. Using
+        the legacy cwd-relative data/agent-jobs directory instead silently
+        wrote into the container's ephemeral /app layer, and fails when that
+        root is intentionally read-only. A temporary /tmp database in isolated
+        CI therefore places agent artifacts in the same private tmpfs.
+        """
+        return os.path.join(os.path.dirname(self.latency_cache_path), "agent-jobs")
+
     live_model_cache_ttl_seconds: int = 3600
     live_model_poll_interval_seconds: float = 5.0
     assistx_event_sink_url: str | None = None

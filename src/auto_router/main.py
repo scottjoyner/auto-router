@@ -110,6 +110,10 @@ async def load_state() -> None:
     state.circuits = CircuitBreakerManager()
     state.agent_jobs = AgentJobManager(
         state.agents.agent_workers,
+        # Job artifacts must share the durable /data Router volume rather than
+        # the container's disposable /app/data writable layer. In isolated CI,
+        # the temporary SQLite directory is a private per-container tmpfs.
+        base_dir=settings.agent_jobs_path,
         outcome_recorder=state.memory_client.record_agent_job_outcome,
     )
     state.outbox_dispatch_lock = asyncio.Lock()
