@@ -1,0 +1,131 @@
+name: Router attested offline image review (NO DEPLOY)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - pyproject.toml
+      - src/**
+      - config/**
+      - tools/router_release_archive.py
+      - tests/test_router_release_archive_custody.py
+      - .github/workflows/router-attested-review.yml
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - pyproject.toml
+      - src/**
+      - config/**
+      - tools/router_release_archive.py
+      - tests/test_router_release_archive_custody.py
+      - .github/workflows/router-attested-review.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 24
+    # Sigstore OIDC/attestation rights are used ONLY by the main-only steps;
+    # no package, registry, remote SSH, environment or deployment access.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Checkout exact commit without saved credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline release verifier synthetic regression
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python -m pip install --disable-pip-version-check pytest==8.3.5
+          python -B -m pytest -q -p no:cacheprovider tests/test_router_release_archive_custody.py
+      - name: Build image pinned to Actions checkout SHA (hosted runner only)
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          docker build --pull=false \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "local/router-release:$GITHUB_SHA" .
+          actual="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "local/router-release:$GITHUB_SHA")"
+          test "$actual" = "$GITHUB_SHA"
+      - name: Isolated nonroot, read-only, anonymous-admin/asset smoke
+        run: |
+          set -euo pipefail
+          docker run --rm -i \
+            --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 64 \
+            --memory 768m --cpus 1 --user 65534:65534 \
+            --tmpfs /tmp:rw,nosuid,noexec,size=32m \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_DATABASE_URL=sqlite:///:memory: \
+            -e AUTO_ROUTER_DATABASE_PLACEMENT_REQUIRED=false \
+            -e AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT=true \
+            --entrypoint python "local/router-release:$GITHUB_SHA" -B - <<'PY'
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app, assert_mounted_admin_guards
+          assert_mounted_admin_guards(app)
+          client = TestClient(app, raise_server_exceptions=False)
+          for path in ("/admin/providers", "/admin/context", "/admin/agent-jobs"):
+              result = client.get(path, follow_redirects=False)
+              assert result.status_code in (401, 403), (path, result.status_code)
+          for name in ("htmx.min.js", "tailwind.min.js"):
+              result = client.get("/static/vendor/" + name, follow_redirects=False)
+              assert result.status_code == 200, (name, result.status_code)
+          print("RELEASE_IMAGE_ISOLATED_ADMIN_AND_STATIC_PASS")
+          PY
+      - name: Create and verify exact-source Docker archive (never load on fleet)
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          archive="release/router-$GITHUB_SHA.docker.tar"
+          docker save --output "$archive" "local/router-release:$GITHUB_SHA"
+          python tools/router_release_archive.py create \
+            --archive "$archive" --source-sha "$GITHUB_SHA" \
+            --output release/release-manifest.json
+          sha="$(sha256sum "$archive" | cut -d' ' -f1)"
+          python tools/router_release_archive.py verify \
+            --archive "$archive" --manifest release/release-manifest.json \
+            --expected-source-sha "$GITHUB_SHA" --expected-archive-sha256 "$sha"
+          echo "LOCAL_ARCHIVE_HASH_AND_SOURCE_IDENTITY_PASS"
+      - name: Issue GitHub OIDC/Sigstore provenance for main branch archive only
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest@v4
+        with:
+          subject-path: release/router-*.docker.tar
+      - name: Independently verify issued attestation and GitHub signer identity
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "release/router-$GITHUB_SHA.docker.tar" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/router-attested-review.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$GITHUB_SHA"
+          echo "GITHUB_PROVENANCE_SIGNER_SOURCE_PASS"
+      - name: Retain verified review archive only when both signing gates pass
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-attested-review-${{ github.sha }}
+          path: |
+            release/router-*.docker.tar
+            release/release-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
