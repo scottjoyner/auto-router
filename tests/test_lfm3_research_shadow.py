@@ -192,7 +192,7 @@ def test_vendored_sources_equal_frozen_lab_commit_hashes():
     from pathlib import Path
     package = Path(__file__).resolve().parents[1] / "research" / "lfm3_top5"
     manifest = json.loads((package / "VENDOR_PROVENANCE.json").read_text())
-    assert manifest["source_lab_commit"] == "811d150"
+    assert manifest["source_lab_commit"] == "238feac"
     assert len(manifest["vendor_sha256"]) == 5
     for name, expected in manifest["vendor_sha256"].items():
         actual = hashlib.sha256((package / name).read_bytes()).hexdigest()
@@ -275,3 +275,13 @@ def test_research_advisory_always_disclaims_production_even_with_signature():
     assert result["decision"]=="RESEARCH_CANDIDATE"
     assert result["production_authorized"] is False
     assert result["creates_provider_eligibility"] is False
+
+
+
+def test_enormous_candidate_evaluation_never_promotes():
+    args=fixture()
+    args["eval_report"]["oversized"]="Q"*1_000_000
+    result=build_lfm3_research_advisory(**args)
+    assert result["gates"]["evaluation"]=="HOLD"
+    assert result["decision"]=="HOLD"
+    assert result["production_authorized"] is False
