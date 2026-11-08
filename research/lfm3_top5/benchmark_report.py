@@ -494,3 +494,152 @@ def assess_matched_qad_cpu_bundle(bundle, *, expected_checkpoint_sha256):
             "accelerator_verified":False,
             "independent_measurement_witness":False,
             "production_authorized":False}
+
+
+def assess_paired_qad_cpu_bundles(x1_bundle, xwing_bundle, *, expected_checkpoint_sha256):
+    """Compare two bounded CPU-only research canaries on a pinned QAD file.
+
+    The two stage aliases differ, so raw HTTP request hashes legitimately
+    differ. This validates each known collector's canonical request shape
+    separately and binds both to one alias-neutral workload fingerprint.
+    The unsigned/self-reported data can NEVER authorize production or GPU.
+    """
+    import hashlib
+    import json
+
+    held={"decision":"HOLD",
+          "reason":"unverified_paired_qad_cpu_reports",
+          "same_checkpoint_bytes_reported":False,
+          "same_normalized_workload":False,
+          "per_node_count":0,
+          "accelerator_verified":False,
+          "independent_measurement_witness":False,
+          "production_authorized":False}
+    def digest(value):
+        return (type(value) is str and len(value)==64
+                and all(c in "0123456789abcdef" for c in value))
+    if (not digest(expected_checkpoint_sha256)
+            or type(x1_bundle) is not dict or type(xwing_bundle) is not dict):
+        return held
+    x1=assess_matched_qad_cpu_bundle(
+        x1_bundle,expected_checkpoint_sha256=expected_checkpoint_sha256)
+    if x1["decision"]!="PASS_RESEARCH_ONLY":return held
+    x=xwing_bundle
+    expected={
+        "schema":"lfm3.xwing.same-qad.cpu-five.v2",
+        "node":"xwing",
+        "model":"LFM3-1.7B-QAD-Q4_0.gguf",
+        "expected_sha256":expected_checkpoint_sha256,
+        "observed_sha256":expected_checkpoint_sha256,
+        "model_bytes":1049615680,
+        "gpu_layers_requested":0,
+        "offload_device_selection":"none",
+        "new_service_binding":"127.0.0.1:19183",
+        "requested_generations":5,
+        "attempted_generations":5,
+        "decision":"PASS_RESEARCH_ONLY",
+        "temporary_child_stopped":True,
+        "temporary_log_removed":True,
+        "port_closed_after_cleanup":True,
+        "accelerator_verified":False,
+        "independent_measurement_witness":False,
+        "production_authorized":False,
+        "credentials_read":False,
+        "existing_services_modified":False,
+    }
+    if any(type(x.get(k)) is not type(v) or x.get(k)!=v
+           for k,v in expected.items()):
+        return held
+    for key,minimum in (("memory_before",int(5.5*1024*1024)),
+                        ("memory_after",4*1024*1024)):
+        d=x.get(key)
+        if (type(d) is not dict or type(d.get("MemAvailable")) is not int
+                or d["MemAvailable"]<minimum):
+            return held
+    for key,limits in (("psi_before",{"memory":0.1,"cpu":0.8}),
+                       ("psi_after",{"memory":0.2})):
+        d=x.get(key)
+        if type(d) is not dict:return held
+        for metric,maxval in limits.items():
+            value=d.get(metric)
+            if (type(value) not in (int,float) or not isfinite(value)
+                    or value<0 or value>maxval):
+                return held
+    def expected_request_hash(alias):
+        body={"model":alias,
+              "messages":[{"role":"user","content":"Respond with exactly READY."}],
+              "temperature":0,"max_tokens":24,"stream":False,
+              "chat_template_kwargs":{"enable_thinking":False}}
+        raw=json.dumps(body,sort_keys=True,separators=(",",":"),
+                       ensure_ascii=True,allow_nan=False).encode()
+        return hashlib.sha256(raw).hexdigest()
+    a_alias="lfm3-qad-x1-cpu-research"
+    b_alias="lfm3-qad-xwing-cpu-research"
+    if (x1_bundle.get("workload_sha256")!=expected_request_hash(a_alias)
+            or x.get("workload_sha256")!=expected_request_hash(b_alias)):
+        return held
+    rows=x.get("observations")
+    if type(rows) is not list or len(rows)!=5:return held
+    ids=set()
+    decode=[]
+    prefill=[]
+    latencies=[]
+    for row in rows:
+        if type(row) is not dict:return held
+        uid=row.get("observation_id")
+        if (type(uid) is not str or not 1<=len(uid)<=128
+                or uid.strip()!=uid or any(c.isspace() for c in uid)
+                or uid in ids):
+            return held
+        ids.add(uid)
+        if row.get("answer")!="READY" or row.get("finish_reason")!="stop":
+            return held
+        elapsed=row.get("end_to_end_ms")
+        if not _positive(elapsed):return held
+        usage=row.get("usage")
+        timing=row.get("server_timings")
+        if type(usage) is not dict or type(timing) is not dict:return held
+        for key in ("prompt_tokens","completion_tokens","total_tokens"):
+            if type(usage.get(key)) is not int or usage[key]<1:return held
+        if (usage["prompt_tokens"]+usage["completion_tokens"]!=usage["total_tokens"]
+                or usage["completion_tokens"]>24):
+            return held
+        for key in ("prompt_n","predicted_n"):
+            if type(timing.get(key)) is not int or timing[key]<1:
+                return held
+        if (timing["predicted_n"]!=usage["completion_tokens"]
+                or timing["prompt_n"]>usage["prompt_tokens"]):
+            return held
+        for key in ("prompt_ms","predicted_ms","prompt_per_second",
+                    "predicted_per_second"):
+            if not _positive(timing.get(key)):return held
+        decode.append(timing["predicted_per_second"])
+        prefill.append(timing["prompt_per_second"])
+        latencies.append(elapsed)
+    # The backend identity/configuration itself is traced in source and
+    # operator evidence, not authenticated by a self-reported JSON field.
+    alias_neutral={
+        "checkpoint_sha256":expected_checkpoint_sha256,
+        "messages":[{"role":"user","content":"Respond with exactly READY."}],
+        "temperature":0,"max_tokens":24,"stream":False,
+        "chat_template_kwargs":{"enable_thinking":False}}
+    normalized_hash=hashlib.sha256(
+        json.dumps(alias_neutral,sort_keys=True,separators=(",",":"),
+                   ensure_ascii=True,allow_nan=False).encode()).hexdigest()
+    return {
+        "decision":"PASS_RESEARCH_ONLY",
+        "reason":"two_local_cpu_bundles_match_known_workload_structure_only",
+        "same_checkpoint_bytes_reported":True,
+        "same_normalized_workload":True,
+        "normalized_workload_sha256":normalized_hash,
+        "per_node_count":5,
+        "cpu_decode_tps_p50":{"x1-370":x1["server_native_decode_tps_p50"],
+                              "xwing":round(median(decode),3)},
+        "cpu_prefill_tps_p50":{"x1-370":x1["server_native_prefill_tps_p50"],
+                               "xwing":round(median(prefill),3)},
+        "end_to_end_ms_p50":{"x1-370":x1["end_to_end_ms_p50"],
+                             "xwing":round(median(latencies),3)},
+        "accelerator_verified":False,
+        "independent_measurement_witness":False,
+        "production_authorized":False,
+    }
