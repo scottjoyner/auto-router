@@ -282,3 +282,40 @@ resource pressure and incomplete cleanup.
 Raw requests, DRM client IDs, subprocess scripts, and host logs are
 retained exclusively in the x1-370 local research lab and are NOT
 uploaded to this PR or hosted model endpoints.
+
+## Deathstar: exact runtime-reported output layer 24 on Vulkan0
+
+On November 7, 2026, a second tightly controlled, temporary, loopback-
+only Deathstar LFM3-QAD-Q4_0 research stage successfully generated ONE
+READY response (17 prompt + 3 completion tokens, 509.475 ms wall time).
+The same temporary RX480 AMD DRM process/client showed a positive
+95,901,453 ns compute-engine delta inside that request bracket.
+
+At this time llama.cpp 0.7.0-dev verbose startup diagnostics explicitly
+reported output layer 24 assigned to Vulkan0, offloaded 1/25 model
+layers to GPU, final Vulkan0 model buffer 205.09 MiB and Vulkan0
+compute buffer 61.44 MiB. Each layer count appeared TWICE (model
+sizing pass and actual load) but both matched exactly. The strict
+diagnostic aborted with zero requests in the earlier normal-log,
+duplicate-summary and mistakenly over-escaped-regex stages. All four
+temporary stages were fully cleaned up.
+
+The pure assess_deathstar_runtime_layer_placement re-parses allowlisted
+loader lines and cross-checks the requested layer, duplicate counts,
+GPU identity, final model buffer, bounded response, stable AMD DRM
+client, positive compute engine delta, resource gates and shutdown.
+It returns PASS_RUNTIME_REPORTED_OUTPUT_LAYER_RESEARCH_ONLY only on a
+consistent bounded report, and ALWAYS sets independent tensor
+attestation and production authorization to FALSE.
+
+These are a local runtime loader claim and kernel GPU process counter,
+NOT independently signed tensor-kernel execution proof, not full
+model acceleration, not a same-host CPU-vs-GPU speedup or SLO.
+All local request receipts, raw host process IDs and scripts remain
+in the x1-370 research lab, commit 8d62451; no such raw telemetry is
+published or sent to external free model endpoints.
+
+This PR adds only pure synthetic verification source and attack tests.
+Native SGNC custody, physically nonrestorable anti-rollback, provider
+billing proof, real independent execution attestation and production
+release remain HOLD. No production changes, deployment or merge.
