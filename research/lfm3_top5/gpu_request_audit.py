@@ -146,3 +146,116 @@ def assess_deathstar_gpu_request(bundle, *, expected_checkpoint_sha256):
         "independent_gpu_execution_attested":False,
         "production_authorized":False,
     }
+
+
+def assess_deathstar_runtime_layer_placement(bundle, *, expected_checkpoint_sha256):
+    """Check a local llama.cpp startup claim *alongside* an AMD GPU request.
+
+    The startup log is self-reported by the same local runtime and is not a
+    cryptographically independent tensor-kernel trace. This function NEVER
+    grants production authority, independent execution attestation, or a
+    sustained benchmark claim, even if all log lines and counters match.
+    """
+    hold={
+        "decision":"HOLD",
+        "reason":"untrusted_or_missing_layer_placement_evidence",
+        "same_process_request_gpu_compute_observed":False,
+        "runtime_reported_gpu_output_layer":False,
+        "independent_tensor_execution_attested":False,
+        "production_authorized":False,
+    }
+    if type(bundle) is not dict:
+        return hold
+    if bundle.get("schema")!="lfm3.deathstar.vulkan1-request.final-layer-witness.v5":
+        return hold
+    v1=dict(bundle)
+    v1["schema"]="lfm3.deathstar.vulkan1-request.v1"
+    baseline=assess_deathstar_gpu_request(
+        v1,expected_checkpoint_sha256=expected_checkpoint_sha256)
+    if baseline["decision"]!="PASS_CORRELATED_GPU_PROCESS_RESEARCH_ONLY":
+        return hold
+    if bundle.get("runtime_reported_output_layer_gpu") is not True:
+        return hold
+    counts=bundle.get("server_reported_offload_counts")
+    assigned=bundle.get("runtime_reported_assigned_layers")
+    lines=bundle.get("startup_offload_lines")
+    if (type(counts) is not list or not 1<=len(counts)<=4
+            or type(assigned) is not list or not 1<=len(assigned)<=4
+            or type(lines) is not list or not 6<=len(lines)<=48):
+        return hold
+    if any(type(x) is not dict
+           or type(x.get("layers")) is not int or x["layers"]!=1
+           or type(x.get("layers_total")) is not int or x["layers_total"]!=25
+           for x in counts):
+        return hold
+    if any(type(n) is not int or n!=24 for n in assigned):
+        return hold
+    if any(type(line) is not str or not 1<=len(line)<=230
+           or "\n" in line or "\r" in line
+           or any(word in line.lower() for word in
+                  ("api-key","authorization","bearer ","password=","token="))
+           for line in lines):
+        return hold
+
+    # Parse literal allowlisted startup log lines. Reject any contradictory
+    # repeated offload summaries; the runtime can legitimately log an initial
+    # sizing pass and a second final model loading pass.
+    summaries=[]
+    assignments=[]
+    buffers=[]
+    compute_buffers=[]
+    selected_device=False
+    output_claims=0
+    for line in lines:
+        m=re.search(r"load_tensors:\s+offloaded\s+([0-9]+)\s*/\s*([0-9]+)\s+layers\s+to\s+GPU",
+                    line,re.IGNORECASE)
+        if m:summaries.append((int(m.group(1)),int(m.group(2))))
+        m=re.search(r"load_tensors:\s+layer\s+([0-9]+)\s+assigned\s+to\s+device\s+Vulkan0\b",
+                    line,re.IGNORECASE)
+        if m:assignments.append(int(m.group(1)))
+        if re.search(r"load_tensors:\s+offloading\s+output\s+layer\s+to\s+GPU",
+                     line,re.IGNORECASE):
+            output_claims+=1
+        m=re.search(r"Vulkan0\s+model\s+buffer\s+size\s*=\s*([0-9]+(?:\.[0-9]+)?)\s+MiB",
+                    line,re.IGNORECASE)
+        if m:buffers.append(float(m.group(1)))
+        m=re.search(r"Vulkan0\s+compute\s+buffer\s+size\s*=\s*([0-9]+(?:\.[0-9]+)?)\s+MiB",
+                    line,re.IGNORECASE)
+        if m:compute_buffers.append(float(m.group(1)))
+        if (re.search(r"using\s+device\s+Vulkan0\b",line,re.IGNORECASE)
+                and "AMD Radeon RX 480" in line
+                and "0000:01:00.0" in line):
+            selected_device=True
+        # Offload-related claims other than the two permitted types above
+        # must not hide an actual 0/25 or 25/25 conflicting summary.
+    if (len(summaries)!=len(counts) or any(pair!=(1,25) for pair in summaries)
+            or len(assignments)!=len(assigned)
+            or any(a!=24 for a in assignments)
+            or output_claims<1
+            or not selected_device):
+        return hold
+    if (not buffers or not compute_buffers
+            or any(not math.isfinite(n) or n<0 for n in buffers+compute_buffers)
+            or not 100<=buffers[-1]<=900
+            or not 32<=compute_buffers[-1]<=500):
+        return hold
+    reported=bundle.get("runtime_reported_vulkan_model_buffer_mib")
+    if (type(reported) not in (int,float) or not math.isfinite(reported)
+            or abs(reported-buffers[-1])>0.001):
+        return hold
+    return {
+        "decision":"PASS_RUNTIME_REPORTED_OUTPUT_LAYER_RESEARCH_ONLY",
+        "reason":"consistent_runtime_offload_1_of_25_and_same_client_gpu_compute",
+        "same_process_request_gpu_compute_observed":True,
+        "runtime_reported_gpu_output_layer":True,
+        "runtime_reported_offloaded_layers":1,
+        "runtime_reported_model_layers":25,
+        "runtime_reported_assigned_layer":24,
+        "runtime_reported_vulkan_model_buffer_mib":round(buffers[-1],3),
+        "runtime_reported_vulkan_compute_buffer_mib":round(compute_buffers[-1],3),
+        "request_gpu_compute_delta_ns":baseline["compute_engine_delta_ns"],
+        "response_elapsed_ms":baseline["response_elapsed_ms"],
+        "independent_tensor_execution_attested":False,
+        "production_authorized":False,
+        "performance_speedup_established":False,
+    }
