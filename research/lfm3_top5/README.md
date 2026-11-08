@@ -209,3 +209,32 @@ local research lab; the PR includes only a pure validator and
 synthetic fixtures. No changes under src/, provider configuration,
 deployment, credentials or public ingress. Independent physical GPU
 dispatch and SGNC relying-party custody remain HOLD.
+
+## Fleet-wide GPU canary admission matrix (offline, read-only evidence)
+
+The pure gpu_canary_gate.py evaluates sanitized, operator-controlled GPU
+capacity telemetry for x1-370, xwing, and Joyner. It handles the
+xwing Strix Halo gfx1151 unified-memory aperture separately from the
+24GiB AMD-SMI reported shared GPU-addressable pool, and Joyner's
+multiple GPU sysfs cards separately from its discrete R9700 card.
+
+A candidate with apparently idle GPU and adequate capacity is only
+a capacity *candidate*. The function ALWAYS returns HOLD with
+production_authorized=false, operator_authorization_verified=false
+and gpu_token_execution_verified=false; an attacker-controlled JSON
+field cannot invent a physical witness or authorize an inference run.
+
+The real read-only three-node check on Nov. 7, 2026 found **no**
+safe GPU canary candidate:
+- xwing AMD SMI graphics usage reported 100% with three existing
+  model services; no per-model LFM3 dispatch witness.
+- x1-370 reported only about 102MB free graphics VRAM and negligible
+  free swap despite ample general RAM.
+- Joyner had less than 1GiB free system RAM, nearly exhausted swap,
+  and an API-key-file protected existing loopback LFM3 model endpoint.
+
+The live host collector and its raw /proc/DRM telemetry are retained
+ONLY in the local LFM3 research lab. This PR contains the pure
+fail-closed evaluator and public synthetic adversarial tests only.
+No model loads, generation requests, authentication bypass, GPU
+driver changes, provider route changes, or production promotion.
