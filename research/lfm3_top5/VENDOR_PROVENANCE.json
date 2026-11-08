@@ -18,7 +18,10 @@
     "quality_canonical_guard.py": "p4-fleet-benchmark/quality_canonical_guard.py",
     "quality_adjusted_eval.py": "p4-fleet-benchmark/quality_adjusted_eval.py",
     "joyner_gpu_capacity_gate.py": "p4-fleet-benchmark/joyner_gpu_capacity_gate.py",
-    "e2e_replay_comparator.py": "p4-fleet-benchmark/e2e_replay_comparator.py"
+    "e2e_replay_comparator.py": "p4-fleet-benchmark/e2e_replay_comparator.py",
+    "unstructured_triage_audit.py": "p4-fleet-benchmark/unstructured_triage_audit.py",
+    "unstructured_rule_baseline.py": "p4-fleet-benchmark/unstructured_rule_baseline.py",
+    "unstructured_public_fixture.json": "p4-fleet-benchmark/unstructured_public_fixture.json"
   },
   "vendor_sha256": {
     "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
@@ -36,7 +39,10 @@
     "quality_canonical_guard.py": "eb981688197dcf7af93198cd3b1eb2c8f4bf52f5985cc5684df07fcb75c30868",
     "quality_adjusted_eval.py": "a1d2e4759e1aa2fc79765e4c4effbc35d194a9acec140b23c3c89b87f8fb7c63",
     "joyner_gpu_capacity_gate.py": "f63ca88cc7349790247cc6e13711f095c5972415aaec2e0f6e93229a6bafd751",
-    "e2e_replay_comparator.py": "521eda489341dfb4bcfcf55afcc1f782b0bd97c931d01bba24f34c4dc5683cef"
+    "e2e_replay_comparator.py": "521eda489341dfb4bcfcf55afcc1f782b0bd97c931d01bba24f34c4dc5683cef",
+    "unstructured_triage_audit.py": "583bd1c50dfcaf1a5fe79cfa21c21367ae9e962513d0cb6a1745959e37b9bbdf",
+    "unstructured_rule_baseline.py": "30e17cb1e6f7b86d8b5d70b1823cf4d83f0862148f660f5322c2428bed00d8ee",
+    "unstructured_public_fixture.json": "09cfab8ce640a56c8ffb4977d5b2583c48913b63f03ee3de8dafd74b55e2a074"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106",
   "adapted_vendor_files": {
@@ -46,6 +52,9 @@
     "e2e_replay_comparator.py": "Import paths only adapted to research.lfm3_top5, including internal exact_task_oracle import; source logic unchanged"
   },
   "supplemental_source_commits": {
-    "e2e_replay_comparator.py": "f65b02c"
+    "e2e_replay_comparator.py": "f65b02c",
+    "unstructured_triage_audit.py": "c321779",
+    "unstructured_rule_baseline.py": "c321779",
+    "unstructured_public_fixture.json": "c321779"
   }
 }
