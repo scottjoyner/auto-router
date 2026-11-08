@@ -408,3 +408,56 @@ logs stay in the local x1-370 laboratory at commit 81486a6.
 No production src/config/deploy changes, no keys, no inference
 provider routes, no releases, no global trace privileges modified.
 **KEEP PRODUCTION HOLD.**
+
+## November 8 longer 112-token mirrored block comparison (research-only)
+
+Deathstar's exact pinned LFM3-1.7B-QAD-Q4_0 GGUF (full SHA-256
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452)
+was exercised using the SAME installed llama.cpp binary, model alias,
+loopback-only port 19188, 4 CPU threads, ctx2048, one request slot,
+sampling settings and exact public integer-sequence prompt across all
+three modes. All six stages used the SAME full request SHA-256, whose
+model alias never differed.
+
+Fixed mirrored, NOT randomized, block order:
+CPU / Vulkan8 / Vulkan6 / Vulkan6 / Vulkan8 / CPU.
+Each block launched an ephemeral server, produced 3 full 112-token
+completions, and verified termination/log/port cleanup.
+Thus **six 112-token generations per mode, eighteen total**.
+
+Observed native median decode tok/s and HTTP latency in milliseconds:
+- CPU no-offload: 23.127 tok/s, 5238.037ms
+- Vulkan6 (six reported model layers): 29.135 tok/s, 4216.546ms
+- Vulkan8 (eight reported model layers): 30.271 tok/s, 4017.149ms
+
+Under this bounded, longer generation workload Vulkan8 was
+approximately 31% higher in observed median native decode and
+approximately 23% lower in observed median HTTP latency than CPU.
+All GPU requests had positive same-process/same-client AMD DRM
+compute delta and loader-claimed exact layer placement. No tensor
+kernel trace was independently signed.
+
+Important: The CPU no-offload runtime still opened an AMD DRM
+render client even with --device none --n-gpu-layers 0. Its GPU
+compute counter was unavailable, so absence of GPU compute was NOT
+independently demonstrated. Two pre-generation test scripts correctly
+HOLD on unexpected/missing counter evidence before a third source
+retained the missing counter as UNKNOWN. All three temporary CPU
+attempts cleaned up completely.
+
+Local raw receipts, failed pre-generation diagnostics, and launch
+scripts are retained ONLY on x1-370 in research lab commit 3c6fdcd.
+This PR adds the pure offline long_counterbalance_audit.py and
+synthetic adversarial tests only, not host telemetry or real request
+IDs. The assessor checks six receipts, exact mode/order/model/prompt
+hash, 112 native tokens per request, positive GPU engine deltas,
+precise loader offload counts, memory PSI, VRAM floor, and cleanup.
+It always DENIES statistical superiority, production authorization,
+independent tensor execution attestation, and independently proven
+zero GPU compute in CPU mode.
+
+This fixed two-block session is more relevant to decoding than
+the prior 3-token microbench, but still NOT a statistical population
+benchmark, multi-day stability claim or production route approval.
+Full production HOLD, no PR merge/deploy, no secret reading or
+trace privilege changes.
