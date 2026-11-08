@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "ffa57cd",
+  "source_lab_commit": "933ef5e",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -15,7 +15,8 @@
     "long_counterbalance_audit.py": "p4-fleet-benchmark/long_counterbalance_audit.py",
     "random_mixed_audit.py": "p4-fleet-benchmark/random_mixed_audit.py",
     "quality_task_audit.py": "p4-fleet-benchmark/quality_task_audit.py",
-    "quality_canonical_guard.py": "p4-fleet-benchmark/quality_canonical_guard.py"
+    "quality_canonical_guard.py": "p4-fleet-benchmark/quality_canonical_guard.py",
+    "quality_adjusted_eval.py": "p4-fleet-benchmark/quality_adjusted_eval.py"
   },
   "vendor_sha256": {
     "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
@@ -29,12 +30,14 @@
     "depth_sweep_audit.py": "5b165fbba841da35f03bcc4e3897b2a8c5280925d7718e0b5dd3d285f508ee29",
     "long_counterbalance_audit.py": "3ae65d6daa2d1a605926c60caa05e1bc8a132a6e077a12eaf45586914182f7f8",
     "random_mixed_audit.py": "dd85ecdf074a3565d1bfa09b3f2505babddb67c474663546c372b43f5a22f9c3",
-    "quality_task_audit.py": "fef899409054ee848baf05727839ae722cbe8733ee9ac7eddb9366d291366361",
-    "quality_canonical_guard.py": "eb981688197dcf7af93198cd3b1eb2c8f4bf52f5985cc5684df07fcb75c30868"
+    "quality_task_audit.py": "bc1704a7af7dfdfc8253197aca11c55060c0f5f1500b8b640abb96e1434146dc",
+    "quality_canonical_guard.py": "eb981688197dcf7af93198cd3b1eb2c8f4bf52f5985cc5684df07fcb75c30868",
+    "quality_adjusted_eval.py": "a1d2e4759e1aa2fc79765e4c4effbc35d194a9acec140b23c3c89b87f8fb7c63"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106",
   "adapted_vendor_files": {
     "deathstar_pair_audit.py": "only import path adjusted: gpu_request_audit -> research.lfm3_top5.gpu_request_audit; no code/logic changes",
-    "depth_sweep_audit.py": "only import paths adjusted to research.lfm3_top5.deathstar_pair_audit/gpu_request_audit; pure logic unchanged"
+    "depth_sweep_audit.py": "only import paths adjusted to research.lfm3_top5.deathstar_pair_audit/gpu_request_audit; pure logic unchanged",
+    "quality_adjusted_eval.py": "Import-path only: lab quality_task_audit / quality_canonical_guard -> research.lfm3_top5 modules; logic unchanged"
   }
 }
