@@ -47,7 +47,7 @@ def sample(*,correct=True):
     "timings":{"predicted_n":55,
         "prompt_ms":105.0,"predicted_ms":2200.0,
         "prompt_per_second":100.0,
-        "predicted_per_second":25.0},
+        "predicted_per_second":54*1000/2200},
     "wall_ms":2450.0,
     "pid":28000+index,
     "process_start_ticks":1000000+index*100,
@@ -114,6 +114,22 @@ class QualityTaskAudit(unittest.TestCase):
   self.assertTrue(exact_task_oracle("gate",canonical(ORACLES["gate"]["expected"])))
   self.assertFalse(exact_task_oracle("gate",canonical({"decision":"PASS"})))
   self.assertFalse(exact_task_oracle("nodes",'{"total":NaN}'))
+
+ def test_duplicate_json_keys_not_accepted_even_if_last_value_is_correct(self):
+  original=canonical(ORACLES["gate"]["expected"])
+  malicious=original[:-1]+',"decision":"HOLD"}'
+  self.assertFalse(exact_task_oracle("gate",malicious))
+  self.assertFalse(exact_task_oracle("gate",original.replace(
+   '"decision":"HOLD"', '"decision":"PASS","decision":"HOLD"')))
+  self.assertFalse(exact_task_oracle("gate",original.replace(
+   '"decision":"HOLD"', '"decision":NaN,"decision":"HOLD"')))
+
+ def test_boolean_numeric_and_nonobject_json_fail(self):
+  exact=ORACLES["nodes"]["expected"]
+  forged=dict(exact,total=True)
+  self.assertFalse(exact_task_oracle("nodes",canonical(forged)))
+  self.assertFalse(exact_task_oracle("nodes",'["not a record"]'))
+  self.assertFalse(exact_task_oracle("nodes", "null"))
 
  def test_answer_hash_forgery_denied(self):
   m,rs=sample()
@@ -212,6 +228,14 @@ class QualityTaskAudit(unittest.TestCase):
   self.assertEqual(assess_full_matrix(m,rs)["decision"],"HOLD")
   m,rs=sample()
   rs[("vulkan8",2,"nodes")]["production_authorized"]=True
+  self.assertEqual(assess_full_matrix(m,rs)["decision"],"HOLD")
+
+ def test_native_decode_speed_must_match_emission_intervals(self):
+  m,rs=sample()
+  rs[("vulkan8",1,"nodes")]["requests"][0]["timings"]["predicted_per_second"]=10000.
+  self.assertEqual(assess_full_matrix(m,rs)["decision"],"HOLD")
+  m,rs=sample()
+  rs[("cpu",1,"gate")]["requests"][1]["timings"]["predicted_ms"]=5000.
   self.assertEqual(assess_full_matrix(m,rs)["decision"],"HOLD")
 
  def test_untrusted_inputs_fail_closed(self):
