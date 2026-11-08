@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "933ef5e",
+  "source_lab_commit": "c6f867c",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -16,7 +16,8 @@
     "random_mixed_audit.py": "p4-fleet-benchmark/random_mixed_audit.py",
     "quality_task_audit.py": "p4-fleet-benchmark/quality_task_audit.py",
     "quality_canonical_guard.py": "p4-fleet-benchmark/quality_canonical_guard.py",
-    "quality_adjusted_eval.py": "p4-fleet-benchmark/quality_adjusted_eval.py"
+    "quality_adjusted_eval.py": "p4-fleet-benchmark/quality_adjusted_eval.py",
+    "joyner_gpu_capacity_gate.py": "p4-fleet-benchmark/joyner_gpu_capacity_gate.py"
   },
   "vendor_sha256": {
     "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
@@ -32,12 +33,13 @@
     "random_mixed_audit.py": "dd85ecdf074a3565d1bfa09b3f2505babddb67c474663546c372b43f5a22f9c3",
     "quality_task_audit.py": "bc1704a7af7dfdfc8253197aca11c55060c0f5f1500b8b640abb96e1434146dc",
     "quality_canonical_guard.py": "eb981688197dcf7af93198cd3b1eb2c8f4bf52f5985cc5684df07fcb75c30868",
-    "quality_adjusted_eval.py": "a1d2e4759e1aa2fc79765e4c4effbc35d194a9acec140b23c3c89b87f8fb7c63"
+    "quality_adjusted_eval.py": "a1d2e4759e1aa2fc79765e4c4effbc35d194a9acec140b23c3c89b87f8fb7c63",
+    "joyner_gpu_capacity_gate.py": "f63ca88cc7349790247cc6e13711f095c5972415aaec2e0f6e93229a6bafd751"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106",
   "adapted_vendor_files": {
     "deathstar_pair_audit.py": "only import path adjusted: gpu_request_audit -> research.lfm3_top5.gpu_request_audit; no code/logic changes",
     "depth_sweep_audit.py": "only import paths adjusted to research.lfm3_top5.deathstar_pair_audit/gpu_request_audit; pure logic unchanged",
-    "quality_adjusted_eval.py": "Import-path only: lab quality_task_audit / quality_canonical_guard -> research.lfm3_top5 modules; logic unchanged"
+    "quality_adjusted_eval.py": "only two import paths adapted to research.lfm3_top5 package"
   }
 }
