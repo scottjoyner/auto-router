@@ -317,3 +317,84 @@ def classify_existing_gpu_context(evidence):
     result["compute_delta_ns"] = b[2] - a[2]
     result["reason"] = "gpu_context_present_unproven_tokens"
     return result
+
+
+def assess_gpu_request_correlation(bundle, *, expected_checkpoint_sha256):
+    """Identify an *untrusted* one-request GPU correlation candidate.
+
+    All inputs are caller-supplied, unsigned, and not independently witnessed.
+    Even when temporal evidence matches a stable GPU process and usage receipt,
+    this function *always* returns HOLD, never verified acceleration/admission.
+    """
+    result = {
+        "decision": "HOLD",
+        "reason": "missing_or_untrusted_gpu_request",
+        "gpu_context_observed": False,
+        "bounded_request_contract_satisfied": False,
+        "temporal_gpu_activity_candidate": False,
+        "compute_delta_ns": 0,
+        "accelerator_verified": False,
+        "production_authorized": False,
+    }
+
+    def is_hash(value):
+        return (type(value) is str and len(value) == 64
+                and all(char in "0123456789abcdef" for char in value))
+
+    if type(bundle) is not dict or not is_hash(expected_checkpoint_sha256):
+        return result
+    context, receipt = bundle.get("context"), bundle.get("request")
+    if type(context) is not dict or type(receipt) is not dict:
+        return result
+    passive = classify_existing_gpu_context(context)
+    result["gpu_context_observed"] = passive["gpu_context_observed"]
+    result["compute_delta_ns"] = passive["compute_delta_ns"]
+    if not passive["gpu_context_observed"]:
+        result["reason"] = "unstable_or_missing_gpu_process"
+        return result
+    before = context["before"]
+    usage = receipt.get("usage")
+    if type(usage) is not dict:
+        return result
+    if (receipt.get("schema") != "lfm3.joyner.one-request.correlation.v1"
+            or receipt.get("model") != before["alias"]
+            or receipt.get("checkpoint_sha256") != expected_checkpoint_sha256
+            or type(receipt.get("server_request_id")) is not str
+            or not 1 <= len(receipt["server_request_id"]) <= 128
+            or receipt["server_request_id"].strip() != receipt["server_request_id"]
+            or any(ch.isspace() for ch in receipt["server_request_id"])
+            or type(receipt.get("server_pid")) is not int
+            or receipt["server_pid"] != before["pid"]
+            or type(receipt.get("process_starttime_ticks")) is not int
+            or receipt["process_starttime_ticks"] != before["process_starttime_ticks"]
+            or type(receipt.get("generations_attempted")) is not int
+            or receipt["generations_attempted"] != 1
+            or type(receipt.get("requested_max_tokens")) is not int
+            or not 1 <= receipt["requested_max_tokens"] <= 24
+            or receipt.get("finish_reason") != "stop"
+            or receipt.get("response_text") != "READY"
+            or receipt.get("credentials_retained") is not False
+            or receipt.get("externally_authenticated_witness") is not False):
+        return result
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        if type(usage.get(key)) is not int or usage[key] < 1:
+            return result
+    if (usage["prompt_tokens"] + usage["completion_tokens"] != usage["total_tokens"]
+            or usage["completion_tokens"] > receipt["requested_max_tokens"]):
+        return result
+    keys=("collector_before_ns", "request_started_ns",
+          "request_finished_ns", "collector_after_ns")
+    stamps=[receipt.get(key) for key in keys]
+    if (any(type(value) is not int or value <= 0 or value >= 2**63
+            for value in stamps)
+            or not all(a < b for a,b in zip(stamps, stamps[1:]))
+            or stamps[-1] - stamps[0] > 10_000_000_000):
+        return result
+    result["bounded_request_contract_satisfied"] = True
+    result["temporal_gpu_activity_candidate"] = result["compute_delta_ns"] > 0
+    result["reason"] = (
+        "candidate_only_unsigned_uncorrelated_custody"
+        if result["temporal_gpu_activity_candidate"]
+        else "no_gpu_engine_change_during_request"
+    )
+    return result
