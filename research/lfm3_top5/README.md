@@ -743,3 +743,79 @@ Action: use deterministic source-only for these source-complete
 tasks unless new representative task evidence demonstrates
 incremental model utility. Draft research PR #148 remains
 unmerged and production HOLD.
+
+## November 8 — narrative-evidence LFM3 exact-output canary
+
+A bounded, controlled Deathstar LFM3-QAD-Q4_0 experiment used six
+FICTIONAL short incident narratives (TLS SNI, node authentication
+contract, incomplete GPU tensor witness, missing TestFlight-linked
+build, stopped database service, and insufficient evidence). The
+model had to select a specific allowed issue category and a verified
+evidence marker E1/E2/E3, using the last verified observation rather
+than an earlier operator guess. The test text listed ALL six allowed
+category codes and explicitly identified E3 as final verified
+evidence; these prompts are easier than unguided real incidents.
+
+One exploratory six-answer CPU block was excluded. Four freshly
+preregistered blocks ran in fixed mirrored order CPU1/Vulkan8-1/
+Vulkan8-2/CPU2; six distinct authored synthetic scenarios, repeated
+twice per CPU/GPU mode, 24 primary requests total. Same fully
+SHA256-pinned 1,049,615,680-byte QAD GGUF, same installed llama.cpp
+binary, single localhost stage 127.0.0.1:19191, ctx2048, 4 CPU
+threads, 1 slot, temp0, 96-token bounded JSON responses.
+**Both modes achieved 12/12 FULL exact JSON category AND evidence
+tags on the primary 24 requests.** The distinct scenario count is
+SIX, not 24 independent held-out cases.
+
+Measured IN THE SAME REQUEST SESSION on Deathstar:
+* CPU (0 requested GPU layers): 3,275.465 ms median HTTP + safety
+  checks + local response validation; 12/12 exact,
+  0.303152 exact-correct replies per observed request second.
+* RX480 Vulkan0 (8 reported offloaded model layers):
+  1,683.979 ms median corresponding request path; 12/12 exact,
+  0.601716 exact-correct replies per observed request second.
+The measured interval excludes model startup, full GGUF hash,
+external source custody, remote network, queue, energy and
+real application dispatch. GPU model-layer loader counts and
+source-local DRM compute deltas are not independent tensor-kernel
+attestation. No proof CPU mode performed zero incidental GPU work.
+This is one local session, not a robust hardware or accuracy
+confidence interval and NOT production throughput/SLO.
+
+An important ADVERSARIAL comparator was added AFTER seeing these
+six notes: pure unstructured_rule_baseline.py implements simple
+literal E3-keyword patterns and also matches all SIX seen cases
+using approximately 8 microseconds median local classification.
+This is post-hoc, NON-BLINDED and OVERFITTED to the authored
+fixture: it is not an independently devised fair baseline and
+must not be deployed as a general classifier. Because this simple
+rule handles the same seen cases, the experiment **DOES NOT prove
+unique or incremental LFM3 utility**. Both model and baseline
+remain research-only and always deny production authority.
+
+Vendor artifacts:
+- Pure unstructured_triage_audit.py checks the frozen authored
+  fixture SHA-256, source/preregistration digest, exact full
+  response JSON oracle, 24 request IDs, process and GPU identity,
+  pressure/VRAM resource gates and total child/log/port cleanup.
+  Wrong model answers are quality failures, while malformed
+  receipts, unsafe capacity or missing custody are HOLD.
+- Pure unstructured_rule_baseline.py demonstrates a narrow
+  post-hoc classifier that abstains on missing/ambiguous evidence,
+  never promotes inferred release/production rights.
+- One fictional public unstructured_public_fixture.json and
+  synthetic adversarial test suites; NO raw host execution
+  telemetry, host request IDs, model outputs or runtime scripts.
+- Local-only original lab commits bd07a0c and c321779
+  retain preregistration, six raw exploratory model responses,
+  24 primary synthetic receipts and evidence SHA-256.
+- source_lab_commit for the ORIGINAL 16 vendored files remains
+  pinned at c6f867c. New three entries use
+  supplemental_source_commits=c321779.
+
+NEXT GATE: separately authored, prospective held-out narrative
+cases; freeze a deterministic baseline BEFORE scoring. Include
+ambiguous evidence and temporal contradictions. Require independent
+scoring and custody before any model-assisted production admission.
+All release/custody/billing/GPU-kernel gates remain HOLD. PR #148
+remains draft/unmerged. No src/config/deploy code touched.
