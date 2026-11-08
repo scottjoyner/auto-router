@@ -143,3 +143,32 @@ for isolated research based on 162 passing independent local tests,
 NOT as a completed $0 delegated run or real provider billing proof.
 The coordinator permission experiment itself remains in the local lab,
 not installed in Auto-Router production.
+
+## Three-node pinned LFM3-QAD-Q4_0 file and matched CPU research baseline
+
+Full file SHA-256 independently computed on x1-370, xwing, and Joyner:
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452
+(1,049,615,680 bytes). This verifies exact model-file identity, not
+independent model provenance or production attestation.
+
+An explicitly bounded, temporary loopback-only x1-370 CPU stage with
+the QAD-Q4_0 model and n-gpu-layers=0 produced exactly five READY
+stops, with median native server decode 47.360 tokens/s and median
+end-to-end latency 198.863 ms. The temporary server was terminated
+and its local port independently verified closed. This is not an
+SLO or sustained benchmark. The original x1-370 Q4_K_M CPU stage
+used a DIFFERENT quantization/context/thread count, so its numbers
+must not be treated as an apples-to-apples comparison.
+
+The pure assess_matched_qad_cpu_bundle checker validates self-reported
+five-request consistency and cleanup *only* against a separately
+supplied checkpoint digest; frozen public synthetic attack cases run
+in the non-deploy research workflow. It can at most return
+PASS_RESEARCH_ONLY and always denies accelerator or production
+authorization. Raw host observations and temporary server log stay
+in the private local lab, not this PR.
+
+Joyner remains held on authenticated API client access and low RAM/
+swap; xwing remains held on competing GPU workload and no pre-existing
+LFM3 service. No GPU LFM3 inference, independent measurement custody,
+native SGNC anti-rollback, or production release has been proven.
