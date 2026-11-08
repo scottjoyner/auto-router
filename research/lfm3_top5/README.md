@@ -528,3 +528,66 @@ production_authorized=false.
 
 Keep PR #148 draft and unmerged. All production routes, deployment
 permissions, signing and SGNC anti-rollback boundaries remain HOLD.
+
+## November 8 exact-response quality gate: LFM3 fleet ops tasks
+
+Deathstar RX480 LFM3-QAD-Q4_0 synthetic structured-output research:
+12 preregistered blocks, 24 public synthetic inference requests,
+CPU/no offload, Vulkan6 and Vulkan8; two tasks x two independent
+stage starts per mode; fixed seed 202611081402 shuffled modes within
+task groups. Same pinned full GGUF SHA-256
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452.
+All 24 model outputs used valid JSON and successful source-side
+generation, but **ZERO of 24 exactly matched the required task
+schema/content** when compared as fully parsed canonical JSON.
+
+Task A, fictional release gates: correct HOLD decision was often
+returned, but 0/12 output arrays had exact names and memberships;
+some responses invented labels (e.g. PASS) or changed gate naming.
+Task B, fictional node inventory: 0/12 exact responses because list
+ordering violated the required sorted-array contract. Importantly,
+all 12 node outputs DID have correct set memberships. We validated
+this only after comparison to the COMPLETE synthetic source snapshot
+and recovered correct sorted arrays via deterministic guard, not by
+guessing or inventing data.
+
+Research-only code:
+- quality_task_audit.py checks the preregistration, pinned model
+  and script SHA, true full public synthetic response digest, exact
+  parsed JSON answer versus frozen oracle, token accounting, precise
+  GPU layer-count/engine counters, host resource gates, unique PIDs
+  and full ephemeral stage cleanup. A capture can PASS with zero
+  exact-correct outputs, and NEVER claims the model useful merely
+  because it generated tokens quickly.
+- quality_canonical_guard.py has two pure, caller-source-grounded
+  paths: node_summary_guard can sort model output only if EVERY node,
+  status membership and total matches the complete caller-owned
+  input snapshot (no missing, repeated, unknown or reassigned nodes).
+  release_gate_guard computes a canonical gate decision directly
+  from every required caller-owned gate state, marking model text
+  advisory and refusing to fix fabricated labels or omitted gates.
+  It rejects duplicate JSON keys, invalid statuses, NaN/non-JSON,
+  wrong bool/int types and unsupported source shapes.
+
+Both guards remain deploy-inert and ALWAYS return
+production_authorized=false and source_independently_signed=false.
+The underlying source snapshots were synthetic and not independently
+signed release witnesses. Real protected Deathstar inference stage
+and existing model servers were untouched. The CPU no-offload mode
+still has unknown zero-GPU compute (DRM counter unavailable), and
+per-request GPU metrics are local operator evidence rather than
+signed kernel-specific dispatch.
+
+The local lab retains all 24 synthetic host receipt JSONs and one
+pre-registered-excluded CPU calibration, lab commit ffa57cd
+(documented source experiment first committed at de3953a). The
+GitHub research PR carries ONLY the pure checkers, 36 frozen
+adversarial test cases, provenance and summaries. No raw live host
+process IDs, timing receipts, full model answers, secrets or
+credentials are published.
+
+**Use-case gate:** exact model-produced structured output FAIL;
+source-grounded node normalization PASS for these synthetic records;
+model-derived release authority FAIL/HOLD; independently attested
+GPU tensor execution HOLD; statistical generalization HOLD;
+PRODUCTION ROUTING AND RELEASE HOLD.
