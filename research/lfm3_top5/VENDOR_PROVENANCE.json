@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "a19bf63",
+  "source_lab_commit": "81486a6",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -10,7 +10,8 @@
     "eval_gate.py": "p5-eval-gates/eval_gate.py",
     "gpu_canary_gate.py": "p4-fleet-benchmark/gpu_canary_gate.py",
     "gpu_request_audit.py": "p4-fleet-benchmark/gpu_request_audit.py",
-    "deathstar_pair_audit.py": "p4-fleet-benchmark/deathstar_pair_audit.py"
+    "deathstar_pair_audit.py": "p4-fleet-benchmark/deathstar_pair_audit.py",
+    "depth_sweep_audit.py": "p4-fleet-benchmark/depth_sweep_audit.py"
   },
   "vendor_sha256": {
     "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
@@ -20,10 +21,12 @@
     "eval_gate.py": "1522be69b8210200769f420f325293114211abe44e4258aaa4e8b9abe59f6020",
     "gpu_canary_gate.py": "4894fb2f2064e52080357cf9e686c0aec47c5f3da338679f01e9c1a3a1d1eb46",
     "gpu_request_audit.py": "13ddb471ec9120f8bf8df69cc6db3022f70492a6e800d2ad9d74fdab4c6063b0",
-    "deathstar_pair_audit.py": "664da1362945c7cb38dc6545906e07a8efbe13a5e1656be82925a5c5d0d6894b"
+    "deathstar_pair_audit.py": "664da1362945c7cb38dc6545906e07a8efbe13a5e1656be82925a5c5d0d6894b",
+    "depth_sweep_audit.py": "5b165fbba841da35f03bcc4e3897b2a8c5280925d7718e0b5dd3d285f508ee29"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106",
   "adapted_vendor_files": {
-    "deathstar_pair_audit.py": "only import path adjusted: gpu_request_audit -> research.lfm3_top5.gpu_request_audit; no code/logic changes"
+    "deathstar_pair_audit.py": "only import path adjusted: gpu_request_audit -> research.lfm3_top5.gpu_request_audit; no code/logic changes",
+    "depth_sweep_audit.py": "only import paths adjusted to research.lfm3_top5.deathstar_pair_audit/gpu_request_audit; pure logic unchanged"
   }
 }
