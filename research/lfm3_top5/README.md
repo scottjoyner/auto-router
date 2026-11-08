@@ -591,3 +591,61 @@ source-grounded node normalization PASS for these synthetic records;
 model-derived release authority FAIL/HOLD; independently attested
 GPU tensor execution HOLD; statistical generalization HOLD;
 PRODUCTION ROUTING AND RELEASE HOLD.
+
+## November 8 quality-adjusted research-only useful-output rates
+
+Follow-up to issue #149 (exact LFM3 fleet-task JSON quality 0/24).
+The same preregistered 24 local Deathstar synthetic fleet-task receipts
+were re-audited OFFLINE. No additional GPU requests, production routes,
+protected services or credentials were touched. Frozen source
+snapshots were caller-controlled synthetic inputs without independent
+signer custody. A complete source-verified node membership check
+establishes that all 12 node-health responses can be deterministically
+sorted. The 12 release-gate responses remain inaccurate/incomplete:
+the canonical HOLD result comes directly from source gate records,
+never from model assertions.
+
+STRICT FULL-OBJECT MODEL SUCCESS PER REQUEST:
+    CPU/no-offload: 0/8;
+    Vulkan0 6/25 layers: 0/8;
+    Vulkan0 8/25 layers: 0/8.
+Thus STRICT MODEL-CORRECT completions per observed HTTP second
+are zero for all three modes and both use cases.
+
+SOURCE-VERIFIED AND DETERMINISTICALLY NORMALIZED NODES:
+    CPU: 4/4; 12.941 summed model HTTP seconds => 0.309/s
+    Vulkan6: 4/4; 8.966 summed HTTP seconds => 0.446/s
+    Vulkan8: 4/4; 8.903 summed HTTP seconds => 0.449/s.
+The denominator is sum of per-request model HTTP times ONLY; it
+EXCLUDES process startup, source validation, normalization, external
+network, queue, energy, real deployment success and contention.
+These are optimistic research-only accounting ratios, NOT a
+production throughput/SLO or statistically reliable hardware rank.
+No verified model-produced gate completions exist; source-derived
+HOLD does not count as a model completion.
+
+Pure quality_adjusted_eval.py composes frozen quality_task_audit
+and quality_canonical_guard, preserves the exact preregistration
+and source snapshots and forbids promoting wrong-but-fast outputs.
+The exact-JSON oracle is also hardened to reject duplicate JSON
+keys, NaN/Infinity, nonobject types and bool/int confusion.
+Native llama.cpp decode tok/s MUST correspond to its observed
+(n-1) emitted token intervals / predicted_ms and fit the
+observed HTTP elapsed duration. This rejects fabricated high
+speed claims even when token accounting appears valid.
+
+Source-only tests reject stale/fake counters, altered or absent
+source gates, wrong node membership, changed request hashes,
+malformed answer JSON, inconsistent native timing, pressure/VRAM
+violations, missing receipts and model-manufactured quality passes.
+All results always return production_authorized=false,
+independent_gpu_kernel_attestation=false,
+source_custody_independently_signed=false,
+free_provider_billing_verified=false and
+significant_performance_advantage_established=false.
+
+The raw host-specific input receipts and final ledger remain local
+to x1-370 lab commit 933ef5e. This PR publishes ONLY the pure
+source/tests, synthetic fixtures, sanitized summary and pinned
+vendor source SHA-256 fingerprints; NO raw host receipts or
+user credentials are included. PRODUCTION ROUTING HOLD.
