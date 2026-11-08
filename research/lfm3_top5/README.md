@@ -461,3 +461,70 @@ the prior 3-token microbench, but still NOT a statistical population
 benchmark, multi-day stability claim or production route approval.
 Full production HOLD, no PR merge/deploy, no secret reading or
 trace privilege changes.
+
+## November 8 seeded within-group randomized mixed-length Deathstar research
+
+Single-host Deathstar RX480 LFM3 QAD-Q4_0 pinned checkpoint
+SHA-256 43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452.
+The source preregistered Python random seed 202611081321 BEFORE executing
+the 12 primary stages. Four groups executed in fixed
+short round1 / long round1 / long round2 / short round2 order, with
+CPU/no-offload, Vulkan0 six layers, and Vulkan0 eight layers randomly
+shuffled WITHIN each group. It was not fully randomized over day/session.
+
+Each of 12 ephemeral loopback-only stages used the same pre-existing
+llama.cpp binary, model alias, threads 4, ctx2048, sampling,
+model checksum and port 19189. The short input was 124 characters/
+38 prompt tokens with exactly 64 output tokens; long input 1456
+characters/283 prompt tokens with exactly 160 output tokens.
+All modes in each workload used identical exact request SHA-256.
+Each block executed TWO distinct completions (24 primary total),
+with TWO separately started processes per mode/workload cell.
+Every stage passed source-side model hash, correct initial integer-list
+response format, token counts, unchanged memory PSI and >=1.5GiB
+free VRAM gates, positive source-reported same-process AMD GPU engine
+delta for each GPU request, matching 6/25 or 8/25 Vulkan loader
+offload records, and complete child/log/port cleanup.
+
+Observed median native decode (tok/s) and median HTTP latency (ms):
+    38 prompt / 64 completion tokens:
+      CPU 23.767 / 3090.047, GPU6 30.802 / 2443.879,
+      GPU8 32.299 / 2309.800
+    283 prompt / 160 completion tokens:
+      CPU 23.254 / 9690.087, GPU6 27.226 / 7054.395,
+      GPU8 30.629 / 6498.854
+
+GPU8 had highest observed native decode and lowest HTTP latency in
+both of these workload conditions. Only FOUR responses per cell,
+one session, fixed group order and independently UNSIGNED local
+operator evidence; no statistical population claim, confidence
+bound, independent kernel/tensor trace or production route authorization.
+
+Three initial CPU prompt pilots were EXCLUDED from the randomized
+results. The first pilot technically met token accounting but emitted
+think-style text, not the requested integer list; the revised
+source added a strict integer-prefix quality gate. The other two
+pilots validated revised short/long tasks but were run before randomization.
+All pilots cleaned up their own child/log/port.
+
+The source verified only the initial numeric-output prefix plus
+full response SHA-256; it did NOT independently validate every
+integer past the prefix. Source-computed per-request DRM compute deltas
+were not paired with externally signed fdinfo receipts; the CPU mode
+GPU compute counter is UNKNOWN, not verified zero. No credential or
+production-state access was made. All raw host JSONs, actual process IDs
+and the launch scripts stay local in x1-370 research commit 936f1e1.
+
+Pure random_mixed_audit.py checks fixed-seed preregistration,
+mode and workload order, public request hashes, 12 stage / 24 response
+counts, loader GPU depth, process/client continuity, memory/VRAM
+gates, output prefix, exact token counts and cleanup. Synthetic
+adversarial tests block forged results, replay, altered prompts,
+unsafe pressure, misleading think output and gate weakening.
+Research PASS ALWAYS sets independent_kernel_execution_attested=false,
+cpu_zero_gpu_activity_verified=false,
+significant_superiority_established=false,
+production_authorized=false.
+
+Keep PR #148 draft and unmerged. All production routes, deployment
+permissions, signing and SGNC anti-rollback boundaries remain HOLD.
