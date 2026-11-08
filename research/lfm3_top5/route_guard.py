@@ -8,9 +8,20 @@ class Choice:
     provider: str | None = None
     model: str | None = None
 
+def _is_nonblank_str(value) -> bool:
+    """Literal nonblank string check (no coercion, no empty identities)."""
+    return isinstance(value, str) and bool(value.strip())
+
+
 def recommend(routes: list[dict], *, data_class: str, in_flight: bool = False) -> Choice:
     if data_class not in ("public_synthetic", "private"):
         return Choice("HOLD", "unknown_data_class")
+    # Fail closed: concurrency flag must be a literal bool, never None/int/str/etc.
+    if type(in_flight) is not bool:
+        return Choice("HOLD", "invalid_concurrency_flag")
+    # Fail closed: routes must be a list/tuple of bounded cardinality (<= 64).
+    if not isinstance(routes, (list, tuple)) or len(routes) > 64:
+        return Choice("HOLD", "invalid_route_collection")
     if in_flight:
         return Choice("HOLD", "concurrency_occupied")
     # Duplicate identities with conflicting public catalog records fail closed,
@@ -54,17 +65,25 @@ def recommend(routes: list[dict], *, data_class: str, in_flight: bool = False) -
     return Choice("PASS_TO_SINGLE_PROBE", "eligible_free_only", provider, model)
 
 def classify_http(status_code: int) -> Choice:
+    # Fail closed: only a literal int status within 100..599 is accepted (bool excluded).
+    if type(status_code) is not int or not 100 <= status_code <= 599:
+        return Choice("HOLD", "invalid_status")
     if status_code == 429:
         return Choice("HOLD", "quota_or_rate_limit_no_retry")
     if status_code in (401, 403):
         return Choice("HOLD", "auth_or_policy_no_retry")
     if status_code >= 500:
         return Choice("HOLD", "upstream_failure_no_paid_fallback")
-    return Choice("HOLD", "unclassified_response") if status_code != 200 else Choice("PASS_SAMPLE_ONLY", "http_200_not_quality_proof")
+    if status_code == 200:
+        return Choice("PASS_SAMPLE_ONLY", "http_200_not_quality_proof")
+    return Choice("HOLD", "unclassified_response")
 
 def verify_free_receipt(requested_provider, requested_model, receipt) -> Choice:
     if not isinstance(receipt, dict):
         return Choice("HOLD", "invalid_receipt_not_object")
+    # Fail closed: requested identities must be nonblank strings.
+    if not _is_nonblank_str(requested_provider) or not _is_nonblank_str(requested_model):
+        return Choice("HOLD", "invalid_requested_identity")
     provider = receipt.get("provider")
     model = receipt.get("model")
     status = receipt.get("status")
