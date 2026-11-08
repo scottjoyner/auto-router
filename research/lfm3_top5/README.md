@@ -172,3 +172,40 @@ Joyner remains held on authenticated API client access and low RAM/
 swap; xwing remains held on competing GPU workload and no pre-existing
 LFM3 service. No GPU LFM3 inference, independent measurement custody,
 native SGNC anti-rollback, or production release has been proven.
+
+## Two-node matched LFM3-QAD CPU baseline and alias-neutral workload
+
+Actual bounded research canaries on x1-370 and xwing used the same
+full GGUF checkpoint SHA-256:
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452.
+
+Five genuine READY/stop completions on EACH node; temporary loopback
+servers fully stopped, ports closed. X1-370 used a CPU-configured
+0.7-era backend, xwing succeeded with its already installed 0.7.0-dev
+HIP build but with --device none and zero GPU layers (CPU-only).
+The first xwing trial using a legacy 0.3.0-dev runtime failed to boot
+and attempted ZERO generations; it remains recorded HOLD locally.
+
+Native server-reported medians, 5 three-token completions per node:
+  x1-370: decode 47.360 tok/s, end-to-end 198.863 ms.
+  xwing:   decode 40.323 tok/s, end-to-end 179.189 ms.
+Do not infer hardware ranking or throughput SLO from these samples.
+
+The raw HTTP request hashes differ because the temporary model alias
+is host-specific, NOT because the prompt or sampling settings changed.
+The new pure assess_paired_qad_cpu_bundles checks each known alias-
+specific canonical request separately and binds both to normalized
+checkpoint-bound workload SHA-256:
+6de028cfee6d39d8a262d0a390d9bd6016f09c5d2742556edb616d2dd528bd07.
+
+Frozen synthetic negative tests reject a copied raw request hash,
+wrong checkpoint, CPU-to-GPU flag promotion, stale server cleanup,
+insufficient resource headroom, invalid timings and malformed usage.
+The evaluator ONLY returns PASS_RESEARCH_ONLY or HOLD and ALWAYS sets
+production_authorized=false and accelerator_verified=false.
+
+Host-specific raw evidence and server scripts remain in the private
+local research lab; the PR includes only a pure validator and
+synthetic fixtures. No changes under src/, provider configuration,
+deployment, credentials or public ingress. Independent physical GPU
+dispatch and SGNC relying-party custody remain HOLD.
