@@ -649,3 +649,44 @@ to x1-370 lab commit 933ef5e. This PR publishes ONLY the pure
 source/tests, synthetic fixtures, sanitized summary and pinned
 vendor source SHA-256 fingerprints; NO raw host receipts or
 user credentials are included. PRODUCTION ROUTING HOLD.
+
+## Joyner Radeon AI PRO R9700 live read-only GPU capacity gate (Nov 8)
+
+x1-370 Tailscale is logged out, so Joyner tailnet SSH was
+unreachable. Joyner itself remains online in Tailscale. A trusted
+existing Joyner known-host alias worked through an authorized LAN
+destination override while StrictHostKeyChecking=yes remained on.
+No credential, host-key or network configuration changed.
+
+Live dGPU PCI 0000:03:00.0 has AMD vendor 0x1002, device 0x7551,
+amdgpu driver and ~32GB dedicated VRAM. The existing protected,
+loopback-only LFM3-QAD model process on port 19175 is healthy and
+mapped to an AMD DRM client on this discrete GPU rather than iGPU.
+Engine counters showed historical nonzero compute but no live
+token-correlated GPU inference. No requests or API keys were used.
+
+Resource capacity observed: VRAM ~32624MiB total/~32567MiB free,
+GTT ~1135MiB free, system RAM ~1135MiB available out of ~15GiB
+physical, swap ~0.047MiB free out of 4096MiB. At least five
+model server processes already share this host. ROCm userland
+CLI not installed in PATH; existing Vulkan runtime contexts work.
+
+Additional conservative new-model research admission requirements:
+>=10GiB system MemAvailable, >=1GiB free swap, >=1.5GiB
+GPU VRAM, >=2GiB free GTT, PSI thresholds 1% memory/2% CPU/5% IO.
+Current deficits: ~9105MiB available RAM, ~1024MiB swap,
+~913MiB free GTT. No services were stopped or memory reclaimed.
+
+Pure joyner_gpu_capacity_gate.py and its 16 synthetic adversarial
+tests independently evaluate GPU PCI/driver/client/process continuity
+and source pressure, but ALWAYS deny new model POST, protected
+model generation, independent GPU token/kernel attestation and
+production routing. Untrusted identity, host-key boundary,
+credential access, incorrect hardware, invalid counters or
+memory pressure fail closed.
+
+Private live source probe and process data remain only in local
+x1-370 research lab commit c6f867c. This PR contains just pure
+source/test contract and a sanitized research summary. Production
+paths, signing, ingress, provider selection and credentials
+are unchanged.
