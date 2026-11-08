@@ -398,3 +398,99 @@ def assess_gpu_request_correlation(bundle, *, expected_checkpoint_sha256):
         else "no_gpu_engine_change_during_request"
     )
     return result
+
+
+def assess_matched_qad_cpu_bundle(bundle, *, expected_checkpoint_sha256):
+    """Check five local CPU QAD responses and ephemeral-server cleanup.
+
+    This is an *internal consistency check* on unsigned local observations,
+    not an independent model, timing, GPU or custody witness. It can only
+    return PASS_RESEARCH_ONLY or HOLD, never permission to deploy.
+    """
+    held={"decision":"HOLD","reason":"untrusted_or_incomplete_qad_cpu_bundle",
+          "observations":0,"accelerator_verified":False,
+          "production_authorized":False}
+    def digest(value):
+        return (type(value) is str and len(value)==64
+                and all(c in "0123456789abcdef" for c in value))
+    if (type(bundle) is not dict or not digest(expected_checkpoint_sha256)
+            or bundle.get("schema")!="lfm3.x1.same-qad.cpu-five.v1"
+            or bundle.get("node")!="x1-370"
+            or bundle.get("model")!="LFM3-1.7B-QAD-Q4_0.gguf"
+            or bundle.get("new_service_binding")!="127.0.0.1:19183"
+            or bundle.get("expected_sha256")!=expected_checkpoint_sha256
+            or bundle.get("observed_sha256")!=expected_checkpoint_sha256
+            or type(bundle.get("model_bytes")) is not int
+            or bundle["model_bytes"]!=1049615680
+            or type(bundle.get("gpu_layers_requested")) is not int
+            or bundle["gpu_layers_requested"]!=0
+            or type(bundle.get("requested_generations")) is not int
+            or bundle["requested_generations"]!=5
+            or type(bundle.get("attempted_generations")) is not int
+            or bundle["attempted_generations"]!=5
+            or bundle.get("outcome")!="PASS_RESEARCH_ONLY"
+            or bundle.get("child_stopped") is not True
+            or bundle.get("port_available_after_cleanup") is not True
+            or bundle.get("accelerator_verified") is not False
+            or bundle.get("production_authorized") is not False
+            or bundle.get("independent_measurement_witness") is not False):
+        return held
+    for key,minimum in (("mem_available_kib_before",8*1024*1024),
+                        ("mem_available_kib_after",5*1024*1024)):
+        value=bundle.get(key)
+        if type(value) is not int or value<minimum:
+            return held
+    for key in ("memory_psi_some_avg10_before",
+                "memory_psi_some_avg10_after"):
+        value=bundle.get(key)
+        if (type(value) not in (int,float) or not isfinite(value)
+                or value<0 or value>0.2):
+            return held
+    rows=bundle.get("observations")
+    if type(rows) is not list or len(rows)!=5:return held
+    ids=set()
+    native_decode=[]
+    native_prefill=[]
+    latencies=[]
+    for row in rows:
+        if type(row) is not dict:return held
+        rid=row.get("observation_id")
+        if (type(rid) is not str or not 1<=len(rid)<=128
+                or rid.strip()!=rid or any(c.isspace() for c in rid)
+                or rid in ids):
+            return held
+        ids.add(rid)
+        if row.get("finish_reason")!="stop" or row.get("answer")!="READY":
+            return held
+        elapsed=row.get("end_to_end_ms")
+        if not _positive(elapsed):return held
+        usage=row.get("usage")
+        timings=row.get("server_timings")
+        if type(usage) is not dict or type(timings) is not dict:return held
+        for key in ("prompt_tokens","completion_tokens","total_tokens"):
+            if type(usage.get(key)) is not int or usage[key]<1:return held
+        if usage["total_tokens"]!=usage["prompt_tokens"]+usage["completion_tokens"]:
+            return held
+        if usage["completion_tokens"]>24:return held
+        for key in ("prompt_n","predicted_n"):
+            if type(timings.get(key)) is not int or timings[key]<1:
+                return held
+        if (usage["completion_tokens"]!=timings["predicted_n"]
+                or usage["prompt_tokens"]<timings["prompt_n"]):
+            return held
+        for key in ("prompt_ms","predicted_ms",
+                    "prompt_per_second","predicted_per_second"):
+            if not _positive(timings.get(key)):return held
+        native_prefill.append(timings["prompt_per_second"])
+        native_decode.append(timings["predicted_per_second"])
+        latencies.append(elapsed)
+    return {"decision":"PASS_RESEARCH_ONLY",
+            "reason":"five_matching_qad_cpu_receipts_and_cleanup_reported",
+            "observations":5,
+            "checkpoint_sha256":expected_checkpoint_sha256,
+            "server_native_decode_tps_p50":round(median(native_decode),3),
+            "server_native_prefill_tps_p50":round(median(native_prefill),3),
+            "end_to_end_ms_p50":round(median(latencies),3),
+            "accelerator_verified":False,
+            "independent_measurement_witness":False,
+            "production_authorized":False}
