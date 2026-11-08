@@ -360,3 +360,51 @@ change, global tracepoint mutation or protected service access
 occurred. Local host-specific process and request evidence is kept in
 the x1-370 lab commit a19bf63; the PR contains ONLY the pure
 source and frozen synthetic tests. KEEP PRODUCTION HOLD.
+
+## Exploratory Deathstar RX480 Vulkan offload-depth sweep: 0/1/6/8/10
+
+Exact LFM3-QAD-Q4_0 GGUF SHA-256 pinned and matched on four nodes:
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452.
+On Deathstar, the same installed llama.cpp 0.7.0-dev binary, four CPU
+threads, 2048 context, single slot, zero-temperature READY public
+prompt were held constant across **five bounded requests for each of
+five modes**. CPU used --device none with GPU layers zero; Vulkan0
+research stages requested exactly 1/6/8/10 layers. Each GPU stage
+reported its corresponding loaded output/repeating layers in the
+llama.cpp verbose model loader and positive compute-engine delta on
+the exact AMD GPU client during EACH of its five requests. Temporary
+servers, logs and ports were fully cleaned; the protected existing
+Deathstar server was untouched.
+
+Native median decode tok/s; median HTTP latency ms:
+- CPU (0 layers): 23.535 tok/s, 299.264 ms
+- Vulkan 1 layer: 14.695 tok/s, 424.445 ms
+- Vulkan 6 layers: 28.736 tok/s, 359.977 ms
+- Vulkan 8 layers: **28.999 tok/s, 317.423 ms**
+- Vulkan 10 layers: 26.317 tok/s, 381.405 ms
+
+Eight layers was the **best observed** tested Vulkan decode depth
+and HTTP-latency depth *in this short experiment*, not a proven
+performance optimum. CPU-only still had the lowest observed median
+HTTP latency. Trials were sequential, not randomized, each only five
+3-output-token responses; no confidence or sustained-throughput
+claims, and no inference about untested depths or other hardware.
+
+Pure depth_sweep_audit.py validates each of the three new Vulkan
+depths against allowlisted loader lines, exactly repeated assigned
+layers, model and GPU identities, five distinct valid bounded
+responses, same PID/start ticks/AMD client, strictly positive per-
+request engine compute delta, matching cumulative counter, safe
+resource envelope and complete cleanup. It composes the previous
+CPU vs one-layer auditor into a five-mode research-only verdict and
+ALWAYS returns statistical_optimum_established=false,
+independent_tensor_execution_attested=false,
+production_authorized=false. Frozen synthetic adversarial tests
+cover inconsistent layer logs, counters, unsafe pressure, malformed
+usage, wrong model IDs and failed cleanup.
+
+Per-host raw receipt files, live GPU device identifiers and process
+logs stay in the local x1-370 laboratory at commit 81486a6.
+No production src/config/deploy changes, no keys, no inference
+provider routes, no releases, no global trace privileges modified.
+**KEEP PRODUCTION HOLD.**
