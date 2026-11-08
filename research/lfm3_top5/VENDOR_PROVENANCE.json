@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "936f1e1",
+  "source_lab_commit": "ffa57cd",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -13,7 +13,9 @@
     "deathstar_pair_audit.py": "p4-fleet-benchmark/deathstar_pair_audit.py",
     "depth_sweep_audit.py": "p4-fleet-benchmark/depth_sweep_audit.py",
     "long_counterbalance_audit.py": "p4-fleet-benchmark/long_counterbalance_audit.py",
-    "random_mixed_audit.py": "p4-fleet-benchmark/random_mixed_audit.py"
+    "random_mixed_audit.py": "p4-fleet-benchmark/random_mixed_audit.py",
+    "quality_task_audit.py": "p4-fleet-benchmark/quality_task_audit.py",
+    "quality_canonical_guard.py": "p4-fleet-benchmark/quality_canonical_guard.py"
   },
   "vendor_sha256": {
     "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
@@ -26,7 +28,9 @@
     "deathstar_pair_audit.py": "664da1362945c7cb38dc6545906e07a8efbe13a5e1656be82925a5c5d0d6894b",
     "depth_sweep_audit.py": "5b165fbba841da35f03bcc4e3897b2a8c5280925d7718e0b5dd3d285f508ee29",
     "long_counterbalance_audit.py": "3ae65d6daa2d1a605926c60caa05e1bc8a132a6e077a12eaf45586914182f7f8",
-    "random_mixed_audit.py": "dd85ecdf074a3565d1bfa09b3f2505babddb67c474663546c372b43f5a22f9c3"
+    "random_mixed_audit.py": "dd85ecdf074a3565d1bfa09b3f2505babddb67c474663546c372b43f5a22f9c3",
+    "quality_task_audit.py": "fef899409054ee848baf05727839ae722cbe8733ee9ac7eddb9366d291366361",
+    "quality_canonical_guard.py": "eb981688197dcf7af93198cd3b1eb2c8f4bf52f5985cc5684df07fcb75c30868"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106",
   "adapted_vendor_files": {
