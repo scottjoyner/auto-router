@@ -1,0 +1,12 @@
+{
+  "baseline_sha256": "29ecfbfdcd3c5606690718e0416f093e737609187f5e527ab4c0625089d3b18e",
+  "checkpoint_sha256": "43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452",
+  "exact_floor": 0.85,
+  "min_absolute_gain": 0.15,
+  "min_cases": 36,
+  "min_per_category": 5,
+  "min_per_challenge": 5,
+  "production_authorized": false,
+  "schema": "lfm3.prospective.prereg.v1",
+  "scorer_sha256": "d80c06ccf891aa680e65c160abfe4b4141a5dc0f6f6c5c957d061ac193e7c101"
+}
