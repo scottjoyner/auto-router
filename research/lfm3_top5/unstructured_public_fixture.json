@@ -1,0 +1,54 @@
+{
+  "schema": "lfm3.unstructured.synthetic.v1",
+  "seed": 202611081646,
+  "tasks": {
+    "database": {
+      "expected": {
+        "category": "database_service_down",
+        "evidence": "E3"
+      },
+      "prompt": "Offline synthetic triage only; no live changes or release authorization. Identify the best-supported current issue category using the final VERIFIED observation, not the earlier guesses. Allowed category codes: beta_build_unlinked, database_service_down, gpu_attestation_missing, insufficient_evidence, node_auth_contract, tls_sni_missing. Return a JSON object with EXACTLY keys category and evidence. evidence must be the evidence marker E1, E2, or E3 that directly supports the category. No Markdown, explanations, additional fields or reasoning. NOTE: Synthetic release status memo. E1: The virtualization console lists the database guest as powered on. E2: The API VM also reports a running state. E3 (inside database guest): PostgreSQL has no process listening on port 5432 and service health is failed. A powered-on guest is not evidence that the database accepts connections.",
+      "source_note": "Synthetic release status memo. E1: The virtualization console lists the database guest as powered on. E2: The API VM also reports a running state. E3 (inside database guest): PostgreSQL has no process listening on port 5432 and service health is failed. A powered-on guest is not evidence that the database accepts connections."
+    },
+    "gpu_witness": {
+      "expected": {
+        "category": "gpu_attestation_missing",
+        "evidence": "E3"
+      },
+      "prompt": "Offline synthetic triage only; no live changes or release authorization. Identify the best-supported current issue category using the final VERIFIED observation, not the earlier guesses. Allowed category codes: beta_build_unlinked, database_service_down, gpu_attestation_missing, insufficient_evidence, node_auth_contract, tls_sni_missing. Return a JSON object with EXACTLY keys category and evidence. evidence must be the evidence marker E1, E2, or E3 that directly supports the category. No Markdown, explanations, additional fields or reasoning. NOTE: Synthetic inference bench note. E1: The launcher requests GPU layers and logs an AMD device name. E2: The model replies READY in the allocated local stage. E3 (independent evidence check): no kernel-level signed execution witness or verified tensor attribution is available; request-time GPU behavior therefore cannot be externally attested. This is not proof the GPU was unused.",
+      "source_note": "Synthetic inference bench note. E1: The launcher requests GPU layers and logs an AMD device name. E2: The model replies READY in the allocated local stage. E3 (independent evidence check): no kernel-level signed execution witness or verified tensor attribution is available; request-time GPU behavior therefore cannot be externally attested. This is not proof the GPU was unused."
+    },
+    "node_auth": {
+      "expected": {
+        "category": "node_auth_contract",
+        "evidence": "E3"
+      },
+      "prompt": "Offline synthetic triage only; no live changes or release authorization. Identify the best-supported current issue category using the final VERIFIED observation, not the earlier guesses. Allowed category codes: beta_build_unlinked, database_service_down, gpu_attestation_missing, insufficient_evidence, node_auth_contract, tls_sni_missing. Return a JSON object with EXACTLY keys category and evidence. evidence must be the evidence marker E1, E2, or E3 that directly supports the category. No Markdown, explanations, additional fields or reasoning. NOTE: Synthetic agent incident. E1 (10:00): Five machine agents receive HTTP 401; an operator suspects expired user passwords. E2 (10:03): Browser login with the ordinary account succeeds, but machine agent calls still fail. E3 (10:07, contract audit): the API task endpoint expects general Basic authentication and only two of seven node identities are registered; node-specific task credentials are not accepted. No production fix was applied.",
+      "source_note": "Synthetic agent incident. E1 (10:00): Five machine agents receive HTTP 401; an operator suspects expired user passwords. E2 (10:03): Browser login with the ordinary account succeeds, but machine agent calls still fail. E3 (10:07, contract audit): the API task endpoint expects general Basic authentication and only two of seven node identities are registered; node-specific task credentials are not accepted. No production fix was applied."
+    },
+    "pilot": {
+      "expected": {
+        "category": "beta_build_unlinked",
+        "evidence": "E3"
+      },
+      "prompt": "Offline synthetic triage only; no live changes or release authorization. Identify the best-supported current issue category using the final VERIFIED observation, not the earlier guesses. Allowed category codes: beta_build_unlinked, database_service_down, gpu_attestation_missing, insufficient_evidence, node_auth_contract, tls_sni_missing. Return a JSON object with EXACTLY keys category and evidence. evidence must be the evidence marker E1, E2, or E3 that directly supports the category. No Markdown, explanations, additional fields or reasoning. NOTE: Synthetic iOS pilot. E1: The app archive exists and its code signing check is clean. E2: The app's backend health endpoint returns 200 from the testing subnet. E3 (distribution admin view): the beta-testing group contains no linked build, so eligible testers cannot install the current archive. The release has not been submitted.",
+      "source_note": "Synthetic iOS pilot. E1: The app archive exists and its code signing check is clean. E2: The app's backend health endpoint returns 200 from the testing subnet. E3 (distribution admin view): the beta-testing group contains no linked build, so eligible testers cannot install the current archive. The release has not been submitted."
+    },
+    "sni": {
+      "expected": {
+        "category": "tls_sni_missing",
+        "evidence": "E3"
+      },
+      "prompt": "Offline synthetic triage only; no live changes or release authorization. Identify the best-supported current issue category using the final VERIFIED observation, not the earlier guesses. Allowed category codes: beta_build_unlinked, database_service_down, gpu_attestation_missing, insufficient_evidence, node_auth_contract, tls_sni_missing. Return a JSON object with EXACTLY keys category and evidence. evidence must be the evidence marker E1, E2, or E3 that directly supports the category. No Markdown, explanations, additional fields or reasoning. NOTE: Synthetic operations log. E1 (09:00): A teammate guesses the public gateway's certificate expired. E2 (09:05): A staging-only request works, and the certificate validity date is still current. E3 (09:10, verified HTTPS probe): the production hostname returns TLSV1_UNRECOGNIZED_NAME; the proxy lacks a hostname/SNI server entry. The database check is separate and inconclusive.",
+      "source_note": "Synthetic operations log. E1 (09:00): A teammate guesses the public gateway's certificate expired. E2 (09:05): A staging-only request works, and the certificate validity date is still current. E3 (09:10, verified HTTPS probe): the production hostname returns TLSV1_UNRECOGNIZED_NAME; the proxy lacks a hostname/SNI server entry. The database check is separate and inconclusive."
+    },
+    "unknown": {
+      "expected": {
+        "category": "insufficient_evidence",
+        "evidence": "E3"
+      },
+      "prompt": "Offline synthetic triage only; no live changes or release authorization. Identify the best-supported current issue category using the final VERIFIED observation, not the earlier guesses. Allowed category codes: beta_build_unlinked, database_service_down, gpu_attestation_missing, insufficient_evidence, node_auth_contract, tls_sni_missing. Return a JSON object with EXACTLY keys category and evidence. evidence must be the evidence marker E1, E2, or E3 that directly supports the category. No Markdown, explanations, additional fields or reasoning. NOTE: Synthetic incomplete support thread. E1: A customer reports that a dashboard sometimes takes longer to load. E2: A screenshot contains no timestamp or request identifier. E3 (last verified note): no live trace, request metrics, database status, or network check is available yet. There is not enough evidence to assign a root cause.",
+      "source_note": "Synthetic incomplete support thread. E1: A customer reports that a dashboard sometimes takes longer to load. E2: A screenshot contains no timestamp or request identifier. E3 (last verified note): no live trace, request metrics, database status, or network check is available yet. There is not enough evidence to assign a root cause."
+    }
+  }
+}
