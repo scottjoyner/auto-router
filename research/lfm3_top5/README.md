@@ -319,3 +319,44 @@ This PR adds only pure synthetic verification source and attack tests.
 Native SGNC custody, physically nonrestorable anti-rollback, provider
 billing proof, real independent execution attestation and production
 release remain HOLD. No production changes, deployment or merge.
+
+## Deathstar same-host CPU-only versus Vulkan output-layer five-request research
+
+One temporary 127.0.0.1:19187 CPU-only server and one temporary
+127.0.0.1:19186 one-layer Vulkan0 server, using the SAME installed
+llama.cpp binary, QAD model checksum, 4 CPU threads, 2048 context,
+temperature zero and READY task. Each completed exactly FIVE real
+bounded three-output-token requests; each ephemeral server, log and
+port was fully removed. The protected existing Deathstar LFM3 server
+was not touched. The exact full QAD checkpoint SHA-256 remains:
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452.
+
+Native median five-request observations (DEATHSTAR ONLY):
+  CPU only, --device none, zero offload: 23.535 decode tok/s;
+     299.264 ms median end-to-end
+  Vulkan0, output layer 24, offloaded 1/25: 14.695 decode tok/s;
+     424.445 ms median end-to-end.
+All five Vulkan requests had separately correlated positive AMD DRM
+compute delta for the exact temporary PID/start ticks and GPU client.
+Verbose loader evidence again reported 1/25 layers and 205.09 MiB
+model buffer. This tiny, sequential three-token research sample
+shows CPU-only was faster IN THIS TEST. It does NOT establish
+statistical superiority, sustained throughput, a global GPU ranking,
+or behavior at deeper offload depths.
+
+The pure deathstar_pair_audit.py checks the two sanitized research
+receipt shapes: source-known request template, CPU offload disabled,
+five unique valid receipts per mode, exact model digest, matching
+Vulkan output-layer logs, five positive per-request AMD DRM deltas,
+safe capacity and complete cleanup. It always denies
+statistical_superiority_established, independent_gpu_tensor_execution_attested
+and production_authorized. Synthetic tests reject counter forgery,
+replaced PID, CPU accidental GPU usage, wrong model, request replay,
+bad timings and cleanup failures.
+
+Direct kernel tracing is not available to non-root user (tracefs
+controls/trace_pipe restricted; perf_event_paranoid=4). No privilege
+change, global tracepoint mutation or protected service access
+occurred. Local host-specific process and request evidence is kept in
+the x1-370 lab commit a19bf63; the PR contains ONLY the pure
+source and frozen synthetic tests. KEEP PRODUCTION HOLD.
