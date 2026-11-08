@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "9752c4a",
+  "source_lab_commit": "9f87b26",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -8,7 +8,8 @@
     "context_guard.py": "p3-sensorgraft/context_guard.py",
     "benchmark_report.py": "p4-fleet-benchmark/benchmark_report.py",
     "eval_gate.py": "p5-eval-gates/eval_gate.py",
-    "gpu_canary_gate.py": "p4-fleet-benchmark/gpu_canary_gate.py"
+    "gpu_canary_gate.py": "p4-fleet-benchmark/gpu_canary_gate.py",
+    "gpu_request_audit.py": "p4-fleet-benchmark/gpu_request_audit.py"
   },
   "vendor_sha256": {
     "inference_contract.py": "899c063b765fda8b6e80c217fd4f3330c01791d65d132b294306e38847625804",
@@ -16,7 +17,8 @@
     "context_guard.py": "83ea9431e0de27369b052cef7b033fdb873e2fcd97226cb1a48035d09d325eaf",
     "benchmark_report.py": "ae37253a8378353240a429fcb2b6b8dce82deb7a8cbb06ac00660ec941f424a0",
     "eval_gate.py": "1522be69b8210200769f420f325293114211abe44e4258aaa4e8b9abe59f6020",
-    "gpu_canary_gate.py": "4894fb2f2064e52080357cf9e686c0aec47c5f3da338679f01e9c1a3a1d1eb46"
+    "gpu_canary_gate.py": "4894fb2f2064e52080357cf9e686c0aec47c5f3da338679f01e9c1a3a1d1eb46",
+    "gpu_request_audit.py": "589f9eaddeda19a0b37edb5217ab26bfb2cc7bf4df39ab2e19256dc13916ae75"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106"
 }
