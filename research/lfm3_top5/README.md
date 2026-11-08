@@ -690,3 +690,56 @@ x1-370 research lab commit c6f867c. This PR contains just pure
 source/test contract and a sanitized research summary. Production
 paths, signing, ingress, provider selection and credentials
 are unchanged.
+
+## November 8 — retrospective two-path validation-inclusive replay
+
+The new pure e2e_replay_comparator.py contrasts deterministic
+source-only computation against independently source-verified
+post-processing of historical model responses for the SAME frozen
+synthetic six-node inventory and five-gate HOLD tasks.
+Lab source: isolated x1-370 branch commit f65b02c (supplemental_source_commits
+in VENDOR_PROVENANCE.json; original 15 sources remain pinned to prior
+lab commit c6f867c). No live inference, protected service, keys,
+prod router, provider route or deployment code touched.
+
+Read-only study replayed the exact previously preregistered 24
+Deathstar operator-local synthetic replies, then measured 128
+repetitions per request per path after 8 warmup rounds, shuffling
+each local replay round with a fixed seed (6144 LOCAL validation
+timing samples). Median CPU-side Python source-only and guarded
+model validation took microseconds on x1-370; the historical
+Deathstar llama.cpp model HTTP calls took seconds each. These
+two time types are from DIFFERENT hosts/runs. Adding them is a
+reconstructed minimum proxy, explicitly NOT observed end-to-end
+latency, production throughput, SLO or stable hardware ranking.
+
+On the frozen full synthetic source, source-only computation
+produced correct canonical output for all replayed 24 cases,
+including correct HOLD directly from source gates. Across actual
+historical models: 0/24 full strict JSON answers correct;
+all 12 six-node model answers had correct complete membership but
+unsorted arrays, and deterministic guarded normalization was
+safe only after matching the entire source. All 12 model gate
+answers were inaccurate or mislabeled. A correct deterministic
+HOLD never counts as a successful model-generated release decision.
+
+An incorrect model answer is retained as a zero-quality sample,
+not confused with tampered evidence. A missing gate/source,
+invalid preregistration, changed response hash, model authority
+escalation, broken timer, unsupported sampling limit or unsafe
+resource state FAILS CLOSED. Pure synthetic negative tests
+exercise these distinctions. No raw host process IDs, full
+experimental responses or unsigned execution receipts are
+committed to this repository.
+
+The evaluator ALWAYS returns:
+production_authorized=false,
+source_independently_attested=false,
+kernel_execution_independently_attested=false,
+full_end_to_end_latency_measured=false,
+quality_eligible_for_production_routing=false.
+
+Action: use deterministic source-only for these source-complete
+tasks unless new representative task evidence demonstrates
+incremental model utility. Draft research PR #148 remains
+unmerged and production HOLD.
