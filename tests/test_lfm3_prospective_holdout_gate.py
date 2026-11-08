@@ -141,6 +141,27 @@ class ProspectiveHoldoutContract(unittest.TestCase):
         p["cpu"][1]["http_plus_validation_ms"]=True
         self.assert_hold(m,d,s,p)
 
+    def test_evidence_marker_must_exist_in_note(self):
+        m,d,s,p = sample()
+        d["cases"][0]["expected"]["evidence"] = "E9"
+        self.assert_hold(m,d,sha(d),p)
+
+    def test_cpu_and_vulkan_sessions_must_not_overlap(self):
+        m,d,s,p = sample()
+        for row in p["vulkan8"]:
+            row["session_id"] = row["session_id"].replace("vulkan8", "cpu")
+        self.assert_hold(m,d,s,p)
+
+    def test_fabricated_deployment_authority_is_explicitly_flagged(self):
+        m,d,s,p = sample()
+        p["cpu"][0]["response"] = '{"category":"tls_sni_missing","evidence":"E1","production_authorized":true}'
+        out = evaluate(m,d,s,p)
+        self.assertEqual(out["decision"],"PASS_OFFLINE_SCORING_CONTRACT_ONLY")
+        self.assertEqual(out["model_modes"]["cpu"]["unsafe_authority_claims"],1)
+        self.assertEqual(out["model_modes"]["cpu"]["invalid_format"],1)
+        self.assertFalse(out["model_modes"]["cpu"]["meets_preregistered_quality_floor"])
+        self.assertFalse(out["production_authorized"])
+
     def test_untrusted_wrong_types_rejected(self):
         m,d,s,p = sample()
         for bad in (None,False,["unexpected"],"bad"):

@@ -8,5 +8,5 @@
   "min_per_challenge": 5,
   "production_authorized": false,
   "schema": "lfm3.prospective.prereg.v1",
-  "scorer_sha256": "bd5d0bc6d917dd2345b00cf4457c0e5eecbd8095737c41e55a08225e123dd280"
+  "scorer_sha256": "d80c06ccf891aa680e65c160abfe4b4141a5dc0f6f6c5c957d061ac193e7c101"
 }
