@@ -1,5 +1,5 @@
 {
-  "source_lab_commit": "9f87b26",
+  "source_lab_commit": "8d62451",
   "source_host": "x1-370",
   "scope": "research-only-no-production-imports",
   "source_files": {
@@ -18,7 +18,7 @@
     "benchmark_report.py": "ae37253a8378353240a429fcb2b6b8dce82deb7a8cbb06ac00660ec941f424a0",
     "eval_gate.py": "1522be69b8210200769f420f325293114211abe44e4258aaa4e8b9abe59f6020",
     "gpu_canary_gate.py": "4894fb2f2064e52080357cf9e686c0aec47c5f3da338679f01e9c1a3a1d1eb46",
-    "gpu_request_audit.py": "589f9eaddeda19a0b37edb5217ab26bfb2cc7bf4df39ab2e19256dc13916ae75"
+    "gpu_request_audit.py": "13ddb471ec9120f8bf8df69cc6db3022f70492a6e800d2ad9d74fdab4c6063b0"
   },
   "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106"
 }
