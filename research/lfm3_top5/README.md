@@ -104,3 +104,23 @@ A real Joyner passive evidence sample is held in the local fleet lab only;
 only synthetic cases and pure checks ship in this PR. Joyner /v1/models
 returns HTTP 401 without credentials. Do not bypass authentication or treat
 -ngl 99 as proof. x1-370's measured baseline is CPU-only (-ngl 0).
+
+## One-request LFM3 GPU counter correlation candidate (never admission)
+
+The pure assess_gpu_request_correlation helper requires an externally supplied
+GGUF SHA-256, a single stopped/bounded READY request, stable Linux PID/start
+ticks and AMD DRM client, strict ordered monotonic request/snapshot timestamps,
+and a positive same-client compute-engine delta. Synthetic adversarial tests
+reject process recycling, retry, mismatched checkpoint, implausible time or
+tokens, and unrelated GPU contexts.
+
+**This function ALWAYS returns HOLD with accelerator_verified=false and
+production_authorized=false**, including when all candidate fields match.
+Unsigned local timestamps/DRM counters cannot prove independent GPU dispatch
+during specific LFM3 tokens. The existing Joyner service is API-key-file
+protected: do not disable auth, inspect keys or submit an unapproved request.
+No real Joyner request was sent during this research change.
+
+Raw host observations remain only in the local LFM3 research lab; this PR
+contains code and public synthetic fixtures. Real SGNC verification, external
+witness custody, and matched fleet benchmark remain separate unresolved gates.
