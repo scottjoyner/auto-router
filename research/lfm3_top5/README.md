@@ -124,3 +124,22 @@ No real Joyner request was sent during this research change.
 Raw host observations remain only in the local LFM3 research lab; this PR
 contains code and public synthetic fixtures. Real SGNC verification, external
 witness custody, and matched fleet benchmark remain separate unresolved gates.
+
+## Free-route input validation and partial OpenCode subagent evidence
+
+The vendored P2 route guard now rejects malformed HTTP status types,
+ambiguous in-flight flags, unbounded route collections and invalid
+provider/model receipt identity before promoting a public synthetic
+route to PASS_TO_SINGLE_PROBE. No paid provider fallback or routing
+configuration is changed. Frozen adversarial unit tests are run only
+in research CI.
+
+An OpenCode v2 coordinator restricted to the single named subagent
+did create one child on the exact openrouter/recursive/flint-v1.0:free
+endpoint, and the child edited only the research route_guard.py source.
+The task never finished cleanly, and parent/child cost receipts were
+incomplete. **The agent execution remains HOLD**; this code was accepted
+for isolated research based on 162 passing independent local tests,
+NOT as a completed $0 delegated run or real provider billing proof.
+The coordinator permission experiment itself remains in the local lab,
+not installed in Auto-Router production.
