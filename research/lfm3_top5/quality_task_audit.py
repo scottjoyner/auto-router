@@ -42,14 +42,29 @@ def _hold(reason):
 def canonical(obj):
  return json.dumps(obj,sort_keys=True,separators=(",",":"),ensure_ascii=True)
 
+def _unique_json_pairs(pairs):
+ """Reject duplicate JSON object keys at any nesting depth."""
+ output={}
+ for key,value in pairs:
+  if key in output:raise ValueError("duplicate_json_key")
+  output[key]=value
+ return output
+
+def _reject_json_constant(_value):
+ raise ValueError("non_finite_json_constant")
+
 def exact_task_oracle(task,answer):
- """Fail-closed full-json answer check (including array contents and types)."""
+ """Fail-closed whole-object JSON oracle; never trust reported model score."""
  if task not in ORACLES or type(answer) is not str or not 1<=len(answer)<=2000:
   return False
  if "<think>" in answer.lower() or "</think>" in answer.lower():
   return False
- try:obj=json.loads(answer)
- except (TypeError,ValueError):return False
+ try:
+  obj=json.loads(answer,object_pairs_hook=_unique_json_pairs,
+                 parse_constant=_reject_json_constant)
+ except (TypeError,ValueError,RecursionError):
+  return False
+ if type(obj) is not dict:return False
  return canonical(obj)==canonical(ORACLES[task]["expected"])
 
 def capacity(m):
@@ -155,6 +170,19 @@ def assess_block(receipt,mode,block,task):
   wall=row.get("wall_ms")
   if type(wall) not in (int,float) or not math.isfinite(wall) or not 0<wall<22000:
    return _hold("invalid_wall_duration")
+  # The installed llama.cpp build reports decode tok/s using (n-1)
+  # emitted token intervals. Independently cross-check reported speed
+  # against the native millisecond field and observed request duration;
+  # this rejects forged speed without pretending the counters are signed.
+  pred_n=timings["predicted_n"]
+  if pred_n<2:
+   return _hold("insufficient_native_decode_intervals")
+  derived=(pred_n-1)*1000/timings["predicted_ms"]
+  claimed=timings["predicted_per_second"]
+  if (not math.isfinite(derived) or derived<=0
+      or not math.isclose(claimed,derived,rel_tol=0.01,abs_tol=0)
+      or timings["predicted_ms"]>wall*1.02):
+   return _hold("native_speed_and_duration_inconsistent")
   ident=(row.get("pid"),row.get("process_start_ticks"))
   if any(type(x) is not int or x<=0 for x in ident):
    return _hold("process_identity_missing")
