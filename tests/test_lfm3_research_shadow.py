@@ -192,8 +192,8 @@ def test_vendored_sources_equal_frozen_lab_commit_hashes():
     from pathlib import Path
     package = Path(__file__).resolve().parents[1] / "research" / "lfm3_top5"
     manifest = json.loads((package / "VENDOR_PROVENANCE.json").read_text())
-    assert manifest["source_lab_commit"] == "8d62451"
-    assert len(manifest["vendor_sha256"]) == 7
+    assert manifest["source_lab_commit"] == "a19bf63"
+    assert len(manifest["vendor_sha256"]) == 8
     for name, expected in manifest["vendor_sha256"].items():
         actual = hashlib.sha256((package / name).read_bytes()).hexdigest()
         assert actual == expected
