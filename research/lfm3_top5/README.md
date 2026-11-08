@@ -238,3 +238,47 @@ ONLY in the local LFM3 research lab. This PR contains the pure
 fail-closed evaluator and public synthetic adversarial tests only.
 No model loads, generation requests, authentication bypass, GPU
 driver changes, provider route changes, or production promotion.
+
+## One real Deathstar Vulkan AMD GPU compute-context correlation
+
+The local four-node QAD-Q4_0 checkpoint hash matches exactly:
+43a7d09a0e9cba91b63eb7052488b9564569bddfd65754d2e426465e572a7452
+on x1-370, xwing, Joyner and Deathstar.
+
+Deathstar hosts an *existing* protected, Tailscale-bound Vulkan LFM3
+service; its API key was not read, and that service was not changed.
+A separate temporary, loopback-only research stage requested
+--device Vulkan0 and --n-gpu-layers 1 with the pinned model.
+
+The first bounded staging attempt correctly aborted before any
+generation when memory PSI rose to 4.16% above the fixed 1% limit.
+It cleaned up completely. A separately monitored cooldown showed
+PSI recovering, and a single retry required three consecutive safe
+post-load samples without changing the threshold.
+
+The retry performed exactly ONE genuine READY/stop completion:
+17 prompt + 3 completion tokens, 465.285ms HTTP latency.
+Within the request bracket the SAME temporary process PID/starttime
+and AMD Radeon RX 480 DRM client accumulated an additional
+95,075,344 ns of compute-engine time. Afterward, the temporary
+service was stopped and its port/log removed. The existing protected
+service remained untouched.
+
+**This is a process-correlated GPU compute context, NOT independently
+attested LFM3 tensor-layer placement or a model speedup benchmark.**
+The process only reported ~1180 KiB resident VRAM and no validated
+startup layer-offload count was preserved, so true GPU weight placement
+is still unresolved. External witness custody, native SGNC authority,
+and production admission remain HOLD.
+
+The pure gpu_request_audit.py is source-only, has no filesystem/network
+access, and accepts this synthetic receipt shape only as
+PASS_CORRELATED_GPU_PROCESS_RESEARCH_ONLY. It ALWAYS denies
+actual_gpu_tensor_layer_placement_verified, independent_gpu_execution_attested,
+and production_authorized. Frozen negative tests cover mismatched
+checkpoint/process/client/counter, invalid token accounting, unsafe
+resource pressure and incomplete cleanup.
+
+Raw requests, DRM client IDs, subprocess scripts, and host logs are
+retained exclusively in the x1-370 local research lab and are NOT
+uploaded to this PR or hosted model endpoints.
