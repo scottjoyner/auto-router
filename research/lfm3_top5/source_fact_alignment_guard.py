@@ -128,6 +128,10 @@ def assess_source_label(note: object, source_facts: object, model_answer: object
         if not supported:
             if answer["category"] != "insufficient_evidence":
                 return hold("positive_model_category_lacks_source_facts")
+            if answer["evidence"] is None and any(
+                e["review_status"] == "verified" for e in entries
+            ):
+                return hold("missing_supporting_abstention_marker")
             if answer["evidence"] is not None and not any(
                 e["marker"]==answer["evidence"] and
                 e["review_status"]=="verified" for e in entries

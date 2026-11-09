@@ -125,6 +125,18 @@ class FactAlignmentGuard(unittest.TestCase):
         self.check_hold(n,t,'{"category":"insufficient_evidence","evidence":"E1"}',
                         "abstention_marker_not_reviewed_as_verified")
 
+    def test_verified_missing_evidence_requires_its_marker(self):
+        n,t,_=sample("insufficient_evidence")
+        self.check_hold(n,t,'{"category":"insufficient_evidence","evidence":null}',
+                        "missing_supporting_abstention_marker")
+
+    def test_null_abstention_only_if_no_verified_marker(self):
+        n,t,_=sample("insufficient_evidence")
+        t["evidence"][1]["review_status"]="not_observed"
+        result=assess_source_label(n,t,'{"category":"insufficient_evidence","evidence":null}')
+        self.assertEqual(result["decision"],"PASS_SYNTHETIC_ABSTENTION_ALIGNMENT_ONLY")
+        self.assertFalse(result["production_authorized"])
+
     def test_multiple_positive_categories_holds(self):
         n,t,a=sample()
         t["evidence"][1]["facts"].update(
