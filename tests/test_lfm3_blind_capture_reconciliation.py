@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import hashlib
+import os
 import json
 from pathlib import Path
 import subprocess
@@ -39,6 +40,23 @@ def package():
         'production_authorized':False,'independent_gpu_attested':False,
     }
     return json.loads(PREREG.read_text()),data,bundle,roster,packet,receipt,blinded
+
+
+def cli_fixture(root):
+    """Ephemeral fictional data, no real credentials or model outputs."""
+    args=package()
+    names=('manifest','dataset','bundle','key-roster','packet','receipt','capture')
+    cmd=[sys.executable,'-m','research.lfm3_top5.blind_capture_reconciliation']
+    for name,content in zip(names,args):
+        path=root/(name+'.json')
+        path.write_text(json.dumps(content,sort_keys=True))
+        path.chmod(0o600)
+        cmd.extend(['--'+name,str(path)])
+    return cmd,args
+
+
+def cli_run(cmd):
+    return subprocess.run(cmd,capture_output=True,text=True,timeout=10)
 
 
 class BlindCaptureReconciliation(unittest.TestCase):
@@ -141,13 +159,100 @@ class BlindCaptureReconciliation(unittest.TestCase):
             p=list(package());p[i]=None
             self.assert_hold(p)
 
+    def test_private_file_modes_are_required_for_all_seven_inputs(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory(prefix='lfm3-private-input-modes-') as folder:
+            root=Path(folder)
+            cmd,args=cli_fixture(root)
+            self.assertEqual(cli_run(cmd).returncode,0)
+            for label in ('manifest','dataset','bundle','key-roster',
+                          'packet','receipt','capture'):
+                path=root/(label+'.json')
+                for mode in (0o644,0o640,0o604,0o700):
+                    with self.subTest(file=label,mode=oct(mode)):
+                        path.chmod(mode)
+                        run=cli_run(cmd)
+                        self.assertEqual(run.returncode,2)
+                        output=json.loads(run.stdout)
+                        self.assertEqual(output['decision'],'HOLD')
+                        self.assertFalse(output['production_authorized'])
+                        self.assertNotIn(args[1]['cases'][0]['note'],run.stdout)
+                        path.chmod(0o600)
+            self.assertEqual(cli_run(cmd).returncode,0)
+
+    def test_symlink_hardlink_pipe_and_nonregular_inputs_hold(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-links-input-') as folder:
+            root=Path(folder)
+            cmd,args=cli_fixture(root)
+            self.assertEqual(cli_run(cmd).returncode,0)
+            manifest=root/'manifest.json'
+            saved=root/'saved-manifest.json'
+            manifest.rename(saved)
+            manifest.symlink_to(saved)
+            self.assertEqual(cli_run(cmd).returncode,2)
+            manifest.unlink()
+            saved.rename(manifest)
+            extra=root/'manifest-link.json'
+            os.link(manifest,extra)
+            self.assertEqual(cli_run(cmd).returncode,2)
+            extra.unlink()
+            self.assertEqual(cli_run(cmd).returncode,0)
+            manifest.unlink()
+            os.mkfifo(manifest,0o600)
+            self.assertEqual(cli_run(cmd).returncode,2)
+            manifest.unlink()
+            manifest.mkdir(mode=0o700)
+            self.assertEqual(cli_run(cmd).returncode,2)
+            manifest.rmdir()
+            manifest.write_text(json.dumps(args[0],sort_keys=True))
+            manifest.chmod(0o600)
+            self.assertEqual(cli_run(cmd).returncode,0)
+
+    def test_oversized_but_parseable_manifest_and_capture_hold(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-bounds-test-') as folder:
+            root=Path(folder)
+            cmd,args=cli_fixture(root)
+            self.assertEqual(cli_run(cmd).returncode,0)
+            for name,limit in (('manifest',65536),('dataset',2*1024*1024),
+                               ('capture',16*1024*1024)):
+                with self.subTest(file=name):
+                    path=root/(name+'.json')
+                    original=path.read_bytes()
+                    # Whitespace beyond valid JSON remains parseable by an
+                    # unbounded json.load; the bounded reader must HOLD.
+                    with path.open('ab') as f:
+                        f.write(b' '*(limit+1-len(original)))
+                    self.assertEqual(path.stat().st_size,limit+1)
+                    run=cli_run(cmd)
+                    self.assertEqual(run.returncode,2)
+                    self.assertEqual(json.loads(run.stdout)['decision'],'HOLD')
+                    path.write_bytes(original)
+                    self.assertEqual(cli_run(cmd).returncode,0)
+
+    def test_zero_length_invalid_json_and_duplicate_key_holds(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-json-input-') as folder:
+            root=Path(folder)
+            cmd,_=cli_fixture(root)
+            self.assertEqual(cli_run(cmd).returncode,0)
+            p=root/'manifest.json';before=p.read_bytes()
+            for invalid in (b'',b'not-json',b'{"schema":1,"schema":1}',b'{"n":NaN}'):
+                with self.subTest(value=invalid[:20]):
+                    p.write_bytes(invalid)
+                    res=cli_run(cmd)
+                    self.assertEqual(res.returncode,2)
+                    self.assertEqual(json.loads(res.stdout)['decision'],'HOLD')
+            p.write_bytes(before)
+            self.assertEqual(cli_run(cmd).returncode,0)
+
     def test_actual_cli_subprocess_redacts_private_ids_and_holds_if_modified(self):
         p=package()
         with tempfile.TemporaryDirectory(prefix='lfm3-blind-reconcile-') as d:
             root=Path(d)
             names=['manifest','dataset','bundle','key-roster','packet','receipt','capture']
             for name,content in zip(names,p):
-                (root/(name+'.json')).write_text(json.dumps(content,sort_keys=True))
+                path=root/(name+'.json')
+                path.write_text(json.dumps(content,sort_keys=True))
+                path.chmod(0o600)
             cmd=[sys.executable,'-m','research.lfm3_top5.blind_capture_reconciliation']
             for name in names:cmd.extend(['--'+name,str(root/(name+'.json'))])
             good=subprocess.run(cmd,capture_output=True,text=True,timeout=20)
