@@ -24,13 +24,17 @@ from scripts.lfm3_rfc3161_anchor_verify import (
     _single_der_sequence
 )
 
-RECEIPT_SCHEMA = "lfm3.public-frozen-contract-rfc3161-receipt.v1"
+RECEIPT_SCHEMA = "lfm3.public-frozen-contract-rfc3161-receipt.v2"
 CONTRACT_SCHEMA = "lfm3.public-frozen-research-contract-anchor.v1"
 PIN_CONTRACT_SHA256 = "1f9a6bd4129a104e8e1846ed1a4c3727fc0f4834cb58353f877801dd833803a2"
 PIN_QUERY_SHA256 = "02f86836879cff924fe01362126c9713f3c8021744e4a9bd4507e1ffc14b3d96"
 PIN_RESPONSE_SHA256 = "bfef99efe2b7afc3d32f7a9f8d664a65baf1ac0ae8561c0a2b181bddcca696cd"
 PIN_FREETSA_ROOT_PEM_SHA256 = "2151b61137ffa86bf664691ba67e7da0b19f98c758e3d228d5d8ebf27e044438"
 PIN_FREETSA_TSA_PEM_SHA256 = "8bfb0305bb64e2571ca507552ef3245cb1c2fee8728e0ff8689225081ea13467"
+PIN_FREETSA_ROOT_CRL_SHA256 = "13d85acc0dd6a7ace445822b09dcba0de4236e84d60494dcbe6d7a6c97031935"
+PIN_CRL_LAST_UTC = "2026-09-18T10:30:55Z"
+PIN_CRL_NEXT_UTC = "2027-09-18T10:30:55Z"
+PIN_TSA_SERIAL_HEX = "C2E986160DA8E9CD"
 PIN_ISSUED_TIME_UTC = "2026-11-09T14:34:22Z"
 CONTRACT_KEYS = frozenset({
     "schema","scope","repo","source_head","source_tree","preregistration_sha256",
@@ -45,6 +49,10 @@ RECEIPT_KEYS = frozenset({
     "timestamp_query_sha256","tsa_claimed_utc_time",
     "timestamp_query_der_base64","timestamp_response_der_base64",
     "tsa_ca_pem_base64","tsa_signer_pem_base64",
+    "provider_published_crl_url","provider_root_crl_pem_sha256",
+    "provider_root_crl_pem_base64","provider_crl_last_update_utc",
+    "provider_crl_next_update_utc","provider_tsa_signer_serial_hex",
+    "provider_crl_independently_trusted",
     "independent_case_dataset_sealed","independent_tsa_trust_verified",
     "pre_inference_custody_verified","model_value_verified","production_authorized"
 })
@@ -57,6 +65,9 @@ def hold(reason: str) -> dict:
         "public_contract_digest_bound":False,
         "original_query_nonce_verified":False,
         "provider_ca_self_published_fingerprint_matches":False,
+        "provider_crl_signature_verified":False,
+        "signer_unrevoked_in_provider_crl_at_token_time":False,
+        "provider_crl_independently_trusted":False,
         "provider_identity_independently_authenticated":False,
         "independent_case_dataset_sealed":False,
         "pre_inference_case_custody_verified":False,
@@ -105,9 +116,11 @@ def verify_public_anchor(record: object) -> dict:
             or record["provider"]!="FreeTSA"
             or record["provider_documentation"]!="https://freetsa.org/index_en.php"
             or record["provider_timestamp_endpoint"]!="https://freetsa.org/tsr"
+            or record["provider_published_crl_url"]!="https://www.freetsa.org/crl/root_ca.crl"
             or any(record[k] is not False for k in (
                 "independent_case_dataset_sealed","independent_tsa_trust_verified",
-                "pre_inference_custody_verified","model_value_verified","production_authorized"
+                "pre_inference_custody_verified","model_value_verified","production_authorized",
+                "provider_crl_independently_trusted"
             ))):
             return hold("nonpublic_scope_or_claimed_release_authority")
         if not _exact_contract(record["contract"]):
@@ -120,7 +133,8 @@ def verify_public_anchor(record: object) -> dict:
             ("timestamp_query_sha256",PIN_QUERY_SHA256),
             ("timestamp_response_sha256",PIN_RESPONSE_SHA256),
             ("provider_published_ca_pem_sha256",PIN_FREETSA_ROOT_PEM_SHA256),
-            ("provider_published_tsa_pem_sha256",PIN_FREETSA_TSA_PEM_SHA256)
+            ("provider_published_tsa_pem_sha256",PIN_FREETSA_TSA_PEM_SHA256),
+            ("provider_root_crl_pem_sha256",PIN_FREETSA_ROOT_CRL_SHA256)
         )
         if any(record[k]!=v for k,v in expected_pins):
             return hold("frozen_timestamp_or_provider_certificate_pin_mismatch")
@@ -128,25 +142,33 @@ def verify_public_anchor(record: object) -> dict:
         response=_decoded_base64(record["timestamp_response_der_base64"],MAX_DER)
         ca=_decoded_base64(record["tsa_ca_pem_base64"],MAX_PEM)
         signer=_decoded_base64(record["tsa_signer_pem_base64"],MAX_PEM)
-        if any(x is None for x in (query,response,ca,signer)):
+        crl=_decoded_base64(record["provider_root_crl_pem_base64"],MAX_PEM)
+        if any(x is None for x in (query,response,ca,signer,crl)):
             return hold("malformed_or_oversized_public_receipt_material")
         if not _single_der_sequence(query) or not _single_der_sequence(response):
             return hold("timestamp_query_or_reply_not_single_der_sequence")
         if (b"-----BEGIN CERTIFICATE-----" not in ca or
             b"-----BEGIN CERTIFICATE-----" not in signer or
-            b"PRIVATE KEY" in ca or b"PRIVATE KEY" in signer):
+            b"PRIVATE KEY" in ca or b"PRIVATE KEY" in signer or
+            b"-----BEGIN X509 CRL-----" not in crl or b"PRIVATE KEY" in crl):
             return hold("unsafe_or_absent_public_certificates")
         if any(hashlib.sha256(v).hexdigest()!=h for v,h in (
             (query,PIN_QUERY_SHA256),(response,PIN_RESPONSE_SHA256),
-            (ca,PIN_FREETSA_ROOT_PEM_SHA256),(signer,PIN_FREETSA_TSA_PEM_SHA256)
+            (ca,PIN_FREETSA_ROOT_PEM_SHA256),(signer,PIN_FREETSA_TSA_PEM_SHA256),
+            (crl,PIN_FREETSA_ROOT_CRL_SHA256)
         )):
             return hold("raw_public_receipt_material_digest_mismatch")
-        if record["tsa_claimed_utc_time"]!=PIN_ISSUED_TIME_UTC:
+        if (record["tsa_claimed_utc_time"]!=PIN_ISSUED_TIME_UTC or
+            record["provider_crl_last_update_utc"]!=PIN_CRL_LAST_UTC or
+            record["provider_crl_next_update_utc"]!=PIN_CRL_NEXT_UTC or
+            record["provider_tsa_signer_serial_hex"]!=PIN_TSA_SERIAL_HEX):
             return hold("provider_signed_time_claim_mismatch")
         with tempfile.TemporaryDirectory(prefix="lfm3-public-contract-tsa-") as directory:
             root=Path(directory)
             q=root/"query.tsq";r=root/"response.tsr";c=root/"ca.pem"
+            crt=root/"tsa.pem";crlf=root/"provider.crl"
             q.write_bytes(query);r.write_bytes(response);c.write_bytes(ca)
+            crt.write_bytes(signer);crlf.write_bytes(crl)
             parsed=_safe_run([OPENSSL,"ts","-query","-in",str(q),"-text"])
             if parsed.returncode!=0 or not _query_imprint_is_expected(parsed.stdout,imprint):
                 return hold("timestamp_query_not_bound_to_public_contract_or_nonce")
@@ -164,6 +186,31 @@ def verify_public_anchor(record: object) -> dict:
             observed=stamp.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             if observed!=PIN_ISSUED_TIME_UTC:
                 return hold("provider_signed_time_claim_mismatch")
+            crl_metadata=_safe_run([OPENSSL,"crl","-in",str(crlf),
+                                    "-noout","-lastupdate","-nextupdate"])
+            if crl_metadata.returncode!=0:
+                return hold("unparseable_provider_crl")
+            dates=dict(line.split("=",1) for line in crl_metadata.stdout.splitlines() if "=" in line)
+            if set(dates)!={"lastUpdate","nextUpdate"}:
+                return hold("missing_provider_crl_validity_dates")
+            last=datetime.strptime(dates["lastUpdate"],"%b %d %H:%M:%S %Y GMT")
+            following=datetime.strptime(dates["nextUpdate"],"%b %d %H:%M:%S %Y GMT")
+            if (last.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") != PIN_CRL_LAST_UTC or
+                following.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") != PIN_CRL_NEXT_UTC or
+                not last <= stamp <= following):
+                return hold("provider_crl_does_not_cover_issued_timestamp")
+            verified_crl=_safe_run([OPENSSL,"crl","-in",str(crlf),
+                                    "-CAfile",str(c),"-verify","-noout"])
+            if verified_crl.returncode!=0 or "verify OK" not in (verified_crl.stdout+verified_crl.stderr):
+                return hold("provider_crl_signature_invalid")
+            serial=_safe_run([OPENSSL,"x509","-in",str(crt),"-noout","-serial"])
+            if serial.returncode!=0 or serial.stdout.strip()!=("serial="+PIN_TSA_SERIAL_HEX):
+                return hold("provider_timestamp_signer_serial_mismatch")
+            epoch=int(stamp.replace(tzinfo=timezone.utc).timestamp())
+            revocation=_safe_run([OPENSSL,"verify","-crl_check","-attime",str(epoch),
+                                  "-CAfile",str(c),"-CRLfile",str(crlf),str(crt)])
+            if revocation.returncode!=0 or ": OK" not in revocation.stdout:
+                return hold("provider_signer_revoked_or_crl_chain_invalid")
         return {
             "decision":"PASS_PROVIDER_PUBLIC_CONTRACT_TIMESTAMP_CRYPTO_ONLY",
             "public_contract_sha256":imprint,
@@ -173,13 +220,16 @@ def verify_public_anchor(record: object) -> dict:
             "public_contract_digest_bound":True,
             "original_query_nonce_verified":True,
             "provider_ca_self_published_fingerprint_matches":True,
+            "provider_crl_signature_verified":True,
+            "signer_unrevoked_in_provider_crl_at_token_time":True,
+            "provider_crl_independently_trusted":False,
             "provider_identity_independently_authenticated":False,
             "independent_case_dataset_sealed":False,
             "pre_inference_case_custody_verified":False,
             "earlier_development_runs_retroactively_validated":False,
             "model_value_verified":False,
             "production_authorized":False,
-            "reason":"Real provider-issued public CONTRACT timestamp verified against provider-published CA; not a heldout case-dataset seal or independently trusted TSA witness.",
+            "reason":"Provider-issued public contract timestamp and issuer-signed CRL at token time verify against provider-published CA; independent trust and heldout case sealing remain unproven.",
         }
     except (TypeError,ValueError,KeyError,OverflowError,OSError,
             RecursionError,IndexError):
