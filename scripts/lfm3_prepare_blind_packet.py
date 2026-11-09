@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Opt-in, LOCAL-ONLY fictional research case projection. Never run inference.
+
+Writes gold-free note packet + restricted custodian receipt using exclusive
+0600 creation. Stdout contains counts and untrusted structural status only.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+from pathlib import Path
+
+from research.lfm3_top5.blind_case_intake import DATA_CLASS, prepare_blind_packet
+from research.lfm3_top5.prospective_holdout_gate import canonical
+from research.lfm3_top5.unstructured_triage_audit import _invalid_constant,_pairs_no_duplicate
+
+
+def _read_json_limited(path: str, limit: int):
+    with open(path,'rb') as file:
+        data=file.read(limit+1)
+    if len(data)>limit:
+        raise ValueError('oversized_source_file')
+    return json.loads(data.decode('utf-8'),object_pairs_hook=_pairs_no_duplicate,
+                      parse_constant=_invalid_constant)
+
+
+def _exclusive_write(path: str, body: str):
+    flags=os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os,'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    descriptor=os.open(path,flags,0o600)
+    with os.fdopen(descriptor,'w',encoding='utf-8',newline='\n') as file:
+        os.fchmod(file.fileno(),0o600)
+        file.write(body)
+
+
+def main() -> int:
+    p=argparse.ArgumentParser(description='Prepare a gold-free fictional LFM3 research packet. Never grants inference permission.')
+    for name in ('dataset','bundle','key-roster','packet-output','receipt-output'):
+        p.add_argument('--'+name,required=True)
+    p.add_argument('--source-class',required=True,
+                   help='Must be fictional_synthetic_research; no real/private inputs')
+    a=p.parse_args()
+    status={'decision':'HOLD','reason':'untrusted_or_unavailable_source',
+            'permitted_to_infer':False,'production_authorized':False}
+    try:
+        if a.source_class != DATA_CLASS:
+            status['reason']='unapproved_or_unproven_data_class'
+        elif Path(a.packet_output).absolute() == Path(a.receipt_output).absolute():
+            status['reason']='output_paths_not_distinct'
+        elif any(Path(n).is_symlink() or Path(n).exists()
+                 for n in (a.packet_output,a.receipt_output)):
+            status['reason']='output_already_exists_no_overwrite'
+        else:
+            result=prepare_blind_packet(
+                _read_json_limited(a.dataset,2*1024*1024),
+                _read_json_limited(a.bundle,64*1024),
+                _read_json_limited(a.key_roster,64*1024),
+                declared_data_class=a.source_class,
+                blinding_secret=secrets.token_bytes(32))
+            if result['decision'] != 'PASS_OFFLINE_GOLD_FREE_PROJECTION_ONLY':
+                status['reason']=result['reason']
+            else:
+                packet_json=canonical(result['packet'])+'\n'
+                receipt_json=canonical(result['receipt'])+'\n'
+                written=[]
+                try:
+                    _exclusive_write(a.packet_output,packet_json)
+                    written.append(a.packet_output)
+                    _exclusive_write(a.receipt_output,receipt_json)
+                    written.append(a.receipt_output)
+                except OSError:
+                    for own in written:
+                        try:os.unlink(own)
+                        except OSError:pass
+                    raise
+                status={
+                    'decision':'PASS_OFFLINE_GOLD_FREE_PROJECTION_ONLY',
+                    'reason':'restricted local artifacts written; external custody and inference still HOLD',
+                    'blind_prompt_view_sha256':result['receipt']['blind_prompt_view_sha256'],
+                    'case_count':result['receipt']['case_count'],
+                    'independent_author_verified':False,
+                    'external_case_custody_verified':False,
+                    'permitted_to_infer':False,
+                    'production_authorized':False,
+                }
+    except (TypeError,ValueError,KeyError,OSError,UnicodeError,OverflowError,RecursionError):
+        status['reason']='unreadable_or_invalid_input_or_output'
+    print(canonical(status))
+    return 0 if status['decision']=='PASS_OFFLINE_GOLD_FREE_PROJECTION_ONLY' else 2
+
+if __name__=='__main__':
+    raise SystemExit(main())
