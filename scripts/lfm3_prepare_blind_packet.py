@@ -15,16 +15,7 @@ from pathlib import Path
 from research.lfm3_top5.blind_case_intake import DATA_CLASS, prepare_blind_packet
 from research.lfm3_top5.prospective_holdout_gate import canonical
 from scripts.lfm3_private_json_reader import read_private_json
-
-
-def _exclusive_write(path: str, body: str):
-    flags=os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os,'O_NOFOLLOW'):
-        flags |= os.O_NOFOLLOW
-    descriptor=os.open(path,flags,0o600)
-    with os.fdopen(descriptor,'w',encoding='utf-8',newline='\n') as file:
-        os.fchmod(file.fileno(),0o600)
-        file.write(body)
+from scripts.lfm3_private_output_writer import write_private_projection_pair
 
 
 def main() -> int:
@@ -56,17 +47,8 @@ def main() -> int:
             else:
                 packet_json=canonical(result['packet'])+'\n'
                 receipt_json=canonical(result['receipt'])+'\n'
-                written=[]
-                try:
-                    _exclusive_write(a.packet_output,packet_json)
-                    written.append(a.packet_output)
-                    _exclusive_write(a.receipt_output,receipt_json)
-                    written.append(a.receipt_output)
-                except OSError:
-                    for own in written:
-                        try:os.unlink(own)
-                        except OSError:pass
-                    raise
+                write_private_projection_pair(
+                    a.packet_output, packet_json, a.receipt_output, receipt_json)
                 status={
                     'decision':'PASS_OFFLINE_GOLD_FREE_PROJECTION_ONLY',
                     'reason':'restricted local artifacts written; external custody and inference still HOLD',
