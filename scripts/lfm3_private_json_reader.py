@@ -14,7 +14,7 @@ from research.lfm3_top5.unstructured_triage_audit import (
 )
 
 
-def read_private_json(path: str, *, limit: int):
+def read_private_json(path: str, *, limit: int, dir_fd: int | None = None):
     """Read a bounded, confidential JSON file via one no-follow file handle.
 
     Reject FIFO/device/directory, hard links, non-owner ownership and any
@@ -23,12 +23,16 @@ def read_private_json(path: str, *, limit: int):
     """
     if type(path) is not str or not path or type(limit) is not int or limit < 1:
         raise ValueError("invalid_private_input_path_or_limit")
+    if dir_fd is not None and (
+        type(dir_fd) is not int or dir_fd < 0 or '/' in path or path in ('.', '..')
+    ):
+        raise ValueError("invalid_pinned_directory_input_name")
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
         raise ValueError("required_local_filesystem_safety_features_absent")
     flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
-    fd = os.open(path, flags)
+    fd = os.open(path, flags, dir_fd=dir_fd)
     with os.fdopen(fd, "rb") as stream:
         before = os.fstat(stream.fileno())
         mode = stat.S_IMODE(before.st_mode)
