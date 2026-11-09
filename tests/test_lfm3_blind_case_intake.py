@@ -12,7 +12,9 @@ import sys
 import tempfile
 import re
 import unittest
+from unittest import mock
 
+from scripts import lfm3_private_output_writer as output_writer
 from research.lfm3_top5.blind_case_intake import (
     DATA_CLASS,SCHEMA,RECEIPT_SCHEMA,prepare_blind_packet
 )
@@ -289,6 +291,127 @@ class BlindProjection(unittest.TestCase):
             good=run_private_cli(cmd)
             self.assertEqual(good.returncode,0,good.stderr)
             self.assertFalse(json.loads(good.stdout)['production_authorized'])
+
+    def test_output_private_parent_permissions_are_required(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-permissions-') as folder:
+            root=Path(folder)
+            cmd,packet,receipt,_=private_cli_fixture(root)
+            outdir=root/'untrusted-output';outdir.mkdir(mode=0o700)
+            cmd[cmd.index('--packet-output')+1]=str(outdir/'packet.json')
+            for mode in (0o755,0o750,0o770,0o777,0o1777):
+                with self.subTest(mode=oct(mode)):
+                    outdir.chmod(mode)
+                    bad=run_private_cli(cmd)
+                    self.assertEqual(bad.returncode,2,bad.stderr)
+                    self.assertFalse((outdir/'packet.json').exists())
+                    self.assertFalse(receipt.exists())
+                    self.assertFalse(json.loads(bad.stdout)['production_authorized'])
+            outdir.chmod(0o700)
+            self.assertEqual(run_private_cli(cmd).returncode,0)
+            self.assertEqual(stat.S_IMODE((outdir/'packet.json').stat().st_mode),0o600)
+            self.assertEqual(stat.S_IMODE(receipt.stat().st_mode),0o600)
+
+    def test_symlinked_output_parent_rejected_without_following_it(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-symlink-') as folder:
+            root=Path(folder)
+            cmd,packet,receipt,_=private_cli_fixture(root)
+            real=root/'real';real.mkdir(mode=0o700)
+            alias=root/'alias';alias.symlink_to(real,target_is_directory=True)
+            cmd[cmd.index('--receipt-output')+1]=str(alias/'secret.json')
+            bad=run_private_cli(cmd)
+            self.assertEqual(bad.returncode,2)
+            self.assertFalse(packet.exists())
+            self.assertFalse((real/'secret.json').exists())
+            self.assertFalse(json.loads(bad.stdout)['permitted_to_infer'])
+            alias.unlink()
+            cmd[cmd.index('--receipt-output')+1]=str(real/'secret.json')
+            self.assertEqual(run_private_cli(cmd).returncode,0)
+            self.assertEqual(stat.S_IMODE((real/'secret.json').stat().st_mode),0o600)
+
+    def test_noncanonical_parent_and_preexisting_receipt_do_not_create_packet(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-collision-') as folder:
+            root=Path(folder)
+            cmd,packet,receipt,_=private_cli_fixture(root)
+            receipt.write_text('do not replace')
+            receipt.chmod(0o600)
+            bad=run_private_cli(cmd)
+            self.assertEqual(bad.returncode,2)
+            self.assertFalse(packet.exists())
+            self.assertEqual(receipt.read_text(),'do not replace')
+            receipt.unlink()
+            cmd[cmd.index('--receipt-output')+1]=str(root/'..'/root.name/'secret.json')
+            bad=run_private_cli(cmd)
+            self.assertEqual(bad.returncode,2)
+            self.assertFalse(packet.exists())
+            self.assertFalse((root/'secret.json').exists())
+
+    def test_output_pair_enforces_both_size_limits_before_writing(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-byte-limits-') as folder:
+            root=Path(folder);packet=root/'packet';receipt=root/'receipt'
+            for left,right in (('x'*(output_writer.PACKET_MAX_BYTES+1),'{}'),
+                               ('{}','x'*(output_writer.RECEIPT_MAX_BYTES+1))):
+                with self.subTest(side=len(left)):
+                    with self.assertRaises(ValueError):
+                        output_writer.write_private_projection_pair(
+                            str(packet),left,str(receipt),right)
+                    self.assertFalse(packet.exists())
+                    self.assertFalse(receipt.exists())
+
+    def test_second_write_failure_rolls_back_only_own_first_inode(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-rollback-') as folder:
+            root=Path(folder);packet=root/'packet';receipt=root/'receipt'
+            original=output_writer._owned_create
+            count=[0]
+            def fail_second(*args):
+                count[0]+=1
+                if count[0]==2:raise OSError('synthetic second-write failure')
+                return original(*args)
+            with mock.patch.object(output_writer,'_owned_create',side_effect=fail_second):
+                with self.assertRaises(OSError):
+                    output_writer.write_private_projection_pair(
+                        str(packet),'packet\n',str(receipt),'receipt\n')
+            self.assertEqual(count[0],2)
+            self.assertFalse(packet.exists())
+            self.assertFalse(receipt.exists())
+
+    def test_rollback_does_not_unlink_replaced_first_inode(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-inode-guard-') as folder:
+            root=Path(folder);packet=root/'packet';receipt=root/'receipt'
+            original=output_writer._owned_create
+            count=[0]
+            def replace_before_fail(fd,name,body,created):
+                count[0]+=1
+                if count[0]==2:
+                    previous_fd,previous_name,_,_=created[0]
+                    f=os.open('survivor',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600,dir_fd=previous_fd)
+                    with os.fdopen(f,'wb') as stream:
+                        stream.write(b'unrelated-owner-file')
+                    os.rename('survivor',previous_name,src_dir_fd=previous_fd,dst_dir_fd=previous_fd)
+                    raise OSError('synthetic destination failure after replacement')
+                return original(fd,name,body,created)
+            with mock.patch.object(output_writer,'_owned_create',side_effect=replace_before_fail):
+                with self.assertRaises(OSError):
+                    output_writer.write_private_projection_pair(
+                        str(packet),'packet\n',str(receipt),'receipt\n')
+            self.assertEqual(packet.read_bytes(),b'unrelated-owner-file')
+            self.assertFalse(receipt.exists())
+
+    def test_two_separate_owner_private_directories_accept_restricted_pair(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-output-two-dirs-') as folder:
+            root=Path(folder);left=root/'notes';right=root/'custody'
+            left.mkdir(mode=0o700);right.mkdir(mode=0o700)
+            packet=left/'packet.json';receipt=right/'receipt.json'
+            output_writer.write_private_projection_pair(
+                str(packet),'{}\n',str(receipt),'{}\n')
+            self.assertEqual(packet.read_text(),'{}\n')
+            self.assertEqual(receipt.read_text(),'{}\n')
+            self.assertEqual(stat.S_IMODE(packet.stat().st_mode),0o600)
+            self.assertEqual(stat.S_IMODE(receipt.stat().st_mode),0o600)
+            with self.assertRaises(ValueError):
+                output_writer.write_private_projection_pair(
+                    str(packet),'{}\n',str(receipt),'{}\n')
+            self.assertEqual(packet.read_text(),'{}\n')
+            self.assertEqual(receipt.read_text(),'{}\n')
 
     def test_cli_writes_two_restricted_gold_free_files(self):
         data,bundle,roster=signed_safe()
