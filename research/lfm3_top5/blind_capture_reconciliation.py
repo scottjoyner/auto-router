@@ -173,10 +173,25 @@ def reconcile_blind_capture(manifest: object, dataset: object, handoff: object,
         return hold("malformed_or_unavailable_blind_capture_input")
 
 
-def _load(path: str):
-    with open(path,encoding="utf-8") as f:
-        return json.load(f,object_pairs_hook=_pairs_no_duplicate,
-                         parse_constant=_invalid_constant)
+# This CLI processes confidential gold, private alias maps and original
+# model responses. Parse only bounded, owner-owned, nonlinked regular files.
+# These caps exceed the prospective schema's 250-case / 4-session limits.
+INPUT_BYTE_CAPS = {
+    "manifest": 65536,
+    "dataset": 2 * 1024 * 1024,
+    "bundle": 65536,
+    "key-roster": 65536,
+    "packet": 2 * 1024 * 1024,
+    "receipt": 262144,
+    "capture": 16 * 1024 * 1024,
+}
+
+
+def _load(path: str, *, limit: int):
+    # CLI-only import: the pure in-memory reconciliation function above never
+    # reads files, starts processes, or contacts any model/provider endpoint.
+    from scripts.lfm3_private_json_reader import read_private_json
+    return read_private_json(path, limit=limit)
 
 
 def main() -> int:
@@ -186,8 +201,8 @@ def main() -> int:
     a=p.parse_args()
     try:
         out=reconcile_blind_capture(*(
-            _load(getattr(a,name.replace('-','_'))) for name in
-            ("manifest","dataset","bundle","key-roster","packet","receipt","capture")
+            _load(getattr(a,name.replace('-','_')), limit=INPUT_BYTE_CAPS[name])
+            for name in INPUT_BYTE_CAPS
         ))
     except (TypeError,KeyError,OSError,ValueError,UnicodeError,RecursionError):
         out=hold("unreadable_or_invalid_local_input")

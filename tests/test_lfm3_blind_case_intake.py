@@ -54,6 +54,28 @@ def signed_safe():
     return data,bundle,roster
 
 
+def private_cli_fixture(root):
+    """Memory-only synthetic signer inputs, local files with safe 0600 modes."""
+    data,bundle,roster=signed_safe()
+    for label,part in (('dataset',data),('bundle',bundle),('roster',roster)):
+        file=root/(label+'.json')
+        file.write_text(json.dumps(part,sort_keys=True))
+        file.chmod(0o600)
+    packet=root/'projected.json';receipt=root/'custodian.json'
+    cmd=[sys.executable,'-m','scripts.lfm3_prepare_blind_packet',
+         '--dataset',str(root/'dataset.json'),
+         '--bundle',str(root/'bundle.json'),
+         '--key-roster',str(root/'roster.json'),
+         '--packet-output',str(packet),
+         '--receipt-output',str(receipt),
+         '--source-class',DATA_CLASS]
+    return cmd,packet,receipt,data
+
+
+def run_private_cli(cmd):
+    return subprocess.run(cmd,capture_output=True,text=True,timeout=10)
+
+
 class BlindProjection(unittest.TestCase):
     def invoke(self,inputs):
         return prepare_blind_packet(*inputs,declared_data_class=DATA_CLASS,
@@ -202,12 +224,80 @@ class BlindProjection(unittest.TestCase):
         for item in (None,False,{},[],0,'fictional'):
             self.assert_hold((item,b,r))
 
+    def test_exporter_refuses_unsafe_source_file_modes_and_never_creates_packet(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-private-source-') as temp:
+            root=Path(temp)
+            cmd,packet,receipt,data=private_cli_fixture(root)
+            for file in ('dataset.json','bundle.json','roster.json'):
+                for mode in (0o644,0o640,0o604,0o700):
+                    with self.subTest(file=file,mode=oct(mode)):
+                        source=root/file
+                        source.chmod(mode)
+                        run=run_private_cli(cmd)
+                        self.assertEqual(run.returncode,2)
+                        self.assertEqual(json.loads(run.stdout)['decision'],'HOLD')
+                        self.assertFalse(packet.exists())
+                        self.assertFalse(receipt.exists())
+                        self.assertNotIn(data['cases'][0]['note'],run.stdout)
+                        source.chmod(0o600)
+            good=run_private_cli(cmd)
+            self.assertEqual(good.returncode,0,good.stderr)
+            self.assertEqual(stat.S_IMODE(packet.stat().st_mode),0o600)
+            self.assertEqual(stat.S_IMODE(receipt.stat().st_mode),0o600)
+
+    def test_exporter_refuses_source_links_fifo_and_special_files(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-private-links-') as temp:
+            root=Path(temp)
+            cmd,packet,receipt,_=private_cli_fixture(root)
+            src=root/'dataset.json';target=root/'dataset-real.json'
+            src.rename(target);src.symlink_to(target)
+            self.assertEqual(run_private_cli(cmd).returncode,2)
+            self.assertFalse(packet.exists())
+            self.assertFalse(receipt.exists())
+            src.unlink();target.rename(src)
+            hardlink=root/'hardlink.json'
+            os.link(src,hardlink)
+            self.assertEqual(run_private_cli(cmd).returncode,2)
+            hardlink.unlink()
+            src.rename(target)
+            os.mkfifo(src,0o600)
+            self.assertEqual(run_private_cli(cmd).returncode,2)
+            src.unlink();target.rename(src)
+            self.assertEqual(run_private_cli(cmd).returncode,0)
+            self.assertTrue(packet.exists())
+            self.assertTrue(receipt.exists())
+
+    def test_exporter_refuses_oversize_and_duplicate_key_even_when_valid_json(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-private-size-') as temp:
+            root=Path(temp)
+            cmd,packet,receipt,_=private_cli_fixture(root)
+            for label,cap in (('bundle',65536),('dataset',2*1024*1024)):
+                with self.subTest(source=label):
+                    path=root/(label+'.json')
+                    raw=path.read_bytes()
+                    with path.open('ab') as writer:
+                        writer.write(b' '*(cap+1-len(raw)))
+                    self.assertEqual(path.stat().st_size,cap+1)
+                    self.assertEqual(run_private_cli(cmd).returncode,2)
+                    self.assertFalse(packet.exists())
+                    self.assertFalse(receipt.exists())
+                    path.write_bytes(raw)
+            path=root/'roster.json';raw=path.read_bytes()
+            path.write_bytes(b'{"schema":"bad","schema":"bad"}')
+            self.assertEqual(run_private_cli(cmd).returncode,2)
+            path.write_bytes(raw)
+            good=run_private_cli(cmd)
+            self.assertEqual(good.returncode,0,good.stderr)
+            self.assertFalse(json.loads(good.stdout)['production_authorized'])
+
     def test_cli_writes_two_restricted_gold_free_files(self):
         data,bundle,roster=signed_safe()
         with tempfile.TemporaryDirectory(prefix='lfm3-blind-intake-fixture-') as loc:
             root=Path(loc)
             for label,part in (('dataset',data),('bundle',bundle),('roster',roster)):
-                (root/(label+'.json')).write_text(json.dumps(part,sort_keys=True))
+                file=root/(label+'.json')
+                file.write_text(json.dumps(part,sort_keys=True))
+                file.chmod(0o600)
             packet=root/'note-only.json';receipt=root/'custodian-receipt.json'
             cmd=[sys.executable,'-m','scripts.lfm3_prepare_blind_packet',
                  '--dataset',str(root/'dataset.json'),
@@ -257,7 +347,9 @@ class BlindProjection(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='lfm3-blind-intake-cli-') as loc:
             root=Path(loc)
             for label,part in (('dataset',data),('bundle',bundle),('roster',roster)):
-                (root/(label+'.json')).write_text(json.dumps(part))
+                file=root/(label+'.json')
+                file.write_text(json.dumps(part))
+                file.chmod(0o600)
             packet=root/'view.json';receipt=root/'secret-receipt.json'
             cmd=[sys.executable,'-m','scripts.lfm3_prepare_blind_packet',
                  '--dataset',str(root/'dataset.json'),'--bundle',str(root/'bundle.json'),

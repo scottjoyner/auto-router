@@ -14,16 +14,7 @@ from pathlib import Path
 
 from research.lfm3_top5.blind_case_intake import DATA_CLASS, prepare_blind_packet
 from research.lfm3_top5.prospective_holdout_gate import canonical
-from research.lfm3_top5.unstructured_triage_audit import _invalid_constant,_pairs_no_duplicate
-
-
-def _read_json_limited(path: str, limit: int):
-    with open(path,'rb') as file:
-        data=file.read(limit+1)
-    if len(data)>limit:
-        raise ValueError('oversized_source_file')
-    return json.loads(data.decode('utf-8'),object_pairs_hook=_pairs_no_duplicate,
-                      parse_constant=_invalid_constant)
+from scripts.lfm3_private_json_reader import read_private_json
 
 
 def _exclusive_write(path: str, body: str):
@@ -55,9 +46,9 @@ def main() -> int:
             status['reason']='output_already_exists_no_overwrite'
         else:
             result=prepare_blind_packet(
-                _read_json_limited(a.dataset,2*1024*1024),
-                _read_json_limited(a.bundle,64*1024),
-                _read_json_limited(a.key_roster,64*1024),
+                read_private_json(a.dataset,limit=2*1024*1024),
+                read_private_json(a.bundle,limit=64*1024),
+                read_private_json(a.key_roster,limit=64*1024),
                 declared_data_class=a.source_class,
                 blinding_secret=secrets.token_bytes(32))
             if result['decision'] != 'PASS_OFFLINE_GOLD_FREE_PROJECTION_ONLY':
