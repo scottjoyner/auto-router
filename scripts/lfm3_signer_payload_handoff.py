@@ -11,6 +11,7 @@ import os
 
 from research.lfm3_top5.signer_payload_handoff import (
     hold, prepare_unsigned_payloads, assemble_external_role_signatures,
+    verify_unsigned_role_payload, PAYLOAD_LIMIT,
 )
 from research.lfm3_top5.prospective_holdout_gate import canonical
 from scripts.lfm3_private_json_reader import read_private_json,read_private_bytes
@@ -58,6 +59,11 @@ def main():
     prepare.add_argument('--key-roster',required=True)
     prepare.add_argument('--author-payload',required=True)
     prepare.add_argument('--reviewer-payload',required=True)
+    verify=sub.add_parser('verify',help='Signer checks exact role payload against independently reviewed private corpus before signing')
+    verify.add_argument('--dataset',required=True)
+    verify.add_argument('--key-roster',required=True)
+    verify.add_argument('--role',choices=('author','reviewer'),required=True)
+    verify.add_argument('--payload',required=True)
     assemble=sub.add_parser('assemble',help='Verify external signatures and create unsigned-witness prewitness JSON')
     assemble.add_argument('--dataset',required=True)
     assemble.add_argument('--key-roster',required=True)
@@ -74,6 +80,9 @@ def main():
             if result['decision']=='PASS_OFFLINE_UNSIGNED_ROLE_PAYLOADS_ONLY':
                 write_private_projection_pair(args.author_payload,payloads['author'].decode('utf-8'),
                                               args.reviewer_payload,payloads['reviewer'].decode('utf-8'))
+        elif args.operation=='verify':
+            payload=_private_load(args.payload,limit=PAYLOAD_LIMIT,binary=True)
+            result=verify_unsigned_role_payload(dataset,roster,args.role,payload)
         else:
             raw={
                 'author':_private_load(args.author_signature,limit=64,binary=True),
@@ -87,6 +96,7 @@ def main():
     print(canonical(result))
     return 0 if result['decision'] in (
         'PASS_OFFLINE_UNSIGNED_ROLE_PAYLOADS_ONLY',
+        'PASS_STATIC_SIGNER_PAYLOAD_MATCH_ONLY',
         'PASS_OFFLINE_DETACHED_ROLE_SIGNATURES_ONLY',
     ) else 2
 

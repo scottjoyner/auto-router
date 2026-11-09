@@ -22,6 +22,27 @@ The pure verifier checks the frozen prereg SHA, source dataset balance, canonica
 
 Each signer should separately confirm the dataset commitment they are authorizing against the **independently authenticated** original dataset and frozen research contract, not blindly sign bytes supplied by a developer. The payload has no raw case narratives, but contains the full canonical dataset hash, prereg hash, expected checkpoint and role. Both role payloads are exact existing #156 `role_payload` values, so the signatures remain valid when #168 later constructs the final three-role handoff.
 
+## Phase A.5 — each signer verifies their own exact bytes before signing
+
+The export process is **not proof that a developer or custodian supplied the same dataset the independent human reviewed**. Before author or reviewer signs anything, each must obtain, through an **approved separate channel**, a *locally reviewed, unchanged* copy of the complete original dataset and the independently authenticated three-public-key roster. Their local machine must have this exact pinned source implementation and frozen preregistration/rule/scorer; inspect and trust that source independently rather than treating a GitHub PR or file handed over by the model developer as a trust root. Private gold must not be uploaded to GitHub or any model API.
+
+Each signer then runs the following **read-only** verifier on their *own* secure machine, not on the model operator's service:
+
+```bash
+# Author, using their own locally adjudicated source data and roster:
+PYTHONPATH=. python3 -m scripts.lfm3_signer_payload_handoff verify \
+  --dataset /signer-reviewed/private/hidden-cases-and-gold.json \
+  --key-roster /signer-reviewed/private/independently-authenticated-roster.json \
+  --role author \
+  --payload /signer-reviewed/private/author-role-payload.bin
+
+# Reviewer uses --role reviewer and reviewer-role-payload.bin.
+```
+
+The command rebuilds the canonical frozen case commitment and the exact #156 role-domain-separated bytes, then checks equality with the supplied payload before it can be signed. A changed note/gold oracle, role-swapped file, extra trailing byte, wrong checkpoint/prereg, reused roster key, unsafe file permissions, symlink ancestor or missing file produces **HOLD** (exit 2). `PASS_STATIC_SIGNER_PAYLOAD_MATCH_ONLY` (exit 0) means only that the role bytes match *this locally supplied dataset and roster*. It does **not** verify independent human review, key ownership, source confidentiality, timestamp issuance, inference authorization or production. A corrupt/colluding local dataset and public-key roster could still pass. The signer must independently review and verify original source custody, document approval out of band, and refuse to sign if their data or trusted source identity cannot be established.
+
+Both the `prepare` and `verify` operations run **without private keys**. No signer should send a PEM private key or other credential to the custodian or this CLI. A synthetic test additionally executes the exact OpenSSL `pkeyutl -sign -rawin` command below using freshly created **temporary test keys**; that test is an interoperability check, not a real enrollment.
+
 ## Phase B — sign on the *signer's own trusted machine*, not in this tool
 
 For illustration only, a signer who independently controls an appropriately secured Ed25519 key may use OpenSSL:
@@ -66,7 +87,7 @@ An independently enrolled witness must then obtain a real TSR from a separately 
 
 ## Explicit safeguards and nonclaims
 
-- The `prepare` command creates signing bytes **but never signs**; the `assemble` command verifies caller-supplied detached signatures **but never generates/reads signing keys**. Both use local private files only; they do not call a network, TSA, model, provider or production tool.
+- The `prepare` command creates signing bytes **but never signs**; `verify` independently recomputes and checks the bytes on a signer's own machine **without signing**; the `assemble` command verifies caller-supplied detached signatures **but never generates/reads signing keys**. Both use local private files only; they do not call a network, TSA, model, provider or production tool.
 - Both outputs are exclusive/no-overwrite, use private mode-0700 parent directories and mode-0600 payload/assembly files, and retain the earlier non-atomic crash caveat. The private signature input decoder is the same single-FD bounded regular-file reader as the existing private JSON decoder. Full dataset and gold remain private and unuploaded.
 - Neither program identifies the humans controlling the keys, establishes a trusted key registry, seals a corpus externally, or authorizes a model call. Every PASS explicitly keeps `independent_author_verified=false`, `key_ownership_independently_authenticated=false`, `external_case_custody_verified=false`, `pre_inference_seal_verified=false`, `permitted_to_infer=false`, `model_value_verified=false` and `production_authorized=false`.
 - Only a real independent human/org can enroll signers, create and adjudicate a novel gold set, prove external timestamp chronology, and authorize an evaluation under the existing controls in [issue #157](https://github.com/scottjoyner/auto-router/issues/157). All draft research PRs remain **unmerged**, all blocked model-inference work remains **HOLD**, and production remains **HOLD**.

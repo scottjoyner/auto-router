@@ -7,6 +7,7 @@ roster cannot establish that its human owners are genuinely independent.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from pathlib import Path
 
@@ -100,6 +101,51 @@ def prepare_unsigned_payloads(dataset: object, roster: object) -> tuple[dict,dic
     except (TypeError,ValueError,KeyError,OverflowError,OSError,
             RecursionError,UnicodeError):
         return hold('untrusted_or_unavailable_offline_signing_inputs'),None
+
+
+def verify_unsigned_role_payload(dataset: object, roster: object,
+                                 role: object, supplied_payload: object) -> dict:
+    """Signer-side exact-byte verification before anyone signs anything.
+
+    The caller must independently review/authenticate the entire private
+    dataset and original public-key roster. This only compares its local copy
+    to a role-specific payload; no individual identity or custody is proved.
+    """
+    try:
+        if type(role) is not str or role not in SIGN_ROLES:
+            return hold('unknown_or_witness_role_not_permitted_before_tsa')
+        if (type(supplied_payload) is not bytes or
+            not 0 < len(supplied_payload) <= PAYLOAD_LIMIT):
+            return hold('invalid_detached_signing_payload_bytes')
+        prepared, payloads=prepare_unsigned_payloads(dataset,roster)
+        if prepared['decision']!='PASS_OFFLINE_UNSIGNED_ROLE_PAYLOADS_ONLY':
+            return hold('unverifiable_original_role_payload_'+prepared['reason'])
+        expected=payloads[role]
+        if not hmac.compare_digest(expected,supplied_payload):
+            return hold('payload_does_not_match_private_reviewed_case_commitment')
+        return {
+            'decision':'PASS_STATIC_SIGNER_PAYLOAD_MATCH_ONLY',
+            'reason':'exact role payload matches caller-supplied dataset and frozen commitment; no external signer authentication',
+            'role':role,
+            'payload_sha256':hashlib.sha256(expected).hexdigest(),
+            'signing_payloads_prepared':True,
+            'offline_signatures_verified':False,
+            'payload_matches_supplied_dataset':True,
+            'independent_dataset_review_verified':False,
+            'independent_author_verified':False,
+            'independent_gold_reviewer_verified':False,
+            'key_ownership_independently_authenticated':False,
+            'witness_signature_verified':False,
+            'external_timestamp_token_received':False,
+            'pre_inference_seal_verified':False,
+            'external_case_custody_verified':False,
+            'permitted_to_infer':False,
+            'model_value_verified':False,
+            'production_authorized':False,
+        }
+    except (TypeError,ValueError,KeyError,OverflowError,OSError,
+            RecursionError,UnicodeError):
+        return hold('untrusted_or_unavailable_signer_payload')
 
 
 def assemble_external_role_signatures(dataset: object, roster: object,

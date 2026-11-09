@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import json
 from pathlib import Path
 import stat
@@ -19,6 +20,7 @@ from research.lfm3_top5.independent_custody_handoff import (
 from research.lfm3_top5.prewitness_commitment import inspect_prewitness
 from research.lfm3_top5.signer_payload_handoff import (
     prepare_unsigned_payloads, assemble_external_role_signatures,
+    verify_unsigned_role_payload,
 )
 from scripts.lfm3_prepare_prewitness_tsq import prepare_prewitness_query
 from tests.test_lfm3_independent_custody_handoff import fictional_cases
@@ -90,6 +92,105 @@ class ExternalSignerBytes(unittest.TestCase):
             self.assertNotIn('payload_sha256' in out and d['cases'][0]['note'],json.dumps(out))
         self.assertFalse(out['independent_author_verified'])
         self.assertFalse(out['permitted_to_infer'])
+
+    def test_signer_independently_checks_exact_author_or_reviewer_payload(self):
+        d,r,_=fixtures()
+        status,payloads=prepare_unsigned_payloads(d,r)
+        self.assertEqual(status['decision'],'PASS_OFFLINE_UNSIGNED_ROLE_PAYLOADS_ONLY')
+        for role in ('author','reviewer'):
+            result=verify_unsigned_role_payload(d,r,role,payloads[role])
+            self.assertEqual(result['decision'],'PASS_STATIC_SIGNER_PAYLOAD_MATCH_ONLY')
+            self.assertEqual(result['role'],role)
+            self.assertTrue(result['payload_matches_supplied_dataset'])
+            for field in ('independent_dataset_review_verified','independent_author_verified',
+                          'key_ownership_independently_authenticated',
+                          'permitted_to_infer','production_authorized'):
+                self.assertFalse(result[field])
+            self.assertNotIn(d['cases'][0]['note'],json.dumps(result))
+        self.assertEqual(verify_unsigned_role_payload(d,r,'author',payloads['reviewer'])['decision'],'HOLD')
+        self.assertEqual(verify_unsigned_role_payload(d,r,'reviewer',payloads['author'])['decision'],'HOLD')
+        for role in (None, True, 'witness','model_developer',''):
+            self.assertEqual(verify_unsigned_role_payload(d,r,role,payloads['author'])['decision'],'HOLD')
+
+    def test_signer_payload_byte_tamper_and_changed_gold_fail_before_signing(self):
+        d,r,_=fixtures()
+        _,payloads=prepare_unsigned_payloads(d,r)
+        for value in (payloads['author']+b'\n',payloads['author'][:-1],
+                      payloads['author'].replace(b'author',b'review',1),b'',True,None,[],b'x'*4097):
+            with self.subTest(data=repr(value)[:55]):
+                status=verify_unsigned_role_payload(d,r,'author',value)
+                self.assertEqual(status['decision'],'HOLD')
+                self.assertFalse(status['permitted_to_infer'])
+        altered=copy.deepcopy(d)
+        altered['cases'][0]['note']+=' additional synthetic source text'
+        self.assertEqual(verify_unsigned_role_payload(altered,r,'author',payloads['author'])['decision'],'HOLD')
+        changed=copy.deepcopy(d)
+        # Use a valid *different* gold label: signatures cannot be transferred.
+        changed['cases'][0]['expected']['category']='tls_sni_missing' if changed['cases'][0]['expected']['category']!='tls_sni_missing' else 'node_auth_contract'
+        self.assertEqual(verify_unsigned_role_payload(changed,r,'author',payloads['author'])['decision'],'HOLD')
+
+    def test_actual_signer_verify_cli_before_detached_signature_assembly(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-review-own-payload-') as folder:
+            root=Path(folder);d,r,keys,prepare,assemble=cli_fixture(root)
+            self.assertEqual(run_cli(prepare).returncode,0)
+            for role in ('author','reviewer'):
+                verify=[sys.executable,'-m','scripts.lfm3_signer_payload_handoff',
+                        'verify','--dataset',str(root/'dataset.json'),
+                        '--key-roster',str(root/'roster.json'),
+                        '--role',role,'--payload',str(root/(role+'.bin'))]
+                rcv=run_cli(verify)
+                self.assertEqual(rcv.returncode,0,rcv.stderr)
+                out=json.loads(rcv.stdout)
+                self.assertEqual(out['decision'],'PASS_STATIC_SIGNER_PAYLOAD_MATCH_ONLY')
+                self.assertFalse(out['independent_dataset_review_verified'])
+                self.assertFalse(out['permitted_to_infer'])
+                self.assertNotIn(d['cases'][0]['note'],rcv.stdout)
+                original=(root/(role+'.bin')).read_bytes()
+                (root/(role+'.bin')).write_bytes(original+b'\n')
+                self.assertEqual(run_cli(verify).returncode,2)
+                (root/(role+'.bin')).write_bytes(original)
+                (root/(role+'.bin')).chmod(0o644)
+                self.assertEqual(run_cli(verify).returncode,2)
+                (root/(role+'.bin')).chmod(0o600)
+                self.assertEqual(run_cli(verify).returncode,0)
+            original=root/'author.bin'
+            other=root/'author-copy.bin';original.rename(other)
+            original.symlink_to(other)
+            args=[sys.executable,'-m','scripts.lfm3_signer_payload_handoff',
+                  'verify','--dataset',str(root/'dataset.json'),
+                  '--key-roster',str(root/'roster.json'),
+                  '--role','author','--payload',str(original)]
+            self.assertEqual(run_cli(args).returncode,2)
+
+    def test_documented_openssl_pkeyutl_sign_rawin_interoperates_with_assembler(self):
+        # This is a SELF-GENERATED temporary test signing key in a private
+        # directory. It is NOT independent human signer/custody evidence.
+        with tempfile.TemporaryDirectory(prefix='lfm3-openssl-interoperability-') as folder:
+            root=Path(folder);d,r,keys,prepare,assemble=cli_fixture(root)
+            self.assertEqual(run_cli(prepare).returncode,0)
+            for role in ('author','reviewer'):
+                private_pem=keys[role].private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+                key_path=root/(role+'.synthetic-test-key.pem')
+                private_file(key_path,private_pem)
+                sign=subprocess.run(['openssl','pkeyutl','-sign','-rawin',
+                    '-inkey',str(key_path),'-in',str(root/(role+'.bin')),
+                    '-out',str(root/(role+'.sig'))],
+                    capture_output=True,text=True,timeout=10)
+                self.assertEqual(sign.returncode,0,sign.stderr)
+                self.assertEqual((root/(role+'.sig')).stat().st_size,64)
+                # Real signers must never hand their PEM keys to the custodian.
+                key_path.unlink()
+                (root/(role+'.sig')).chmod(0o600)
+            good=run_cli(assemble)
+            self.assertEqual(good.returncode,0,(good.stdout,good.stderr))
+            self.assertEqual(json.loads(good.stdout)['decision'],
+                             'PASS_OFFLINE_DETACHED_ROLE_SIGNATURES_ONLY')
+            self.assertFalse(json.loads(good.stdout)['key_ownership_independently_authenticated'])
+            self.assertFalse(json.loads(good.stdout)['production_authorized'])
 
     def test_external_signature_verification_yields_existing_prewitness_schema(self):
         d,r,keys=fixtures()
