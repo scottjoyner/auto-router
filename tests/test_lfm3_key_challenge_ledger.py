@@ -1,6 +1,9 @@
 """Synthetic tests for verifier-only local nonce issue-and-spend ledger."""
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+import fcntl
+import os
 import json
 from pathlib import Path
 import stat
@@ -168,6 +171,79 @@ class LocalNonceLedger(unittest.TestCase):
                 sig = keys["author"].sign(payload.read_bytes())
                 self.assertEqual(consume_once(roster, "author", c, sig,
                                               str(ledger))["decision"], "HOLD")
+
+    def test_consumer_cannot_see_issued_record_before_issuer_fsync(self):
+        # Reproduce the publication window deterministically: the issuer has
+        # written the complete issuance marker but has not finished its
+        # directory fsync yet. Consume must HOLD until the issuer releases
+        # the pinned directory lock, then a normal first consume may PASS.
+        with tempfile.TemporaryDirectory(prefix="lfm3-ledger-publish-race-") as path:
+            root = Path(path)
+            _, roster, keys = fixtures()
+            ledger = root / "ledger"
+            ledger.mkdir(mode=0o700)
+            challenge = root / "challenge.json"
+            payload = root / "payload.bin"
+            marker_created = Event()
+            release_issuer = Event()
+            from research.lfm3_top5 import key_challenge_ledger as module
+            original_create = module._owned_create
+
+            def pause_after_issue_write(fd, name, body, created):
+                original_create(fd, name, body, created)
+                if name.startswith("issued-"):
+                    marker_created.set()
+                    if not release_issuer.wait(timeout=8):
+                        raise TimeoutError("synthetic issuer fsync delay")
+
+            with patch.object(module, "_owned_create",
+                              side_effect=pause_after_issue_write):
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(issue_to_private_ledger, roster,
+                        "author", str(ledger), str(challenge), str(payload))
+                    try:
+                        self.assertTrue(marker_created.wait(timeout=5))
+                        self.assertTrue(challenge.is_file())
+                        self.assertTrue(payload.is_file())
+                        issued = json.loads(challenge.read_text())
+                        signature = keys["author"].sign(payload.read_bytes())
+                        denied = consume_once(roster, "author", issued,
+                                              signature, str(ledger))
+                        self.assertEqual(denied["decision"], "HOLD")
+                        self.assertFalse(denied["local_one_time_claim_recorded"])
+                        self.assertFalse((ledger / ("spent-" + sha(issued) + ".json")).exists())
+                    finally:
+                        release_issuer.set()
+                    self.assertEqual(future.result(timeout=5)["decision"],
+                                     "PASS_OFFLINE_LOCAL_CHALLENGE_ISSUED_ONLY")
+            first = consume_once(roster, "author", issued, signature, str(ledger))
+            self.assertEqual(first["decision"],
+                             "PASS_OFFLINE_LOCAL_ONE_TIME_KEY_CLAIM_ONLY")
+            self.assertEqual(consume_once(roster, "author", issued,
+                                          signature, str(ledger))["decision"], "HOLD")
+
+    def test_external_ledger_lock_contention_blocks_issue_and_consume(self):
+        with tempfile.TemporaryDirectory(prefix="lfm3-ledger-contention-") as path:
+            root = Path(path)
+            roster, ledger, _, _, c, sig = setup_case(root)
+            from research.lfm3_top5.key_challenge_ledger import _ledger_fd
+            fd = _ledger_fd(str(ledger))
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(consume_once(roster, "author", c, sig,
+                                              str(ledger))["decision"], "HOLD")
+                challenge = root / "other-challenge.json"
+                payload = root / "other-payload.bin"
+                out = issue_to_private_ledger(roster, "reviewer", str(ledger),
+                                              str(challenge), str(payload))
+                self.assertEqual(out["decision"], "HOLD")
+                self.assertFalse(challenge.exists())
+                self.assertFalse(payload.exists())
+            finally:
+                os.close(fd)
+            self.assertEqual(consume_once(roster, "author", c, sig,
+                                          str(ledger))["decision"],
+                             "PASS_OFFLINE_LOCAL_ONE_TIME_KEY_CLAIM_ONLY")
 
     def test_cli_issue_consume_then_replay_holds(self):
         with tempfile.TemporaryDirectory(prefix="lfm3-ledger-cli-") as path:

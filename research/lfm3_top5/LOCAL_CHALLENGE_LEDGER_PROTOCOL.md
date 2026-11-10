@@ -46,6 +46,16 @@ from this local software. None has been completed in this research fixture.
   writer. Only *after both are written* it creates and fsyncs an exclusive
   issue record in the verifier's private ledger directory, named by the
   canonical SHA-256 of the challenge. An unrecorded output cannot be consumed.
+- Issuance and consumption now both take the same **nonblocking exclusive
+  advisory lock on the pinned verifier-owned directory descriptor**. A
+  consumer cannot observe a complete issuance record while the issuer is
+  still completing its directory fsync. Contention returns **HOLD**, rather
+  than waiting indefinitely or reporting premature success. Once an issuer
+  finishes and releases its descriptor, the first valid claimant may
+  consume normally. Linux local filesystem advisory-lock semantics are
+  required; unsupported/broken filesystem locking must not be treated as
+  a trusted PASS. A noncooperating same-UID adversary can still ignore
+  advisory locks, so external trust and append-only custody remain HOLD.
 - Consume first checks Ed25519 signature bytes and exact role. It then opens
   the independently controlled mode-0700 ledger by pinned no-follow directory
   descriptor and reads the strict owner-private issuance record, matching
@@ -85,6 +95,6 @@ private key, live model endpoint, production host, provider route or TSA is
 accessed by this code.
 
 Synthetic tests run ephemeral in-memory signers, actual private local ledger
-files, concurrent claims, invalid signatures, missing/altered issue records,
+files, concurrent claims, issuance-publication/consumer race, nonblocking lock contention, invalid signatures, missing/altered issue records,
 unsafe directory permissions, replay, partial issue failure and a simulated
 uncertain fsync. A structural PASS is never promoted into external custody.

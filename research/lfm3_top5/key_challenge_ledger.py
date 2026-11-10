@@ -7,6 +7,7 @@ The directory must be verifier-owned, private mode 0700, on a trusted filesystem
 from __future__ import annotations
 
 import os
+import fcntl
 
 from .key_possession_contract import (
     hold as base_hold,
@@ -39,6 +40,15 @@ def _ledger_fd(directory: str) -> int:
         raise ValueError("invalid_verifier_private_ledger_directory")
     fd, _ = _target_dirfd(directory.rstrip("/") + "/nonce-record")
     return fd
+
+
+def _lock_verifier_ledger(fd: int) -> None:
+    # A complete issued record must not be consumed before the issuer's
+    # directory fsync returns. Use one bounded, cooperative directory lock
+    # around publication and consumption; contention always fails closed.
+    # This does NOT protect against noncooperating same-UID adversaries,
+    # filesystem rollback or a host with broken advisory locking.
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def _issue_record(challenge: dict) -> dict:
@@ -77,6 +87,7 @@ def issue_to_private_ledger(roster: object, role: object, ledger_dir: str,
     try:
         # Pin/validate the verifier-controlled private store before publishing.
         fd = _ledger_fd(ledger_dir)
+        _lock_verifier_ledger(fd)
         record = _issue_record(challenge)
         name = _file_name("issued-", record["challenge_sha256"])
         # Refuse accidental reuse and pre-existing final symlinks without
@@ -127,6 +138,7 @@ def consume_once(roster: object, role: object, challenge: object,
     fd = None
     try:
         fd = _ledger_fd(ledger_dir)
+        _lock_verifier_ledger(fd)
         record = _issue_record(challenge)
         digest = record["challenge_sha256"]
         issued = read_private_json(_file_name("issued-", digest),
