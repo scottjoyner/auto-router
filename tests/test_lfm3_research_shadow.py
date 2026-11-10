@@ -186,6 +186,22 @@ def test_research_sources_cannot_import_production_runtime():
             )
 
 
+def test_public_research_provenance_does_not_publish_absolute_private_host_paths():
+    from pathlib import Path
+    import json
+    root=Path(__file__).resolve().parents[1]/'research'/'lfm3_top5'
+    files=(root/'VENDOR_PROVENANCE.json',
+           root/'SELECTIVE_AGREEMENT_SHADOW_PROTOCOL.md',
+           root/'STRUCTURED_DECODE_PREFLIGHT_PROTOCOL.md')
+    for file in files:
+        assert '/home/scott/' not in file.read_text(),file.name
+    provenance=json.loads(files[0].read_text())
+    assert provenance['source_lab_repository']=='private-local-source-lab (absolute path withheld)'
+    assert provenance['source_lab_commit']=='c6f867c'
+    assert len(provenance['vendor_sha256'])==19
+    # Sanitized pointer must not mutate pinned vendored evidence file hashes.
+
+
 def test_vendored_sources_equal_frozen_lab_commit_hashes():
     import hashlib
     import json

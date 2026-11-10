@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -209,6 +211,96 @@ class TimestampIntegrity(unittest.TestCase):
         self.assertFalse(out["issuer_independently_authenticated"])
         self.assertFalse(out["pre_inference_chronology_verified"])
 
+    def _private_cli_fixture(self, root):
+        values=self.fixture()
+        sources={
+            "dataset":(values[0],True),"bundle":(values[1],True),
+            "key-roster":(values[2],True),"timestamp-query":(values[3],False),
+            "timestamp-response":(values[4],False),"ca-pem":(values[5],False),
+            "signer-chain-pem":(values[6],False),
+        }
+        cmd=[sys.executable,"-m","scripts.lfm3_rfc3161_anchor_verify"]
+        for name,(value,as_json) in sources.items():
+            file=root/name
+            if as_json:file.write_text(json.dumps(value,sort_keys=True))
+            else:file.write_bytes(value)
+            file.chmod(0o600)
+            cmd.extend(["--"+name,str(file)])
+        cmd.extend(["--ca-pin-sha256",values[7]])
+        return cmd,values
+
+    def _private_cli_hold(self,cmd,values):
+        out=subprocess.run(cmd,text=True,capture_output=True,timeout=15)
+        self.assertEqual(out.returncode,2,(out.stdout,out.stderr))
+        body=json.loads(out.stdout)
+        self.assertEqual(body['decision'],'HOLD')
+        self.assertFalse(body['production_authorized'])
+        self.assertFalse(body['external_custody_verified'])
+        self.assertNotIn(values[0]['cases'][0]['note'],out.stdout)
+        self.assertNotIn(values[0]['cases'][0]['id'],out.stdout)
+        return body
+
+    def test_cli_requires_owner_private_input_modes_and_parent_directory(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-ts-private-modes-') as t:
+            root=Path(t);cmd,values=self._private_cli_fixture(root)
+            good=subprocess.run(cmd,text=True,capture_output=True,timeout=15)
+            self.assertEqual(good.returncode,0,good.stderr)
+            for name in ('dataset','bundle','key-roster','timestamp-query',
+                         'timestamp-response','ca-pem','signer-chain-pem'):
+                file=root/name
+                for mode in (0o644,0o640,0o700):
+                    with self.subTest(name=name,mode=oct(mode)):
+                        file.chmod(mode)
+                        self._private_cli_hold(cmd,values)
+                        file.chmod(0o600)
+            root.chmod(0o755)
+            self._private_cli_hold(cmd,values)
+            root.chmod(0o700)
+            self.assertEqual(subprocess.run(cmd,capture_output=True,timeout=15).returncode,0)
+
+    def test_cli_rejects_symlinked_parent_and_final_file_and_hardlinks(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-ts-private-links-') as t:
+            root=Path(t);cmd,values=self._private_cli_fixture(root)
+            alias=root/'alias';alias.symlink_to(root,target_is_directory=True)
+            for name in ('dataset','timestamp-response','ca-pem'):
+                with self.subTest(kind='parent',name=name):
+                    changed=list(cmd);changed[changed.index('--'+name)+1]=str(alias/name)
+                    self._private_cli_hold(changed,values)
+            alias.unlink()
+            response=root/'timestamp-response';orig=response.read_bytes()
+            response.rename(root/'real-response')
+            response.symlink_to(root/'real-response')
+            self._private_cli_hold(cmd,values)
+            response.unlink();(root/'real-response').rename(response)
+            extra=root/'hardlink'
+            os.link(response,extra)
+            self._private_cli_hold(cmd,values)
+            extra.unlink()
+            response.unlink();os.mkfifo(response,mode=0o600)
+            self._private_cli_hold(cmd,values)
+            response.unlink();response.write_bytes(orig);response.chmod(0o600)
+            self.assertEqual(subprocess.run(cmd,capture_output=True,timeout=15).returncode,0)
+
+    def test_cli_rejects_oversize_inputs_duplicate_keys_and_noncanonical_paths(self):
+        with tempfile.TemporaryDirectory(prefix='lfm3-ts-private-size-') as t:
+            root=Path(t);cmd,values=self._private_cli_fixture(root)
+            for name,limit in (('dataset',2*1024*1024),('bundle',65536),
+                               ('key-roster',65536),('timestamp-query',131072),
+                               ('ca-pem',262144)):
+                with self.subTest(name=name):
+                    file=root/name;original=file.read_bytes()
+                    file.write_bytes(original+b' '*(limit+1-len(original)))
+                    self._private_cli_hold(cmd,values)
+                    file.write_bytes(original)
+            roster=root/'key-roster';original=roster.read_bytes()
+            roster.write_bytes(b'{"schema":"abc","schema":"def"}')
+            self._private_cli_hold(cmd,values)
+            roster.write_bytes(original)
+            changed=list(cmd)
+            changed[changed.index('--dataset')+1]=str(root/'..'/root.name/'dataset')
+            self._private_cli_hold(changed,values)
+            self.assertEqual(subprocess.run(cmd,capture_output=True,timeout=15).returncode,0)
+
     def test_cli_pass_and_tampered_reply_hold(self):
         pack=self.fixture()
         with tempfile.TemporaryDirectory(prefix="lfm3-ts-cli-") as t:
@@ -224,6 +316,7 @@ class TimestampIntegrity(unittest.TestCase):
                 file=root/name
                 if as_json:file.write_text(json.dumps(value,sort_keys=True))
                 else:file.write_bytes(value)
+                file.chmod(0o600)
                 cmd+=["--"+name,str(file)]
             cmd+=["--ca-pin-sha256",pack[7]]
             good=subprocess.run(cmd,text=True,capture_output=True,timeout=15)

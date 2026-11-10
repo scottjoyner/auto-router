@@ -27,7 +27,7 @@ One actual previously captured original-prompt response per fictional case/mode 
 
 **Correction to prior reporting:** All **36/36** original replies per mode were parseable JSON objects with two keys, but **8/36** per mode placed explanatory text in the `evidence` value instead of the exact `E#` marker required by the task. Thus **28/36** satisfy the strict semantic output schema; the historical `invalid_format=0` refers only to loose JSON shape, not strict marker conformance. This does **not** alter the historical **19/36** exact-answer score, which already counted those eight as incorrect. Do not silently reinterpret the frozen scorer's `invalid_format` field: this shadow pass is an independent supplementary *schema-veto* check, not a change to the frozen scoring definitions.
 
-Local-only audit V2: `/home/scott/git/.lfm3-dev-cohort-20261108/dev_shadow_agreement_summary_v2.json`, SHA-256 `8b887c560e96384d786440d1ab5ecd9c2f62a0a21a3a732513a0b023782012ad`, private local Git commit `c19422d8ccee93eeec63ca924df23de63fa123fa`, **zero remotes**. Raw model responses, private host receipts and complete fictional notes are deliberately **not published**. The report includes only derived counts and local receipt hashes.
+Local-only audit V2: `<PRIVATE_DEV_ARCHIVE>/dev_shadow_agreement_summary_v2.json`, SHA-256 `8b887c560e96384d786440d1ab5ecd9c2f62a0a21a3a732513a0b023782012ad`, private local Git commit `c19422d8ccee93eeec63ca924df23de63fa123fa`, **zero remotes**. Raw model responses, private host receipts and complete fictional notes are deliberately **not published**. The report includes only derived counts and local receipt hashes.
 
 ## Safe next steps
 
