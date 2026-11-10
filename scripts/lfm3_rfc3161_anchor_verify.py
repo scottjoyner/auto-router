@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -17,6 +17,8 @@ import tempfile
 from research.lfm3_top5.independent_custody_handoff import verify_handoff
 from research.lfm3_top5.prospective_holdout_gate import canonical
 from research.lfm3_top5.unstructured_triage_audit import _invalid_constant, _pairs_no_duplicate
+from scripts.lfm3_private_json_reader import read_private_json, read_private_bytes
+from scripts.lfm3_private_output_writer import _target_dirfd
 
 TOKEN_PREFIX = "sha256:"
 MAX_DER = 131072
@@ -162,17 +164,31 @@ def verify_timestamp(dataset: object, bundle: object, key_roster: object,
             RecursionError,subprocess.TimeoutExpired):
         return hold("untrusted_or_unavailable_timestamp_input")
 
-def _read_json(path: str):
-    with open(path,"r",encoding="utf-8") as stream:
-        return json.load(stream,object_pairs_hook=_pairs_no_duplicate,
-                         parse_constant=_invalid_constant)
+def _read_private(path: str, limit: int, *, json_input: bool):
+    """Reject unsafe parent symlinks, oversize/linked/world-readable files.
+
+    Bound all private corpus and timestamp inputs via the same pinned-parent
+    single-FD reader as #165/#166. No credential, private signer key or
+    filesystem path is included in a HOLD result.
+    """
+    parent_fd=None
+    try:
+        parent_fd, basename=_target_dirfd(path)
+        if json_input:
+            return read_private_json(basename,limit=limit,dir_fd=parent_fd)
+        return read_private_bytes(basename,limit=limit,dir_fd=parent_fd)
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def _read_json(path: str, limit: int):
+    return _read_private(path, limit, json_input=True)
+
 
 def _read_limited(path: str, limit: int) -> bytes:
-    with open(path,"rb") as stream:
-        data=stream.read(limit+1)
-    if len(data)>limit:
-        raise ValueError("timestamp file exceeds limit")
-    return data
+    return _read_private(path, limit, json_input=False)
+
 
 def main() -> int:
     parser=argparse.ArgumentParser(description="Verify LFM3 RFC3161 structure offline; never custody or production approval")
@@ -182,15 +198,16 @@ def main() -> int:
     a=parser.parse_args()
     try:
         out=verify_timestamp(
-            _read_json(a.dataset),_read_json(a.bundle),_read_json(a.key_roster),
+            _read_json(a.dataset,2*1024*1024),
+            _read_json(a.bundle,65536),_read_json(a.key_roster,65536),
             _read_limited(a.timestamp_query,MAX_DER),
             _read_limited(a.timestamp_response,MAX_DER),
             _read_limited(a.ca_pem,MAX_PEM),
             _read_limited(a.signer_chain_pem,MAX_PEM),
             a.ca_pin_sha256
         )
-    except (TypeError,ValueError,OSError,RecursionError):
-        out=hold("unreadable_or_oversize_local_timestamp_file")
+    except (TypeError,ValueError,OSError,RecursionError,OverflowError,UnicodeError):
+        out=hold("unreadable_or_unsafe_private_local_timestamp_file")
     print(canonical(out))
     return 0 if out["decision"]=="PASS_OFFLINE_TIMESTAMP_CRYPTO_ONLY" else 2
 

@@ -20,10 +20,35 @@ PYTHONPATH=. python3 -m scripts.lfm3_rfc3161_anchor_verify \
   --key-roster /approved/private/independently-authenticated-public-keys.json \
   --timestamp-query /approved/private/request.tsq \
   --timestamp-response /approved/private/response.tsr \
-  --ca-pem /approved/read-only/independently-trusted-tsa-root.pem \
-  --signer-chain-pem /approved/read-only/untrusted-tsa-signer.pem \
+  --ca-pem /approved/private/independently-trusted-tsa-root.pem \
+  --signer-chain-pem /approved/private/untrusted-tsa-signer.pem \
   --ca-pin-sha256 ORIGINAL_OUT_OF_BAND_AUTHENTICATED_ROOT_PEM_SHA256
 ```
+
+**Owner-private file requirement (RFC3161 CLI intake hardening):** All seven
+input paths must be absolute, canonical paths with no `.` or `..` and no
+symlinked ancestor or final component. The immediate parent directories must
+be owned by the custodian and mode **0700**, including the copies of the
+*public* CA and signer-chain PEM files. Input regular files must be owned by
+the custodian, single-linked, nonempty, owner-readable mode **0600 or 0400**
+(no group/other access or execute permissions); arbitrary symlinks, hard
+links, FIFOs and group/world-readable inputs are rejected before the verifier
+examines the timestamp. Original trusted CA provenance remains a separate
+human/out-of-band decision: copying a CA into a private folder does **not**
+make it trusted. The bounded input caps are dataset **2 MiB**, three-role
+bundle **64 KiB**, public roster **64 KiB**, each DER timestamp query/response
+**128 KiB**, and each CA/signer-chain PEM **256 KiB**. Any unsafe or overlarge
+file returns HOLD without dumping the original private source, paths, notes,
+gold, token, or signer identities. No source of independent trust is created
+by this filesystem change.
+
+The external-witness scripts use only local fixed `/usr/bin/openssl` list
+commands (`ts -query` and `ts -verify`) with bounded subprocess timeouts,
+`stdin=DEVNULL` and no `shell=True`. This protects against a shell command
+injection at that subprocess boundary, but the source file still requires
+normal code review and no external issuer or online revocation check is
+performed. The bounded private-file input check rejects a malicious
+symlinked parent without trusting `Path.resolve()` to authenticate custody.
 
 Exit 0 / `PASS_OFFLINE_TIMESTAMP_CRYPTO_ONLY` means the signer/trust-chain and nonce/imprint satisfy the **supplied** trust inputs, nothing more. Exit 2 / HOLD means incomplete, mismatched or malformed evidence. Report only canonical digests, trust-pin and Boolean gates; do not print raw narratives, response text, token contents, private keys, issuer secrets or machine identifiers.
 

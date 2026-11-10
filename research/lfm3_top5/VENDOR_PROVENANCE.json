@@ -44,7 +44,7 @@
     "unstructured_rule_baseline.py": "30e17cb1e6f7b86d8b5d70b1823cf4d83f0862148f660f5322c2428bed00d8ee",
     "unstructured_public_fixture.json": "09cfab8ce640a56c8ffb4977d5b2583c48913b63f03ee3de8dafd74b55e2a074"
   },
-  "source_lab_repository": "/home/scott/git/lfm3-top5-free-agents-20261106",
+  "source_lab_repository": "private-local-source-lab (absolute path withheld)",
   "adapted_vendor_files": {
     "deathstar_pair_audit.py": "only import path adjusted: gpu_request_audit -> research.lfm3_top5.gpu_request_audit; no code/logic changes",
     "depth_sweep_audit.py": "only import paths adjusted to research.lfm3_top5.deathstar_pair_audit/gpu_request_audit; pure logic unchanged",

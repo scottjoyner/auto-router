@@ -14,7 +14,7 @@ from research.lfm3_top5.unstructured_triage_audit import (
 )
 
 
-def read_private_json(path: str, *, limit: int, dir_fd: int | None = None):
+def read_private_bytes(path: str, *, limit: int, dir_fd: int | None = None) -> bytes:
     """Read a bounded, confidential JSON file via one no-follow file handle.
 
     Reject FIFO/device/directory, hard links, non-owner ownership and any
@@ -53,6 +53,12 @@ def read_private_json(path: str, *, limit: int, dir_fd: int | None = None):
             before.st_mtime_ns != after.st_mtime_ns or
             before.st_ctime_ns != after.st_ctime_ns):
             raise ValueError("oversized_or_mutated_private_input")
+    return content
+
+
+def read_private_json(path: str, *, limit: int, dir_fd: int | None = None):
+    """Strict duplicate-key JSON from the same bounded private FD interface."""
+    content=read_private_bytes(path,limit=limit,dir_fd=dir_fd)
     return json.loads(content.decode("utf-8"),
                       object_pairs_hook=_pairs_no_duplicate,
                       parse_constant=_invalid_constant)
