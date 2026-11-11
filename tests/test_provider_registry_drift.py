@@ -32,10 +32,12 @@ carries model ids that must still be present in the registry.
 
 from __future__ import annotations
 
+import datetime as _dt
 import importlib.util
 import json
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +102,98 @@ def _accepted_entry(provider: str, model: str) -> dict:
     return {}
 
 
+def _models_observed_across_two_probes(
+    first: list[str], second: list[str] | None,
+) -> tuple[set[str], bool]:
+    """Accept a transient presence, but NEVER invent models absent twice.
+
+    The live gate is intentionally a double observation: a model present in
+    either successful probe is churn, rather than proven missing. A failed
+    second probe cannot retroactively erase or create an earlier observation.
+    This does not authorize routing to an unloaded model.
+    """
+    first_ids = set(first)
+    if second is None:
+        return first_ids, False
+    second_ids = set(second)
+    return first_ids | second_ids, first_ids != second_ids
+
+
+def _waiver_review_in_date(review_by: str, today: _dt.date | None = None) -> bool:
+    """A waiver's due date is evaluated against today, never a frozen past day."""
+    return _dt.date.fromisoformat(review_by) >= (today if today is not None else _dt.date.today())
+
+
+class ProviderRegistryGateUnitTests(unittest.TestCase):
+    """Hermetic gate truth-table tests; no fleet connections or waiver edits."""
+
+    def test_model_present_first_then_unloaded_is_not_falsely_missing(self):
+        observed, churn = _models_observed_across_two_probes(['expected','other'],['other'])
+        self.assertEqual(observed, {'expected','other'})
+        self.assertTrue(churn)
+
+    def test_model_unloaded_first_then_present_is_not_falsely_missing(self):
+        observed, churn = _models_observed_across_two_probes(['other'],['expected','other'])
+        self.assertIn('expected',observed)
+        self.assertTrue(churn)
+
+    def test_missing_from_both_probes_remains_an_actual_gate_failure(self):
+        observed, churn = _models_observed_across_two_probes(['other'],['different'])
+        self.assertNotIn('expected',observed)
+        self.assertTrue(churn)
+        both_empty, _ = _models_observed_across_two_probes([],[])
+        self.assertNotIn('expected',both_empty)
+
+    def test_unreachable_second_probe_does_not_invent_a_model(self):
+        observed, churn = _models_observed_across_two_probes(['other'],None)
+        self.assertNotIn('expected',observed)
+        self.assertFalse(churn)
+        observed, churn = _models_observed_across_two_probes(['expected'],None)
+        self.assertIn('expected',observed)
+        self.assertFalse(churn)
+
+    def _run_mocked_live_gate(self, providers, observations):
+        """Call the production drift gate with fixed local observations only."""
+        live = ProviderRegistryDriftTests(methodName='test_registry_matches_live_hosts')
+        with patch.object(drift, 'load_providers', return_value=providers), \
+             patch.object(drift, 'fetch_served_models_with_fallback',
+                          side_effect=observations):
+            live.test_registry_matches_live_hosts()
+
+    def test_live_gate_handles_transient_model_in_either_probe(self):
+        provider=drift.Provider('synthetic-mock','test','http://localhost:0/v1',['expected'])
+        for seen in (['expected'],[]):
+            second=[] if seen else ['expected']
+            with self.subTest(first=seen):
+                self._run_mocked_live_gate([provider],[seen,second])
+
+    def test_live_gate_still_fails_if_model_absent_from_both_probes(self):
+        provider=drift.Provider('synthetic-mock','test','http://localhost:0/v1',['expected'])
+        with self.assertRaisesRegex(AssertionError,'synthetic-mock: expected'):
+            self._run_mocked_live_gate([provider],[[],[]])
+
+    def test_live_gate_partial_outage_does_not_hide_reachable_missing_model(self):
+        missing=drift.Provider('synthetic-missing','test','http://localhost:0/v1',['expected'])
+        offline=drift.Provider('synthetic-offline','test','http://localhost:0/v1',['unknown'])
+        # A reachable empty provider is concrete drift. A second unrelated
+        # unreachable host cannot turn that observation into a skip.
+        with self.assertRaisesRegex(AssertionError,'synthetic-missing: expected'):
+            self._run_mocked_live_gate([missing,offline],[[],[],None])
+
+    def test_live_gate_all_hosts_unreachable_still_skips(self):
+        provider=drift.Provider('synthetic-offline','test','http://localhost:0/v1',['unknown'])
+        with self.assertRaises(unittest.SkipTest):
+            self._run_mocked_live_gate([provider],[None])
+
+    def test_waiver_deadline_uses_current_date_not_frozen_october_2026(self):
+        current=_dt.date(2026,11,10)
+        self.assertFalse(_waiver_review_in_date('2026-11-04',current))
+        self.assertTrue(_waiver_review_in_date('2026-11-10',current))
+        self.assertTrue(_waiver_review_in_date('2026-11-11',current))
+        with self.assertRaises(ValueError):
+            _waiver_review_in_date('not-a-date',current)
+
+
 class ProviderRegistryDriftTests(unittest.TestCase):
     """The registry must describe the fleet, not a memory of the fleet."""
 
@@ -161,21 +255,23 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         """Direct comparison against the fleet. Skipped, never failed, when down.
 
         A MISSING is real drift and fails. An UNREACHABLE host tells us nothing
-        about whether the model exists, so it skips: failing here would make a
-        powered-off node indistinguishable from a config bug and invite deleting
-        live registry entries.
+        about whether that host serves a model. Skip only when *no provider*
+        answered; partial outages must not conceal confirmed missing models on
+        other reachable providers.
         """
         registry = drift.load_providers(REGISTRY)
         accepted = _accepted_keys()
         missing: list[str] = []
         unreachable: list[str] = []
         ok = 0
+        answered = 0
 
         for provider in registry:
             served = drift.fetch_served_models_with_fallback(provider)
             if served is None:
                 unreachable.append(provider.name)
                 continue
+            answered += 1
             # Probe twice. LM Studio evicts and loads models on its own: during
             # this work x1-370 served four models, then one, then four again
             # within the hour, with no operator action. A single probe therefore
@@ -183,11 +279,7 @@ class ProviderRegistryDriftTests(unittest.TestCase):
             # A model missing from both probes is a real miss; one that comes back
             # is churn, and is reported but not failed.
             second = drift.fetch_served_models_with_fallback(provider)
-            if second is not None and second != served:
-                served = sorted(set(served) & set(second))
-                churned = True
-            else:
-                churned = False
+            served, churned = _models_observed_across_two_probes(served, second)
             for model in provider.models:
                 if model in served:
                     ok += 1
@@ -195,7 +287,7 @@ class ProviderRegistryDriftTests(unittest.TestCase):
                     kind = " (churning)" if churned else ""
                     missing.append(f"{provider.name}: {model}{kind}")
 
-        if unreachable and ok == 0:
+        if unreachable and answered == 0:
             self.skipTest(
                 f"no provider answered /v1/models (tried: {', '.join(unreachable)}); "
                 "this looks like a fleet outage, not registry drift"
@@ -225,9 +317,7 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         entries = document.get("entries", []) or []
         self.assertTrue(entries, "accepted-drift file exists but lists nothing")
 
-        import datetime as _dt
-
-        today = _dt.date(2026, 10, 4)
+        today = _dt.date.today()
         for entry in entries:
             with self.subTest(provider=entry.get("provider"), model=entry.get("model")):
                 self.assertTrue(str(entry.get("reason", "")).strip(), "a waiver needs a reason")
@@ -241,12 +331,11 @@ class ProviderRegistryDriftTests(unittest.TestCase):
                     )
                 review_by = str(entry.get("review_by", "")).strip()
                 self.assertTrue(review_by, "a waiver needs a review_by date")
-                parsed = _dt.date.fromisoformat(review_by)
-                self.assertGreaterEqual(
-                    parsed,
-                    today,
-                    f"review_by {review_by} is in the past - this waiver is overdue, "
-                    "fix the registry or re-review it deliberately",
+                self.assertTrue(
+                    _waiver_review_in_date(review_by, today),
+                    f"review_by {review_by} is in the past (today {today}) - "
+                    "this waiver is overdue; fix the registry or independently "
+                    "re-review it deliberately, never auto-extend",
                 )
 
     def test_accepted_drift_does_not_hide_unknown_drift(self):
