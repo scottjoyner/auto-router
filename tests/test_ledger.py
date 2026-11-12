@@ -221,3 +221,47 @@ def test_successful_zero_rate_is_counted_in_model_value_prediction(tmp_path):
     assert report["summary"]["completed"] == 1
     assert report["items"][0]["realized_value_per_hour"] == 0.0
     assert report["items"][0]["realized_regret"] == 0.0
+
+
+def test_counterfactual_success_is_not_a_verified_task_completion(tmp_path):
+    """A completed 200 transport cannot stand in for an AssistX receipt."""
+    ledger = UsageLedger(f"sqlite:///{tmp_path / 'ledger.sqlite3'}")
+    candidate = {"provider": "local", "provider_model": "model"}
+    ledger.record_counterfactual_decision(
+        decision_id="successful-transport", request_id="attempt-200", stage="final",
+        chosen=candidate, candidates=[candidate], rejections=[],
+    )
+    ledger.record_runtime_sample(RuntimeSample(
+        request_id="attempt-200", provider_id="local", model_id="model",
+        route="chat_completions", priority="background", stage="final",
+        status_code=200, latency_ms=200, value_per_second=2.0,
+    ))
+    summary = ledger.counterfactual_summary()["summary"]
+    assert summary["completed"] == 1
+    assert summary["transport_completed"] == 1
+    assert summary["accepted_task_completions"] is None
+    assert summary["task_receipt_verification"] == "NOT_CHECKED"
+    assert summary["failed"] == 0
+
+
+def test_counterfactual_failure_only_cannot_be_success_or_accepted_work(tmp_path):
+    ledger = UsageLedger(f"sqlite:///{tmp_path / 'ledger.sqlite3'}")
+    candidate = {"provider": "missing", "provider_model": "model"}
+    ledger.record_counterfactual_decision(
+        decision_id="failure-transport", request_id="attempt-503", stage="final",
+        chosen=candidate, candidates=[candidate], rejections=[],
+    )
+    ledger.record_runtime_sample(RuntimeSample(
+        request_id="attempt-503", provider_id="missing", model_id="model",
+        route="chat_completions", priority="background", stage="final",
+        status_code=503, latency_ms=0, value_per_second=0.0,
+        error_type="ConnectionError", error_message="endpoint unavailable",
+    ))
+    report=ledger.counterfactual_summary()
+    summary=report["summary"]
+    assert summary["completed"] == 0
+    assert summary["transport_completed"] == 0
+    assert summary["failed"] == 1
+    assert summary["accepted_task_completions"] is None
+    assert summary["task_receipt_verification"] == "NOT_CHECKED"
+    assert report["items"][0]["realized_regret"] is None
