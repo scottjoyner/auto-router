@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hmac
 import os
+import re
 import time
 from typing import Any
 from urllib.parse import quote
@@ -14,7 +16,7 @@ class ExecutorClaimFenceError(RuntimeError):
     pass
 
 
-def _executor_metadata(request: Any) -> dict[str, Any] | None:
+def _executor_metadata(request: Any) -> dict[str, Any]:
     metadata = request.metadata if isinstance(getattr(request, "metadata", None), dict) else {}
     # Caller-controlled model request metadata is not a trusted service
     # identity. Do not interpret an "authenticated" boolean as a lease fence:
@@ -35,15 +37,32 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
     current = getattr(manager, "current", None)
     if current is None or not current.is_fresh():
         raise ExecutorClaimFenceError("runtime projection is absent or expired")
-    expected_generation = int(identity.get("projection_generation") or 0)
-    if expected_generation != int(current.generation):
+    expected_generation = identity.get("projection_generation")
+    if (
+        type(expected_generation) is not int
+        or expected_generation < 1
+        or expected_generation != current.generation
+    ):
         raise ExecutorClaimFenceError("executor claim projection generation is stale")
 
-    task_id = str(identity.get("task_id") or "").strip()
-    claim_id = str(identity.get("claim_id") or "").strip()
-    agent_id = str(identity.get("agent_id") or "").strip()
-    if not task_id or not claim_id or not agent_id:
-        raise ExecutorClaimFenceError("executor claim identity is incomplete")
+    task_id = identity.get("task_id")
+    claim_id = identity.get("claim_id")
+    agent_id = identity.get("agent_id")
+    session_id = identity.get("agent_session_id")
+    attempt = identity.get("execution_attempt")
+    digest = identity.get("task_payload_digest")
+    if (
+        any(type(value) is not str or not value for value in (
+            task_id, claim_id, agent_id, session_id,
+        ))
+        or type(attempt) is not int or attempt < 1
+        or type(digest) is not str
+        or re.fullmatch(r"sha256:[a-f0-9]{64}", digest) is None
+    ):
+        raise ExecutorClaimFenceError("executor claim revision or digest is incomplete")
+    # Also give type-checkers the post-validation evidence; do not coerce an
+    # invalid task ID to a string and accidentally admit it.
+    assert isinstance(task_id, str)
 
     base_url = os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL", "").strip().rstrip("/")
     service_token = os.getenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", "").strip()
@@ -58,7 +77,8 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
                 headers={"Authorization": f"Bearer {service_token}"},
             )
     except httpx.HTTPError as exc:
-        raise ExecutorClaimFenceError(f"AssistX claim-status check failed: {exc}") from exc
+        # Do not reflect URL, upstream exception body or service-token context.
+        raise ExecutorClaimFenceError("AssistX claim-status transport failed") from exc
     if response.status_code != 200:
         raise ExecutorClaimFenceError(
             f"AssistX claim-status check returned HTTP {response.status_code}"
@@ -72,22 +92,45 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
             str(payload.get("reason") if isinstance(payload, dict) else "claim is not active")
         )
     actual = {
-        "task_id": str(payload.get("task_id") or ""),
-        "claim_id": str(payload.get("claim_id") or ""),
-        "agent_id": str(payload.get("agent_id") or ""),
-        "projection_generation": int(payload.get("projection_generation") or 0),
+        "task_id": payload.get("task_id"),
+        "claim_id": payload.get("claim_id"),
+        "agent_id": payload.get("agent_id"),
+        "agent_session_id": payload.get("agent_session_id"),
+        "execution_attempt": payload.get("execution_attempt"),
+        "projection_generation": payload.get("projection_generation"),
     }
     expected = {
         "task_id": task_id,
         "claim_id": claim_id,
         "agent_id": agent_id,
+        "agent_session_id": session_id,
+        "execution_attempt": attempt,
         "projection_generation": expected_generation,
     }
-    if actual != expected:
-        raise ExecutorClaimFenceError("AssistX active claim no longer matches executor token")
+    if (
+        any(type(actual[key]) is not str for key in (
+            "task_id", "claim_id", "agent_id", "agent_session_id",
+        ))
+        or type(actual["execution_attempt"]) is not int
+        or type(actual["projection_generation"]) is not int
+        or actual != expected
+    ):
+        raise ExecutorClaimFenceError(
+            "AssistX current claim revision no longer matches signed executor token"
+        )
+    live_digest = payload.get("task_payload_digest")
+    if (
+        type(live_digest) is not str
+        or re.fullmatch(r"sha256:[a-f0-9]{64}", live_digest) is None
+        or not hmac.compare_digest(live_digest, digest)
+    ):
+        raise ExecutorClaimFenceError(
+            "AssistX current payload digest differs from signed executor token"
+        )
     try:
         assert_claim_owner(identity, payload)
     except OwnerBindingError as exc:
         raise ExecutorClaimFenceError(str(exc)) from exc
-    if int(payload.get("lease_expires_at_ts") or 0) <= int(time.time() * 1000):
+    lease_until = payload.get("lease_expires_at_ts")
+    if type(lease_until) is not int or lease_until <= int(time.time() * 1000):
         raise ExecutorClaimFenceError("AssistX task lease expired before provider dispatch")

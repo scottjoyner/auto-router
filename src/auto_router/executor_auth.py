@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -127,9 +128,19 @@ def decode_executor_token(token: str, *, now: int | None = None) -> dict[str, An
         raise ExecutorAuthError("executor token issuer or audience is not accepted")
     if "inference" not in {str(item) for item in claims.get("scopes") or []}:
         raise ExecutorAuthError("executor token lacks inference scope")
-    for name in ("task_id", "claim_id", "agent_id", "jti", "projection_generation"):
-        if not str(claims.get(name) or "").strip():
-            raise ExecutorAuthError(f"executor token is missing {name}")
+    for name in ("task_id", "claim_id", "agent_id", "agent_session_id", "jti"):
+        if type(claims.get(name)) is not str or not claims[name].strip():
+            raise ExecutorAuthError(f"executor token is missing or invalid: {name}")
+    if (
+        type(claims.get("projection_generation")) is not int
+        or claims["projection_generation"] < 1
+        or type(claims.get("execution_attempt")) is not int
+        or claims["execution_attempt"] < 1
+    ):
+        raise ExecutorAuthError("executor token claim revision or projection is invalid")
+    digest = claims.get("task_payload_digest")
+    if type(digest) is not str or re.fullmatch(r"sha256:[a-f0-9]{64}", digest) is None:
+        raise ExecutorAuthError("executor token payload binding is missing or invalid")
     return claims
 
 
@@ -316,6 +327,9 @@ class ExecutorInferenceAuthMiddleware:
                     "task_id": claims["task_id"],
                     "claim_id": claims["claim_id"],
                     "agent_id": claims["agent_id"],
+                    "agent_session_id": claims["agent_session_id"],
+                    "execution_attempt": claims["execution_attempt"],
+                    "task_payload_digest": claims["task_payload_digest"],
                     "token_jti": claims["jti"],
                     "attempt": attempt,
                     "projection_generation": token_generation,

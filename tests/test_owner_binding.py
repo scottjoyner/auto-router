@@ -106,6 +106,8 @@ class _Response:
             "active":True,
             "task_id":"task-1","claim_id":"claim-1","agent_id":"agent-1",
             "projection_generation":9,
+            "agent_session_id":"session-1","execution_attempt":3,
+            "task_payload_digest":"sha256:"+"a"*64,
             "lease_expires_at_ts":int(time.time()*1000)+60000,
             **self.owner,
         }
@@ -123,7 +125,10 @@ async def test_predispatch_claim_fence_rejects_owner_change(monkeypatch):
     monkeypatch.setenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN","fake-unit-token")
     req=SimpleNamespace(metadata={"assistx_executor":{
         "task_id":"task-1","claim_id":"claim-1","agent_id":"agent-1",
-        "projection_generation":9, **_signed("person-a"),
+        "projection_generation":9,
+        "agent_session_id":"session-1","execution_attempt":3,
+        "task_payload_digest":"sha256:"+"a"*64,
+        **_signed("person-a"),
     }})
     state=SimpleNamespace(runtime_projection_manager=SimpleNamespace(current=_Projection()))
     with pytest.raises(ExecutorClaimFenceError,match="owner no longer"):
