@@ -10,7 +10,7 @@ Example for a known authorized running LFM3 service PID:
 ```sh
 python3 scripts/joyner_lfm3_passive_gpu_observer.py \
   --pid PID --receipts /home/scott/lfm3-research/continuous/online-probes.jsonl \
-  --wait-seconds 12
+  --wait-seconds 45
 ```
 
 To capture coincident work, run inside the next **existing** 30-minute probe
@@ -28,3 +28,12 @@ raw prompts, completions, API keys or network addresses are persisted.
 The output is an aggregate/boolean JSON **HOLD** witness; every missing,
 malformed, unauthorized or changing input fails closed. Keep the existing
 inference service, xwing admission hold and production routing unchanged.
+
+**Timing qualification (2026-11-13):** The existing systemd timer has
+`AccuracyUSec=30s` and `RandomizedDelayUSec=10s`. A passive 20-second window
+starting 9 seconds before nominal 17:05 fired before the actual 17:05:20
+service start and therefore correctly returned `inconclusive`. The default
+45-second duration and hard maximum of 60 seconds cover normal timer jitter
+without altering or triggering that timer. Collect a post-run receipt and
+engine counter within the same bounded interval; never infer GPU causality
+from a nominal calendar trigger alone.
