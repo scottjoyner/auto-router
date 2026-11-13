@@ -124,3 +124,10 @@ def test_receipt_no_direct_model_access(tmp_path):
     assert "api_key" not in s
     assert "prompt" not in s
     assert "content" not in s
+
+
+def test_cli_wait_default_and_bound_are_explicit():
+    source = PATH.read_text()
+    assert 'type=int, default=45' in source
+    assert '0 <= args.wait_seconds <= 60' in source
+    assert 'wait-seconds must be 0..60' in source
