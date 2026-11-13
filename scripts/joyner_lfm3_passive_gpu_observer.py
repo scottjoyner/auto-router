@@ -139,10 +139,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pid", required=True, type=int)
     ap.add_argument("--receipts", required=True, type=Path)
-    ap.add_argument("--wait-seconds", type=int, default=8)
+    ap.add_argument("--wait-seconds", type=int, default=45)
     args = ap.parse_args()
-    if not 0 <= args.wait_seconds <= 20:
-        ap.error("wait-seconds must be 0..20")
+    if not 0 <= args.wait_seconds <= 60:
+        ap.error("wait-seconds must be 0..60")
     try:
         a = snapshot(args.pid, Path("/proc"), args.receipts)
         time.sleep(args.wait_seconds)
