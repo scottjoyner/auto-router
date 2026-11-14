@@ -69,6 +69,49 @@ def _processes(proc_root: Path, euid: int) -> list[tuple[int, str, Path]]:
     return found
 
 
+
+def _owns_live_listening_socket(proc: Path, *, port: int = PORT) -> bool:
+    """Require a LISTEN socket inode in this process's own fd table.
+
+    The declared --port is insufficient if another service already owns it.
+    """
+    if port != PORT:
+        return False
+    inodes: set[str] = set()
+    try:
+        for filename in ("tcp", "tcp6"):
+            try:
+                rows = (proc / "net" / filename).read_text().splitlines()[1:]
+            except FileNotFoundError:
+                continue
+            for line in rows:
+                parts = line.split()
+                if len(parts) <= 9 or parts[3] != "0A":
+                    continue
+                addr = parts[1].rsplit(":", 1)
+                if len(addr) != 2:
+                    continue
+                try:
+                    bound_port = int(addr[1], 16)
+                except ValueError:
+                    continue
+                if bound_port == port and parts[9].isdecimal():
+                    inodes.add(parts[9])
+        if not inodes:
+            return False
+        for fd in (proc / "fd").iterdir():
+            try:
+                link = os.readlink(fd)
+            except FileNotFoundError:
+                continue
+            if link.startswith("socket:[") and link.endswith("]"):
+                if link[8:-1] in inodes:
+                    return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
 def _allowed_path(path: Path, home: Path) -> bool:
     if (not path.is_absolute() or ".." in path.parts or not home.is_absolute()
             or path == home or not path.is_relative_to(home)):
@@ -166,17 +209,24 @@ def audit(*, hostname: str | None = None, euid: int | None = None,
             owner_ok = False
     pid = None
     process_verified = False
+    listener_verified = False
     digest_verified = False
     if owner_ok:
         try:
             before = _processes(proc_root, actual_uid)
             if len(before) == 1 and _allowed_path(before[0][2], home):
                 pid = before[0][0]
-                digest_verified = bool(hasher(before[0][2], home, actual_uid))
-                # Fail closed on service restart or model/owner changes during hash.
-                after = _processes(proc_root, actual_uid)
-                process_verified = len(after) == 1 and before == after
-                digest_verified = digest_verified and process_verified
+                proc = proc_root / str(pid)
+                listener_before = _owns_live_listening_socket(proc)
+                if listener_before:
+                    digest_verified = bool(hasher(before[0][2], home, actual_uid))
+                    # Fail closed on restart, lost listener, or changed model.
+                    after = _processes(proc_root, actual_uid)
+                    process_verified = len(after) == 1 and before == after
+                    listener_verified = (
+                        process_verified and _owns_live_listening_socket(proc)
+                    )
+                    digest_verified = digest_verified and listener_verified
         except (OSError, ValueError, PermissionError):
             pass
     return {
@@ -185,6 +235,7 @@ def audit(*, hostname: str | None = None, euid: int | None = None,
         "nonroot_observer_verified": owner_ok,
         "guarded_owner_identity_verified": owner_ok,
         "exact_guarded_process_owner_and_identity_verified": process_verified,
+        "guarded_listener_socket_inode_bound_to_process": listener_verified,
         "guarded_process_pid": pid if process_verified else None,
         "guarded_disk_model_matches_pinned_sha256": digest_verified,
         "resident_gpu_weights_verified": False,
