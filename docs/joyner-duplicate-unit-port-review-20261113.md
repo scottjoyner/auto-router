@@ -141,3 +141,34 @@ Current Auto-Assist repository main contains an expired joyner:1234
 reservation, with an August 27, 2026 expiry. This is SOURCE-ONLY historical
 evidence, not a live runtime router lease decision. Confirm effective runtime
 reservation/admission before changing any service, proxy or model assignment.
+
+## Wildcard listener and credential-free catalog evidence
+
+The existing Joyner forward-auth auditor was incorrectly treating an exact
+LAN/Tailnet interface as unbound when ss reported a wildcard IPv4 listener
+on 0.0.0.0. The source fix recognizes a wildcard bind as local listener
+evidence for each configured IPv4 endpoint, recording exact_ipv4 or
+wildcard_ipv4 as listener_match_type. It never equates local binding
+with remote reachability or a permitted route.
+
+A bounded read-only live probe from Joyner (GET /v1/models only, 1.5-second
+per-endpoint timeout, no API keys/tokens and no prompts) reported:
+
+- 1234 and 1236 via the configured LAN/Tailnet endpoint addresses:
+  HTTP 200 without credentials and wildcard_ipv4 listener match.
+- Both guarded Tailnet canary endpoints (18320/18321):
+  HTTP 401 without credentials and exact_ipv4 listener match.
+- perimeter verdict PERIMETER_NO_GO, model catalog probes initiated only
+  from Joyner, cross-host reachability not established, routing not approved,
+  model generation not performed, service configuration untouched.
+
+This means local unauthenticated catalog access at the nominated interface
+addresses is demonstrated, NOT that an outside device or public internet
+can reach those endpoints. Confirm network ACL/firewall/ingress and legitimate
+consumer expectations independently before a cutover or exposing new clients.
+Do not distribute the model catalog to unintended clients or use a
+credential-free response as production admission evidence.
+
+The corrected Joyner forward-auth offline GitHub workflow also pins and
+asserts the exact pull-request source head. All changes are source-only and
+must pass hosted CI; no service, firewall, proxy or router change was made.
