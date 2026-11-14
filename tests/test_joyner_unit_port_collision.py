@@ -28,11 +28,25 @@ def unit_text(port, restart="always"):
 
 def fixture():
     data = {unit: unit_text(port) for unit, port in audit.EXPECTED.items()}
+    for proxy in audit.DEPENDENT_PROXIES:
+        data[proxy] = (
+            "[Unit]\nRequires=joyner-lane-1234.service\n"
+            "After=joyner-lane-1234.service\n[Service]\n"
+            "ExecStart=/fake/bin/proxy --upstream "
+            f"http://127.0.0.1:1234 --api-key {SECRET}\n"
+            f"Environment=PRIVATE_API_KEY={SECRET}\n"
+        ).encode()
     info = {
         "fleet-joyner-gpu": ("active", "running", "success", "0", "0", "111"),
         "fleet-joyner-ling": ("active", "running", "success", "0", "0", "222"),
         "joyner-lane-1234": ("activating", "auto-restart", "exit-code", "459", "1", "0"),
         "joyner-lane-1236": ("inactive", "dead", "success", "0", "0", "0"),
+        "joyner-lane-1234-lan-proxy": (
+            "inactive", "dead", "success", "0", "0", "0"
+        ),
+        "joyner-lane-1234-ts-proxy": (
+            "inactive", "dead", "success", "0", "0", "0"
+        ),
     }
     calls = []
 
@@ -56,6 +70,9 @@ def fixture():
             f"ActiveState={active}\nSubState={sub}\nResult={result}\n"
             f"NRestarts={restarts}\nExecMainStatus={exit_status}\n"
             f"MainPID={pid}\n"
+            "UnitFileState=enabled\n"
+            f"Requires={'joyner-lane-1234.service' if name in audit.DEPENDENT_PROXIES else ''}\n"
+            f"After={'joyner-lane-1234.service' if name in audit.DEPENDENT_PROXIES else ''}\n"
         )
 
     def reader(path):
@@ -130,14 +147,16 @@ def test_wrong_host_invokes_no_observers():
     assert report["verdict"] == "HOLD"
     assert report["observer_host_verified"] is False
     assert report["units"] == []
+    assert report["may_retire_legacy_unit"] is False
+    assert all(p["load"] == "unverified" for p in report["dependent_proxies"])
 
 
 def test_correct_host_uses_only_whitelisted_read_only_calls():
     caller, reader, calls = fixture()
     report = audit.audit(hostname="joyner", caller=caller, file_reader=reader)
     assert report["observer_host_verified"] is True
-    assert len(calls) == 5
-    assert sum(x[0] == "systemctl" for x in calls) == 4
+    assert len(calls) == 7
+    assert sum(x[0] == "systemctl" for x in calls) == 6
     assert sum(x[0] == "ss" for x in calls) == 1
     assert not any(
         forbidden in " ".join(arg) for arg in calls
@@ -221,3 +240,76 @@ def test_fragment_path_outside_allowed_user_directory_not_read():
     assert calls == []
     assert row["fragment_sha256"] is None
     assert row["declared_ports"] == []
+
+
+def test_proxy_dependencies_are_explicit_and_always_hold():
+    caller, reader, calls = fixture()
+    report = audit.audit(hostname="joyner", caller=caller, file_reader=reader)
+    assert report["may_retire_legacy_unit"] is False
+    assert report["dependent_proxy_owner_verified"] is False
+    assert report["dependent_proxy_contract_verified"] is False
+    assert len(report["dependent_proxies"]) == 2
+    for proxy in report["dependent_proxies"]:
+        assert proxy["unit"] in audit.DEPENDENT_PROXIES
+        assert proxy["active"] == "inactive"
+        assert proxy["unit_file_state"] == "enabled"
+        assert proxy["runtime_requires_legacy"]
+        assert proxy["static_requires_legacy"]
+        assert proxy["static_after_legacy"]
+        assert proxy["runtime_after_legacy"]
+        assert proxy["launch_mentions_port_1234"]
+        assert proxy["launch_mentions_loopback"]
+        assert len(proxy["fragment_sha256"]) == 64
+    assert len([x for x in report["reasons"] if
+                x.startswith("legacy_proxy_requires_legacy_unit:")]) == 2
+    assert SECRET not in json.dumps(report)
+    assert "/fake/bin/proxy" not in json.dumps(report)
+
+
+def test_unavailable_proxy_source_fails_closed_without_broad_reads():
+    caller, reader, calls = fixture()
+    def restricted(path):
+        if path.endswith("joyner-lane-1234-ts-proxy.service"):
+            raise OSError("not available")
+        return reader(path)
+    report = audit.audit(hostname="joyner", caller=caller,
+                         file_reader=restricted)
+    assert report["verdict"] == "HOLD"
+    assert "dependent_proxy_source_unverified:joyner-lane-1234-ts-proxy" in (
+        report["reasons"]
+    )
+    assert report["may_disable_services"] is False
+
+
+def test_unknown_proxy_unit_name_rejected():
+    with pytest.raises(ValueError, match="unapproved_proxy_unit"):
+        audit.read_dependent_proxy("not-an-approved-proxy")
+
+
+def test_proxy_fragment_outside_allowlist_is_not_read():
+    reads = []
+    def forbidden(path):
+        reads.append(path)
+        raise AssertionError("forbidden proxy file read")
+    row = audit.read_dependent_proxy(
+        "joyner-lane-1234-lan-proxy",
+        caller=lambda args: (0, "FragmentPath=/private/keys/secret.service\n"
+                                "Requires=joyner-lane-1234.service\n"
+                                "LoadState=loaded\n"),
+        file_reader=forbidden,
+    )
+    assert reads == []
+    assert row["fragment_sha256"] is None
+    assert row["static_requires_legacy"] is False
+    assert row["runtime_requires_legacy"] is True
+
+
+def test_inactive_proxy_does_not_mean_dependent_is_unneeded():
+    caller, reader, _ = fixture()
+    rows = [audit.read_dependent_proxy(name, caller=caller, file_reader=reader)
+            for name in audit.DEPENDENT_PROXIES]
+    report = audit.assess([], {}, correct_host=True,
+                          socket_inventory_ok=False, dependent_proxies=rows)
+    assert report["verdict"] == "HOLD"
+    assert any(r.startswith("legacy_proxy_enabled:") for r in report["reasons"])
+    assert report["may_retire_legacy_unit"] is False
