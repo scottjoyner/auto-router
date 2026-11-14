@@ -302,3 +302,48 @@ independent source/guarded alias and synthetic request-contract acceptance,
 real downstream client/credential and LAN/Tailnet contracts, rollback, and
 an operator-approved change. No running service should be stopped,
 reconfigured, or allocated more GPU resources based on this document.
+
+## Owner identity pin and symlink race hardening — November 14, 2026
+
+Fleet Commander recovered and a read-only Joyner metadata check established:
+guarded listener processes for ports 18320/18321 are owned by UID 1000,
+the protected UID maps to /home/joyner, its home is a real directory owned
+by that UID, and the ordinary Fleet Commander SSH user is a *different* UID.
+This is owner metadata only, not access to either guarded process's key or
+model bytes. No role switch, sudo, credential read or live service action.
+
+The owner-only MiniCPM verifier is now pinned to UID 1000, not "any non-root
+UID". For live /proc and the pinned /home/joyner namespace, it confirms
+the UID's configured home mapping before scanning. It also requires all
+four Uid fields of a candidate process to match the guarded owner; a mixed
+real/effective/saved UID is not independently approved.
+
+The previous hash routine performed a symlink pre-check but opened a full
+path afterwards. That permitted a time-of-check/time-of-use race if a
+parent directory were replaced between those operations. It now walks
+every filesystem component from an O_PATH root directory FD using
+O_DIRECTORY and O_NOFOLLOW for each parent. The final regular model file
+is opened with O_RDONLY/O_NOFOLLOW. It streams and verifies the pinned
+file SHA-256 and metadata, then repeats the entire secure path walk and
+checks all ancestor device/inode pairs and final file metadata. If a
+parent becomes a symlink, any component or file is replaced, or file
+metadata changes while reading, the receipt is HOLD; the routine never
+copies model bytes or emits paths.
+
+This source-only fix was validated by synthetic adversarial tests covering
+a symlink above the allowed home, parent replacement with a symlink during
+file hashing, final file replacement during hashing, unlink during hashing,
+wrong-but-nonroot UID, mismatched process effective/saved UID and wrong
+guarded UID/home mapping. The focused guarded suite passed 28 tests and
+the six-slice offline regression suite passed 140 tests on x1-370.
+A real *non-owner* test using approved SSH stdin on Joyner returned
+HOLD, guarded_owner_identity_verified=false, digest_verified=false,
+credential_values_read=false, and no service/router authorization.
+
+Important: These results are not a positive guarded-owner SHA witness.
+The protected account must execute any such witness through its already
+authorized channel, with a recorded operator decision and receipt.
+Even that would prove owner/process/disk file custody only: live GPU
+weight identity, request-contract equivalence, authenticated client
+access, routing cutover, lease ownership and legacy proxy retirement
+remain independent production HOLD gates.
