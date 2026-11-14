@@ -9,6 +9,7 @@ to change a service. The exit status is always HOLD (78).
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 import shlex
@@ -64,6 +65,43 @@ def declared_ports(unit_text: str) -> list[int]:
     return sorted(ports)
 
 
+def declared_host_scope(unit_text: str) -> str:
+    """Classify, never echo, an explicit llama-server --host argument."""
+    values: list[str] = []
+    for line in unit_text.splitlines():
+        if not line.startswith("ExecStart="):
+            continue
+        try:
+            argv = shlex.split(line.partition("=")[2])
+        except ValueError:
+            return "unverified"
+        if not argv or Path(argv[0]).name != "llama-server":
+            return "unverified"
+        for index, token in enumerate(argv):
+            if token == "--host":
+                if index + 1 >= len(argv):
+                    return "unverified"
+                values.append(argv[index + 1])
+            elif token.startswith("--host="):
+                values.append(token.partition("=")[2])
+    if len(values) != 1:
+        return "unverified"
+    value = values[0]
+    if value in ("0.0.0.0", "::"):
+        return "wildcard"
+    if value in ("localhost", "127.0.0.1", "::1"):
+        return "loopback"
+    try:
+        address = ipaddress.ip_address(value)
+        if address.version == 4 and address in ipaddress.ip_network("100.64.0.0/10"):
+            return "cgnat_or_tailnet_range"
+        if address.is_private:
+            return "private_specific"
+        return "other_specific"
+    except ValueError:
+        return "unverified"
+
+
 def parse_properties(raw: str) -> dict[str, str]:
     allowed = {
         "FragmentPath", "LoadState", "ActiveState", "SubState",
@@ -93,6 +131,7 @@ def read_unit(name: str, expected_port: int, *,
     fragment = props.get("FragmentPath", "")
     unit_hash = None
     ports: list[int] = []
+    bind_scope = "unverified"
     try:
         unit_path = Path(fragment)
         allowed_parent = Path.home() / ".config" / "systemd" / "user"
@@ -103,7 +142,9 @@ def read_unit(name: str, expected_port: int, *,
             data = file_reader(fragment)
             if isinstance(data, bytes) and len(data) <= 128 * 1024:
                 unit_hash = hashlib.sha256(data).hexdigest()
-                ports = declared_ports(data.decode("utf-8"))
+                decoded = data.decode("utf-8")
+                ports = declared_ports(decoded)
+                bind_scope = declared_host_scope(decoded)
     except (OSError, UnicodeError, ValueError):
         pass
     restart_raw = props.get("NRestarts", "")
@@ -113,6 +154,7 @@ def read_unit(name: str, expected_port: int, *,
         "unit": name,
         "expected_port": expected_port,
         "declared_ports": ports,
+        "declared_bind_scope": bind_scope,
         "fragment_sha256": unit_hash,
         "load": props.get("LoadState", "unverified"),
         "active": props.get("ActiveState", "unverified"),
@@ -270,6 +312,10 @@ def assess(rows: list[dict], listeners: dict[int, list[int]], *,
             and isinstance(active_pid, int) and active_pid > 0
             and active_pid in listeners.get(port, [])
         )
+        canonical_wildcard_legacy_loopback = (
+            current.get("declared_bind_scope") == "wildcard"
+            and old.get("declared_bind_scope") == "loopback"
+        )
         looping = (
             old.get("sub") == "auto-restart"
             and old.get("result") == "exit-code"
@@ -280,6 +326,11 @@ def assess(rows: list[dict], listeners: dict[int, list[int]], *,
             "canonical": canonical,
             "legacy": legacy,
             "same_declared_port": duplicated,
+            "canonical_wildcard_legacy_loopback": canonical_wildcard_legacy_loopback,
+            "bind_scope_collision_plausible": (
+                duplicated and canonical_wildcard_legacy_loopback
+                and owned
+            ),
             "canonical_listener_pid_matched": owned,
             "legacy_restart_loop": looping,
             "possible_port_collision": duplicated and owned and looping,
@@ -287,6 +338,8 @@ def assess(rows: list[dict], listeners: dict[int, list[int]], *,
         })
         if duplicated:
             reasons.append("overlapping_unit_port_declarations:" + str(port))
+        if canonical_wildcard_legacy_loopback:
+            reasons.append("canonical_wildcard_legacy_loopback:" + str(port))
         if looping:
             reasons.append("legacy_unit_restarting:" + legacy)
         if not owned:
