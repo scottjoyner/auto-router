@@ -99,7 +99,18 @@ def audit(lan_ip: str, tailnet_ip: str, *,
         observed_listeners, read_error = read_listeners()
     rows: list[dict] = []
     for endpoint in endpoints(lan_ip, tailnet_ip):
-        locally_bound = (endpoint.host, endpoint.port) in observed_listeners if correct_host else None
+        # IPv4 wildcard listeners receive traffic for every local IPv4
+        # interface. They are not "absent" merely because ss reports
+        # 0.0.0.0 instead of the LAN/Tailnet interface address.
+        # This proves local bind scope, NEVER remote reachability or auth.
+        if not correct_host:
+            locally_bound, match_type = None, "wrong_observer_host"
+        elif (endpoint.host, endpoint.port) in observed_listeners:
+            locally_bound, match_type = True, "exact_ipv4"
+        elif ("0.0.0.0", endpoint.port) in observed_listeners:
+            locally_bound, match_type = True, "wildcard_ipv4"
+        else:
+            locally_bound, match_type = False, "no_observed_ipv4_listener"
         # Only probe interfaces from their own host to avoid assuming network reachability.
         status, error = probe(endpoint, timeout) if correct_host else (None, "wrong_observer_host")
         if status == 200:
@@ -116,6 +127,7 @@ def audit(lan_ip: str, tailnet_ip: str, *,
             "host": endpoint.host,
             "port": endpoint.port,
             "listener_bound_on_joyner": locally_bound,
+            "listener_match_type": match_type,
             "models_no_credential_http": status,
             "classification": classification,
             "error": error,
@@ -139,6 +151,7 @@ def audit(lan_ip: str, tailnet_ip: str, *,
         "approved_for_routing": False,
         "approved_for_training": False,
         "external_reachability_tested": False,
+        "model_catalog_probe_origin": "joyner_host_only" if correct_host else "none",
         "endpoints": rows,
     }
 
