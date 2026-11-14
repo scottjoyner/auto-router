@@ -213,3 +213,45 @@ https://github.com/scottjoyner/auto-router/issues/81
 All rollout remains HOLD pending approved LAN/Tailnet principals, proxy
 client and reboot/failover contracts, guarded alternative endpoints, a
 signed operator decision and validated rollback.
+
+## Canonical MiniCPM pinned source disk identity — November 13, 2026
+
+An independent, narrowly allowlisted read-only source file witness now
+exists as scripts/joyner_minicpm_source_pin_witness.py. It validates:
+
+1. Running on hostname joyner; wrong host => zero process or file reads.
+2. Exactly one same-owner llama-server process with argument --port 1234
+   and the exact approved canonical MiniCPM model path.
+3. The approved model file is a regular, non-symlink file owned by the
+   observing user, has the expected 688065920 bytes, and retains identical
+   inode/size/mtime/ctime throughout streaming SHA-256 validation.
+4. Its SHA-256 equals the existing guarded MiniCPM canary reference
+   81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa.
+   Offline tests assert these two source constants cannot drift silently.
+
+Live read-only result from Joyner ~21:07 EST:
+- Source llama-server PID 1825 was uniquely bound by process arguments
+  and owner identity to the canonical file.
+- The source file size and full SHA-256 matched the guarded canary's pinned
+  reference. No model contents were copied or emitted; the file was streamed
+  locally to compute its digest.
+- No credentials, environment files, HTTP requests or model generations
+  were used. The executable was passed via SSH stdin, not installed.
+- Receipt verdict HOLD, process verified true, disk SHA match true,
+  guarded process weights verified false, resident loaded weights verified
+  false, equivalent request behavior verified false, cutover authorized false.
+  Exit code 78 is intentional.
+
+This improves *canonical source-file custody*. It does not prove the
+current guarded process is actually using the same model image loaded
+into memory. In particular, a guarded listener may run under another
+owner or use a different pathname/inode; a shared basename is not enough.
+Do not read another user's key file or run a synthetic model-generation
+canary without the separate protected authorization. Do not infer a lease
+or service retirement approval from a model-file hash.
+
+The existing exact-head offline Joyner unit-port workflow now also
+runs synthetic tests for this new source pin (including wrong-host,
+mismatched owner, duplicate process, missing or replaced file, symlink,
+invalid digest and never-authorize-cutover properties). No CI job accesses
+Joyner or downloads a real model.
