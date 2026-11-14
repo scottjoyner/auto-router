@@ -89,7 +89,12 @@ def read_unit(name: str, expected_port: int, *,
     unit_hash = None
     ports: list[int] = []
     try:
-        if fragment and Path(fragment).is_absolute():
+        unit_path = Path(fragment)
+        allowed_parent = Path.home() / ".config" / "systemd" / "user"
+        # Do not follow a systemd fragment to an arbitrary private file.
+        if (unit_path.is_absolute() and unit_path.parent == allowed_parent
+                and unit_path.name == name + ".service"
+                and not unit_path.is_symlink()):
             data = file_reader(fragment)
             if isinstance(data, bytes) and len(data) <= 128 * 1024:
                 unit_hash = hashlib.sha256(data).hexdigest()
@@ -199,7 +204,11 @@ def assess(rows: list[dict], listeners: dict[int, list[int]], *,
         "verdict": "HOLD",
         "observer_host_verified": correct_host,
         "read_only": True,
-        "credentials_accessed": False,
+        # Unit file bytes are inspected for ports and hashes. They MAY
+        # contain sensitive launch arguments; never claim they were unread.
+        "unit_definitions_inspected_for_ports": correct_host,
+        "credential_values_emitted": False,
+        "environment_files_opened": False,
         "model_request_sent": False,
         "journal_cause_verified": False,
         "may_disable_services": False,
