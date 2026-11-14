@@ -172,3 +172,44 @@ credential-free response as production admission evidence.
 The corrected Joyner forward-auth offline GitHub workflow also pins and
 asserts the exact pull-request source head. All changes are source-only and
 must pass hosted CI; no service, firewall, proxy or router change was made.
+
+## Reproducible read-only cross-host Tailnet authentication witness
+
+The additional scripts/joyner_tailnet_crosshost_auth_witness.py produces a
+source-only proof, running ONLY when observer hostname is x1-370.
+It probes four preexisting pinned Joyner Tailnet catalog endpoints:
+MiniCPM :1234, Ling :1236, guarded MiniCPM :18320 and guarded toolcall
+:18321. It has no caller-supplied target or port override. The client uses
+a fresh proxy-free HTTP opener, fixed GET /v1/models, no Authorization,
+no redirects, no response body reads and a 2.5-second per-request timeout.
+
+The schema auto-router.joyner-tailnet-crosshost-auth.v1 emits only allowed
+endpoint labels, numeric ports and HTTP/status categories. The tool always
+says PERIMETER_NO_GO and release_gate=HOLD, denies any service or router
+authorization and exits 78. Wrong host invokes no network calls.
+
+At 2026-11-13 ~20:39 ET the real bounded x1-370 observer returned:
+  MiniCPM :1234 -> HTTP 200 without credentials
+  Ling :1236 -> HTTP 200 without credentials
+  Guarded MiniCPM :18320 -> HTTP 401 without credentials
+  Guarded toolcall :18321 -> HTTP 401 without credentials
+
+This establishes cross-host Tailnet reachability from one known authorized
+fleet peer and no-key catalog access on two endpoints. It does NOT establish
+unauthorized-peer access, public internet reachability, model generation
+permission, the authoritative service owner, or permission to retire a
+legacy unit. No remote service, secret, model or router was changed. No
+response body, authorization header or model output was stored.
+
+The new test harness is entirely offline, with faked statuses and synthetic
+secrets to detect accidental data leakage. Exact-head GitHub CI runs
+host-local and cross-host auditor tests without reaching any fleet node.
+Do not run the real network probe in hosted CI. Its live run is allowed only
+as a bounded read-only check from existing approved Fleet Commander access.
+
+P1 authentication and ingress policy tracker:
+https://github.com/scottjoyner/auto-router/issues/81
+
+All rollout remains HOLD pending approved LAN/Tailnet principals, proxy
+client and reboot/failover contracts, guarded alternative endpoints, a
+signed operator decision and validated rollback.
