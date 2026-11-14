@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pwd
 import socket
 import stat
 from pathlib import Path
@@ -19,6 +20,7 @@ PORT = 18320
 PINNED_BYTES = 688_065_920
 PINNED_SHA256 = "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa"
 APPROVED_HOME = Path("/home/joyner")
+APPROVED_GUARDED_UID = 1000
 
 
 def _unique_flag(argv: list[str], flags: tuple[str, ...]) -> str | None:
@@ -47,7 +49,7 @@ def _processes(proc_root: Path, euid: int) -> list[tuple[int, str, Path]]:
             uid_line = next(x for x in (p / "status").read_text().splitlines()
                             if x.startswith("Uid:"))
             uids = [int(x) for x in uid_line.partition(":")[2].split()]
-            if len(uids) != 4 or uids[0] != euid or uids[1] != euid:
+            if len(uids) != 4 or any(uid != euid for uid in uids):
                 continue
             argv = [x.decode("utf-8", "replace") for x in
                     (p / "cmdline").read_bytes().split(b"\0") if x]
@@ -79,36 +81,71 @@ def _allowed_path(path: Path, home: Path) -> bool:
     return not home.is_symlink()
 
 
+def _open_pinned_file(path: Path) -> tuple[int, tuple[tuple[int, int], ...]]:
+    """Walk every path component from / using no-follow directory FDs.
+
+    Never trust a preflight is_symlink() check as an atomic security control:
+    the guarded account can replace one of its own directories in between.
+    """
+    # O_PATH avoids directory-read permission on the filesystem root.
+    # dir_fd-relative O_NOFOLLOW traversals still reject component links.
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    directory_flags = (os.O_PATH | os.O_NOFOLLOW
+                       | os.O_CLOEXEC | os.O_DIRECTORY)
+    fd = os.open("/", directory_flags)
+    ancestors: list[tuple[int, int]] = []
+    try:
+        parts = path.parts[1:]
+        if not parts or not all(part not in ("", ".", "..") for part in parts):
+            raise ValueError("invalid_source_file_path")
+        for idx, part in enumerate(parts):
+            stat_before = os.fstat(fd)
+            ancestors.append((stat_before.st_dev, stat_before.st_ino))
+            final = idx == len(parts) - 1
+            nxt = os.open(
+                part, flags if final else directory_flags, dir_fd=fd,
+            )
+            os.close(fd)
+            fd = nxt
+        return fd, tuple(ancestors)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def hash_file(path: Path, home: Path, euid: int, *,
               expected_bytes: int = PINNED_BYTES,
               expected_sha256: str = PINNED_SHA256) -> bool:
-    """No-follow file descriptor with before/after fstat and path identity."""
+    """No-follow anchored FD walk, full SHA, and post-hash path revalidation."""
     if not _allowed_path(path, home):
         return False
     fd = -1
+    second_fd = -1
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        fd, ancestors = _open_pinned_file(path)
         before = os.fstat(fd)
-        expected_identity = (before.st_dev, before.st_ino, before.st_size,
-                             before.st_mtime_ns, before.st_ctime_ns)
-        if (not stat.S_ISREG(before.st_mode) or before.st_size != expected_bytes
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_size,
+                              s.st_mtime_ns, s.st_ctime_ns)
+        if (not stat.S_ISREG(before.st_mode)
+                or before.st_size != expected_bytes
                 or before.st_uid != euid):
             return False
         digest = hashlib.sha256()
         while chunk := os.read(fd, 4 * 1024 * 1024):
             digest.update(chunk)
-        after = os.fstat(fd)
-        final_path = path.lstat()
-        final_identity = (after.st_dev, after.st_ino, after.st_size,
-                          after.st_mtime_ns, after.st_ctime_ns)
-        return (expected_identity == final_identity
-                and (final_path.st_dev, final_path.st_ino) ==
-                    (before.st_dev, before.st_ino)
-                and not stat.S_ISLNK(final_path.st_mode)
+        if identity(os.fstat(fd)) != identity(before):
+            return False
+        # An opened inode can remain valid after its parent is replaced.
+        # Rewalk current pathname; compare every directory and file identity.
+        second_fd, second_ancestors = _open_pinned_file(path)
+        return (ancestors == second_ancestors
+                and identity(os.fstat(second_fd)) == identity(before)
                 and digest.hexdigest() == expected_sha256)
     except (OSError, ValueError):
         return False
     finally:
+        if second_fd >= 0:
+            os.close(second_fd)
         if fd >= 0:
             os.close(fd)
 
@@ -119,7 +156,14 @@ def audit(*, hostname: str | None = None, euid: int | None = None,
     actual_host = (hostname or socket.gethostname()).split(".", 1)[0].lower()
     actual_uid = os.geteuid() if euid is None else euid
     host_ok = actual_host == "joyner"
-    owner_ok = host_ok and actual_uid >= 1000  # Never run as root.
+    owner_ok = host_ok and actual_uid == APPROVED_GUARDED_UID
+    # Require the pinned UID's configured home on live Joyner.
+    # Injected tmp-path tests use synthetic process roots.
+    if owner_ok and home == APPROVED_HOME and proc_root == Path("/proc"):
+        try:
+            owner_ok = pwd.getpwuid(actual_uid).pw_dir == str(APPROVED_HOME)
+        except (KeyError, OSError):
+            owner_ok = False
     pid = None
     process_verified = False
     digest_verified = False
@@ -139,6 +183,7 @@ def audit(*, hostname: str | None = None, euid: int | None = None,
         "schema": SCHEMA, "verdict": "HOLD", "read_only": True,
         "guarded_port": PORT, "observer_host_verified": host_ok,
         "nonroot_observer_verified": owner_ok,
+        "guarded_owner_identity_verified": owner_ok,
         "exact_guarded_process_owner_and_identity_verified": process_verified,
         "guarded_process_pid": pid if process_verified else None,
         "guarded_disk_model_matches_pinned_sha256": digest_verified,
