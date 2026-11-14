@@ -16,10 +16,10 @@ from scripts import joyner_unit_port_collision as audit
 SECRET = "synthetic-secret-DO-NOT-EMIT"
 
 
-def unit_text(port, restart="always"):
+def unit_text(port, restart="always", host="0.0.0.0"):
     return (
         "[Unit]\nDescription=Synthetic\n[Service]\n"
-        "ExecStart=/fake/bin/llama-server --host 0.0.0.0 "
+        f"ExecStart=/fake/bin/llama-server --host {host} "
         f"--port {port} --api-key {SECRET} --model /private/synthetic.gguf\n"
         f"Restart={restart}\nRestartSec=3\n"
         f"Environment=PRIVATE_API_KEY={SECRET}\n"
@@ -27,7 +27,11 @@ def unit_text(port, restart="always"):
 
 
 def fixture():
-    data = {unit: unit_text(port) for unit, port in audit.EXPECTED.items()}
+    data = {
+        unit: unit_text(port, host=("127.0.0.1" if unit in audit.LEGACY
+                                    else "0.0.0.0"))
+        for unit, port in audit.EXPECTED.items()
+    }
     for proxy in audit.DEPENDENT_PROXIES:
         data[proxy] = (
             "[Unit]\nRequires=joyner-lane-1234.service\n"
@@ -124,6 +128,12 @@ def test_sanitized_units_and_listener_evidence():
     assert report["verdict"] == "HOLD"
     assert report["journal_cause_verified"] is False
     assert report["ports"][0]["possible_port_collision"]
+    assert report["ports"][0]["canonical_wildcard_legacy_loopback"]
+    assert report["ports"][0]["bind_scope_collision_plausible"]
+    assert report["ports"][1]["canonical_wildcard_legacy_loopback"]
+    assert "canonical_wildcard_legacy_loopback:1234" in report["reasons"]
+    assert all(row["declared_bind_scope"] in ("loopback", "wildcard")
+               for row in report["units"])
     assert report["ports"][1]["same_declared_port"]
     assert report["ports"][1]["possible_port_collision"] is False
     assert "legacy_unit_restarting:joyner-lane-1234" in report["reasons"]
@@ -313,3 +323,38 @@ def test_inactive_proxy_does_not_mean_dependent_is_unneeded():
     assert report["verdict"] == "HOLD"
     assert any(r.startswith("legacy_proxy_enabled:") for r in report["reasons"])
     assert report["may_retire_legacy_unit"] is False
+
+
+@pytest.mark.parametrize(("host", "expected_scope"), [
+    ("0.0.0.0", "wildcard"),
+    ("::", "wildcard"),
+    ("127.0.0.1", "loopback"),
+    ("localhost", "loopback"),
+    ("::1", "loopback"),
+    ("100.83.215.83", "cgnat_or_tailnet_range"),
+    ("192.168.1.79", "private_specific"),
+    ("8.8.8.8", "other_specific"),
+    ("unexpected-credential-like-host", "unverified"),
+])
+def test_source_host_is_classified_not_printed(host, expected_scope):
+    raw = unit_text(1234, host=host).decode()
+    scope = audit.declared_host_scope(raw)
+    assert scope == expected_scope
+    assert host not in scope
+    assert SECRET not in scope
+
+
+@pytest.mark.parametrize("line", [
+    "ExecStart=/fake/bin/bash -c 'llama-server --host 0.0.0.0'",
+    "ExecStart=/fake/bin/llama-server --host",
+    "ExecStart=/fake/bin/llama-server --host localhost --host 0.0.0.0",
+    "ExecStart=/fake/bin/llama-server --host 'broken",
+    "ExecStart=/fake/bin/llama-server --port 1234",
+])
+def test_ambiguous_bind_scope_is_unverified(line):
+    assert audit.declared_host_scope(line) == "unverified"
+
+
+def test_failed_unit_read_does_not_invent_host_scope():
+    row = audit.read_unit("joyner-lane-1234", 1234, caller=lambda args: (1, ""))
+    assert row["declared_bind_scope"] == "unverified"

@@ -114,3 +114,30 @@ tests. Running the diagnostic on Joyner over stdin is read-only and returns
 exit 78 by design. The raw unit fragment may include confidential arguments;
 it is inspected transiently but never emitted in the receipt. No model data,
 key files, environment files or outbound inference requests are accessed.
+
+## Observed bind-scope drift (read-only extension)
+
+Current Joyner unit fragments were assessed without printing actual host
+addresses, command lines, or credentials. The updated witness classifies an
+explicit llama-server --host setting as wildcard, loopback, private-specific,
+CGNAT/Tailnet-range or unverified. It never emits the literal IP.
+
+Both canonical services (fleet-joyner-gpu on 1234; fleet-joyner-ling on 1236)
+now declare wildcard bind scopes, while their legacy counterparts declare
+loopback-only bind scopes. This is materially different from the archived
+October 20 co-residency policy, which documented a Tailscale-address model
+listener with separate LAN proxies. It is NOT a network-exposure/authentication
+audit: actual firewall, listener reachability, credentials and authorized
+clients were not tested. A wildcard bind does not alone prove internet access.
+
+The witness emits canonical_wildcard_legacy_loopback and
+bind_scope_collision_plausible for each matching port. The latter requires
+the observed canonical PID to match the live socket census. It means a
+bind-level conflict is plausible; it does not confirm the crashing process's
+systemd journal error. The service retirement/traffic cutover gate remains
+HOLD regardless of these booleans.
+
+Current Auto-Assist repository main contains an expired joyner:1234
+reservation, with an August 27, 2026 expiry. This is SOURCE-ONLY historical
+evidence, not a live runtime router lease decision. Confirm effective runtime
+reservation/admission before changing any service, proxy or model assignment.
