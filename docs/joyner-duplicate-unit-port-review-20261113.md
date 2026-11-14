@@ -81,3 +81,36 @@ outside the current user's standard .config/systemd/user directory. This
 prevents a crafted FragmentPath from turning the observer into a file reader
 for an unrelated credential or model path. The returned JSON includes only
 allowlisted unit status fields and fragment digests.
+
+## Explicit dependent-proxy reconciliation (follow-up)
+
+The original four-unit witness is now extended to the two explicitly named
+enabled proxy units that depend on the legacy 1234 service:
+joyner-lane-1234-lan-proxy and joyner-lane-1234-ts-proxy.
+
+The observer reads only their allowlisted properties and matching user-unit
+fragments (no EnvironmentFile follow-up, no credential logging). It reports
+only their enabled/active status, SHA-256 of the unit fragments, exact
+Requires/After dependency booleans for the allowlisted legacy service, and
+boolean mentions of loopback and port 1234 in their static ExecStart lines.
+It does not emit a full upstream URL or a command line; boolean references
+alone are not proof of endpoint health, security or route ownership.
+
+The live read-only Fleet Commander witness on November 13 found that both
+proxies are enabled but currently inactive; both have static and runtime
+Requires/After links to the failing legacy service. Both unit fragments
+mention loopback and 1234. Thus neither idle status nor a healthy canonical
+port 1234 permits deleting the legacy unit without reconciling those units.
+
+New acceptance gates: gather the proxy owners, route consumers and desired
+post-reboot behavior; approve the intended service-to-proxy ownership and a
+separate rollback. Any missing proxy evidence adds a HOLD reason. The witness
+always includes may_retire_legacy_unit=false,
+dependent_proxy_owner_verified=false, and
+dependent_proxy_contract_verified=false. No auto-fix is implemented.
+
+This is source-only work, with synthetic no-secret-emission and wrong-host
+tests. Running the diagnostic on Joyner over stdin is read-only and returns
+exit 78 by design. The raw unit fragment may include confidential arguments;
+it is inspected transiently but never emitted in the receipt. No model data,
+key files, environment files or outbound inference requests are accessed.
