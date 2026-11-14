@@ -51,7 +51,7 @@ def fixture():
         name = args[3].removesuffix(".service")
         active, sub, result, restarts, exit_status, pid = info[name]
         return 0, (
-            f"FragmentPath=/synthetic/systemd/{name}.service\n"
+            f"FragmentPath={__import__('pathlib').Path.home()}/.config/systemd/user/{name}.service\n"
             "LoadState=loaded\n"
             f"ActiveState={active}\nSubState={sub}\nResult={result}\n"
             f"NRestarts={restarts}\nExecMainStatus={exit_status}\n"
@@ -112,6 +112,9 @@ def test_sanitized_units_and_listener_evidence():
     assert "legacy_unit_restarting:joyner-lane-1234" in report["reasons"]
     assert report["may_disable_services"] is False
     assert report["may_allocate_gpu"] is False
+    assert report["unit_definitions_inspected_for_ports"] is True
+    assert report["credential_values_emitted"] is False
+    assert report["environment_files_opened"] is False
     serialized = json.dumps(report)
     assert SECRET not in serialized
     assert "/private/" not in serialized
@@ -202,3 +205,19 @@ def test_failed_systemctl_read_does_not_claim_verified_unit():
     assert row["declared_ports"] == []
     assert row["active"] == "unverified"
     assert row["fragment_sha256"] is None
+
+
+def test_fragment_path_outside_allowed_user_directory_not_read():
+    calls = []
+    def reader(path):
+        calls.append(path)
+        raise AssertionError("unapproved unit fragment read")
+    row = audit.read_unit(
+        "joyner-lane-1234", 1234,
+        caller=lambda args: (0, "FragmentPath=/private/credential-file.service\n"
+                                "ActiveState=active\nNRestarts=1\n"),
+        file_reader=reader,
+    )
+    assert calls == []
+    assert row["fragment_sha256"] is None
+    assert row["declared_ports"] == []
