@@ -21,6 +21,10 @@ CANONICAL = {"fleet-joyner-gpu": 1234, "fleet-joyner-ling": 1236}
 LEGACY = {"joyner-lane-1234": 1234, "joyner-lane-1236": 1236}
 EXPECTED = CANONICAL | LEGACY
 ALLOWED_PORTS = frozenset((1234, 1236))
+DEPENDENT_PROXIES = (
+    "joyner-lane-1234-lan-proxy",
+    "joyner-lane-1234-ts-proxy",
+)
 
 
 def _call(args: list[str]) -> tuple[int, str]:
@@ -64,6 +68,7 @@ def parse_properties(raw: str) -> dict[str, str]:
     allowed = {
         "FragmentPath", "LoadState", "ActiveState", "SubState",
         "Result", "NRestarts", "ExecMainStatus", "MainPID",
+        "UnitFileState", "Requires", "After",
     }
     props = {}
     for line in raw.splitlines():
@@ -125,6 +130,77 @@ def read_unit(name: str, expected_port: int, *,
     }
 
 
+def read_dependent_proxy(name: str, *, caller=_call, file_reader=None) -> dict:
+    """Read only the two known proxy units and emit boolean dependency facts.
+
+    The unit definition may contain sensitive arguments. It is inspected
+    transiently for references, hashed, and NEVER included in the result.
+    """
+    if name not in DEPENDENT_PROXIES:
+        raise ValueError("unapproved_proxy_unit")
+    file_reader = file_reader or (lambda path: Path(path).read_bytes())
+    rc, raw = caller([
+        "systemctl", "--user", "show", name + ".service",
+        "-p", "FragmentPath", "-p", "LoadState", "-p", "ActiveState",
+        "-p", "SubState", "-p", "UnitFileState", "-p", "Requires",
+        "-p", "After", "--no-pager",
+    ])
+    props = parse_properties(raw) if rc == 0 else {}
+    fragment_digest = None
+    static_requires_legacy = False
+    static_after_legacy = False
+    launch_mentions_1234 = False
+    launch_mentions_loopback = False
+    try:
+        unit_path = Path(props.get("FragmentPath", ""))
+        allowed_parent = Path.home() / ".config" / "systemd" / "user"
+        if (unit_path.is_absolute() and unit_path.parent == allowed_parent
+                and unit_path.name == name + ".service"
+                and not unit_path.is_symlink()):
+            data = file_reader(str(unit_path))
+            if isinstance(data, bytes) and len(data) <= 128 * 1024:
+                fragment_digest = hashlib.sha256(data).hexdigest()
+                text = data.decode("utf-8")
+                lines = text.splitlines()
+                static_requires_legacy = any(
+                    "joyner-lane-1234.service" in line.partition("=")[2].split()
+                    for line in lines if line.startswith("Requires=")
+                )
+                static_after_legacy = any(
+                    "joyner-lane-1234.service" in line.partition("=")[2].split()
+                    for line in lines if line.startswith("After=")
+                )
+                commands = [line.partition("=")[2] for line in lines
+                            if line.startswith("ExecStart=")]
+                launch_mentions_1234 = any("1234" in line for line in commands)
+                launch_mentions_loopback = any(
+                    "127.0.0.1" in line or "localhost" in line
+                    for line in commands
+                )
+    except (OSError, UnicodeError, ValueError):
+        pass
+    # Only fixed-unit dependency facts may be emitted; never print arbitrary
+    # Requires/After values or raw ExecStart, even on error.
+    return {
+        "unit": name,
+        "load": props.get("LoadState", "unverified"),
+        "active": props.get("ActiveState", "unverified"),
+        "sub": props.get("SubState", "unverified"),
+        "unit_file_state": props.get("UnitFileState", "unverified"),
+        "fragment_sha256": fragment_digest,
+        "runtime_requires_legacy": (
+            "joyner-lane-1234.service" in props.get("Requires", "").split()
+        ),
+        "runtime_after_legacy": (
+            "joyner-lane-1234.service" in props.get("After", "").split()
+        ),
+        "static_requires_legacy": static_requires_legacy,
+        "static_after_legacy": static_after_legacy,
+        "launch_mentions_port_1234": launch_mentions_1234,
+        "launch_mentions_loopback": launch_mentions_loopback,
+    }
+
+
 def read_port_listeners(caller=_call) -> tuple[dict[int, list[int]], bool]:
     rc, raw = caller(["ss", "-H", "-ltnp"])
     if rc != 0:
@@ -148,7 +224,8 @@ def read_port_listeners(caller=_call) -> tuple[dict[int, list[int]], bool]:
 
 
 def assess(rows: list[dict], listeners: dict[int, list[int]], *,
-           correct_host: bool, socket_inventory_ok: bool) -> dict:
+           correct_host: bool, socket_inventory_ok: bool,
+           dependent_proxies: list[dict] | None = None) -> dict:
     by_name = {r.get("unit"): r for r in rows if r.get("unit") in EXPECTED}
     reasons = []
     if not correct_host:
@@ -161,6 +238,21 @@ def assess(rows: list[dict], listeners: dict[int, list[int]], *,
         row = by_name.get(name, {})
         if row.get("declared_ports") != [expected] or not row.get("fragment_sha256"):
             reasons.append("unit_port_declaration_unverified:" + name)
+    proxy_rows = dependent_proxies if dependent_proxies is not None else []
+    proxy_by_name = {p.get("unit"): p for p in proxy_rows
+                     if p.get("unit") in DEPENDENT_PROXIES}
+    if set(proxy_by_name) != set(DEPENDENT_PROXIES):
+        reasons.append("dependent_proxy_inventory_incomplete")
+    for name in DEPENDENT_PROXIES:
+        proxy = proxy_by_name.get(name, {})
+        if (not proxy.get("fragment_sha256")
+                or proxy.get("load") != "loaded"):
+            reasons.append("dependent_proxy_source_unverified:" + name)
+        if (proxy.get("runtime_requires_legacy")
+                or proxy.get("static_requires_legacy")):
+            reasons.append("legacy_proxy_requires_legacy_unit:" + name)
+        if (proxy.get("unit_file_state") == "enabled"):
+            reasons.append("legacy_proxy_enabled:" + name)
     pairs = []
     for canonical, legacy in (
         ("fleet-joyner-gpu", "joyner-lane-1234"),
@@ -212,11 +304,16 @@ def assess(rows: list[dict], listeners: dict[int, list[int]], *,
         "model_request_sent": False,
         "journal_cause_verified": False,
         "may_disable_services": False,
+        "may_retire_legacy_unit": False,
+        "dependent_proxy_owner_verified": False,
+        "dependent_proxy_contract_verified": False,
         "may_change_router": False,
         "may_allocate_gpu": False,
         "reasons": sorted(set(reasons)),
         "ports": pairs,
         "units": rows,
+        "dependent_proxies": [proxy_by_name.get(name, {"unit": name, "load": "unverified"})
+                              for name in DEPENDENT_PROXIES],
     }
 
 
@@ -228,8 +325,13 @@ def audit(*, hostname: str | None = None, caller=_call, file_reader=None) -> dic
         read_unit(name, port, caller=caller, file_reader=file_reader)
         for name, port in EXPECTED.items()
     ]
+    proxies = [
+        read_dependent_proxy(name, caller=caller, file_reader=file_reader)
+        for name in DEPENDENT_PROXIES
+    ]
     listeners, okay = read_port_listeners(caller)
-    return assess(rows, listeners, correct_host=True, socket_inventory_ok=okay)
+    return assess(rows, listeners, correct_host=True, socket_inventory_ok=okay,
+                  dependent_proxies=proxies)
 
 
 def main() -> int:
