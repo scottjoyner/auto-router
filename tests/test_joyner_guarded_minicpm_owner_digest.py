@@ -159,3 +159,22 @@ def test_wrong_host_main_always_exits_hold(monkeypatch,capsys):
     monkeypatch.setattr(g,"audit",lambda:{"verdict":"HOLD","router_cutover_authorized":False})
     assert g.main()==78
     assert json.loads(capsys.readouterr().out)["router_cutover_authorized"] is False
+
+
+def test_owner_pin_matches_guarded_canary_reference_without_executing_it():
+    """Guard against silently diverging trusted SHA/size reference sources."""
+    import ast
+    source = (Path(__file__).resolve().parents[1] / "scripts"
+              / "joyner_minicpm_guarded_canary.py")
+    tree = ast.parse(source.read_text())
+    expected = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Name)
+                        and target.id in ("EXPECTED_MODEL_BYTES", "EXPECTED_MODEL_SHA256")):
+                    expected[target.id] = ast.literal_eval(node.value)
+    assert expected == {
+        "EXPECTED_MODEL_BYTES": g.PINNED_BYTES,
+        "EXPECTED_MODEL_SHA256": g.PINNED_SHA256,
+    }
