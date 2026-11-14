@@ -24,6 +24,16 @@ def proc_fixture(tmp_path, model, *, uid=1000, pid=4620, port=18320,
     (entry / "status").write_text(f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
     (entry / "stat").write_text(
         f"{pid} (llama-server) S " + " ".join(["0"]*18+["4242"]+["0"]*10))
+    net = entry / "net"
+    net.mkdir()
+    (net / "tcp").write_text(
+        "sl local_address rem_address st tx_queue tr tm->when retrnsmt uid timeout inode\n"
+        f"0: 00000000:{port:04X} 00000000:0000 0A 00000000:00000000 "
+        "00:00000000 00000000 1000 0 123456 1\n"
+    )
+    fds = entry / "fd"
+    fds.mkdir()
+    (fds / "8").symlink_to("socket:[123456]")
     return root
 
 
@@ -274,3 +284,82 @@ def test_missing_path_after_open_rejected(tmp_path,monkeypatch):
     assert not g.hash_file(path,tmp_path,os.geteuid(),
                            expected_bytes=len(data),
                            expected_sha256=hashlib.sha256(data).hexdigest())
+
+
+def test_live_socket_inode_match_required_before_model_hash(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    (root/"4620"/"fd"/"8").unlink()
+    (root/"4620"/"fd"/"8").symlink_to("socket:[999999]")
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:pytest.fail("hash without owned listener"))
+    assert result["guarded_listener_socket_inode_bound_to_process"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+@pytest.mark.parametrize("mutation",["missing_tcp","not_listening","wrong_port","bad_inode"])
+def test_missing_or_wrong_proc_net_socket_denies_custody(tmp_path,mutation):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    tcp=root/"4620"/"net"/"tcp"
+    if mutation=="missing_tcp":
+        tcp.unlink()
+    elif mutation=="not_listening":
+        tcp.write_text(tcp.read_text().replace(" 0A ", " 01 "))
+    elif mutation=="wrong_port":
+        tcp.write_text(tcp.read_text().replace(f"{g.PORT:04X}", "47A1"))
+    else:
+        tcp.write_text(tcp.read_text().replace("123456", "not_numeric"))
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:pytest.fail("hash without correct socket"))
+    assert result["guarded_listener_socket_inode_bound_to_process"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+def test_listener_disappearing_during_hash_denies_positive_receipt(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    def lose_listener(path,home,uid):
+        (root/"4620"/"fd"/"8").unlink()
+        return True
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lose_listener)
+    assert result["exact_guarded_process_owner_and_identity_verified"] is True
+    assert result["guarded_listener_socket_inode_bound_to_process"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+def test_ipv6_listener_socket_inode_matches_owner(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    net=root/"4620"/"net"
+    (net/"tcp").unlink()
+    (net/"tcp6").write_text(
+        "sl local_address rem_address st tx_queue tr tm->when retrnsmt uid timeout inode\n"
+        f"0: {'0'*32}:{g.PORT:04X} {'0'*32}:0000 0A 00000000:00000000 "
+        "00:00000000 00000000 1000 0 123456 1\n"
+    )
+    assert g._owns_live_listening_socket(root/"4620") is True
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:True)
+    assert result["guarded_listener_socket_inode_bound_to_process"] is True
+    assert result["guarded_disk_model_matches_pinned_sha256"] is True
+
+
+def test_live_socket_witness_does_not_emit_proc_inode_or_key(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:True)
+    encoded=json.dumps(result)
+    assert "123456" not in encoded
+    assert "SYNTHETIC-SECRET" not in encoded
+    assert result["guarded_listener_socket_inode_bound_to_process"] is True
+    assert result["resident_gpu_weights_verified"] is False
+    assert result["router_cutover_authorized"] is False
+
+
+def test_socket_owner_not_proven_with_wrong_port_argument(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    assert not g._owns_live_listening_socket(root/"4620",port=1234)
