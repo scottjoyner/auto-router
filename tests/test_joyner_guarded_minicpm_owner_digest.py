@@ -1,0 +1,365 @@
+"""Offline guarded-owner digest custody; no model, network, or secret access."""
+from __future__ import annotations
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import pytest
+from scripts import joyner_guarded_minicpm_owner_digest as g
+
+
+def proc_fixture(tmp_path, model, *, uid=1000, pid=4620, port=18320,
+                 extra_flags=None):
+    root = tmp_path / "proc"
+    root.mkdir(exist_ok=True)
+    entry = root / str(pid)
+    entry.mkdir()
+    (entry / "comm").write_text("llama-server\n")
+    args = ["/usr/bin/llama-server", "--port", str(port), "--model",
+            str(model), "--api-key-file", "/private/SYNTHETIC-SECRET"]
+    if extra_flags:
+        args.extend(extra_flags)
+    (entry / "cmdline").write_bytes(b"\0".join(x.encode() for x in args)+b"\0")
+    (entry / "status").write_text(f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+    (entry / "stat").write_text(
+        f"{pid} (llama-server) S " + " ".join(["0"]*18+["4242"]+["0"]*10))
+    net = entry / "net"
+    net.mkdir()
+    (net / "tcp").write_text(
+        "sl local_address rem_address st tx_queue tr tm->when retrnsmt uid timeout inode\n"
+        f"0: 00000000:{port:04X} 00000000:0000 0A 00000000:00000000 "
+        "00:00000000 00000000 1000 0 123456 1\n"
+    )
+    fds = entry / "fd"
+    fds.mkdir()
+    (fds / "8").symlink_to("socket:[123456]")
+    return root
+
+
+def test_constants_stay_pinned_to_guarded_canary():
+    assert g.PINNED_BYTES == 688065920
+    assert g.PINNED_SHA256 == "81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa"
+    assert g.PORT == 18320
+
+
+def test_wrong_host_is_total_no_op():
+    def forbidden(*a, **kw):
+        raise AssertionError("hashed model on unapproved host")
+    x = g.audit(hostname="x1-370", euid=1000,
+                proc_root=Path("/private"), hasher=forbidden)
+    assert x["verdict"] == "HOLD"
+    assert not x["observer_host_verified"]
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+
+
+def test_root_cannot_attest(tmp_path):
+    x = g.audit(hostname="joyner", euid=0,
+                proc_root=tmp_path / "missing", hasher=lambda *a: pytest.fail("root hashed"))
+    assert not x["nonroot_observer_verified"]
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+
+
+def test_exact_owner_process_and_digest_still_holds(tmp_path):
+    model = tmp_path / "guarded.gguf"
+    model.write_bytes(b"synthetic")
+    proc = proc_fixture(tmp_path, model)
+    seen=[]
+    def fake_hash(path, home, uid):
+        seen.append((path,home,uid))
+        return True
+    x=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,hasher=fake_hash)
+    assert x["exact_guarded_process_owner_and_identity_verified"] is True
+    assert x["guarded_disk_model_matches_pinned_sha256"] is True
+    assert x["guarded_process_pid"]==4620
+    assert seen == [(model,tmp_path,1000)]
+    assert x["resident_gpu_weights_verified"] is False
+    assert x["file_hash_receipt_is_signed"] is False
+    assert x["router_cutover_authorized"] is False
+    assert "SYNTHETIC-SECRET" not in json.dumps(x)
+
+
+def test_wrong_owner_never_hashes(tmp_path):
+    model=tmp_path/"model.gguf";model.write_bytes(b"test")
+    proc=proc_fixture(tmp_path,model,uid=1002)
+    x=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,
+              hasher=lambda *a:pytest.fail("wrong owner hashed"))
+    assert not x["exact_guarded_process_owner_and_identity_verified"]
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+
+
+def test_duplicate_guarded_port_process_denied(tmp_path):
+    model=tmp_path/"model.gguf";model.write_bytes(b"test")
+    proc=proc_fixture(tmp_path,model)
+    proc_fixture(tmp_path,model,pid=4621)
+    x=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,
+              hasher=lambda *a:pytest.fail("duplicate hashed"))
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+
+
+@pytest.mark.parametrize("port,flags",[(18321,None),(18320,["--model","/other.gguf"]),
+                                    (18320,["--port","18320"])])
+def test_wrong_or_ambiguous_process_flags_denied(tmp_path,port,flags):
+    model=tmp_path/"model.gguf";model.write_bytes(b"test")
+    proc=proc_fixture(tmp_path,model,port=port,extra_flags=flags)
+    x=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,
+              hasher=lambda *a:pytest.fail("ambiguous process hashed"))
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+
+
+def test_missing_key_file_flag_denied_without_reading_key(tmp_path):
+    model=tmp_path/"model.gguf";model.write_bytes(b"test")
+    proc=proc_fixture(tmp_path,model)
+    proc.joinpath("4620","cmdline").write_bytes(
+        b"/usr/bin/llama-server\0--port\018320\0--model\0"+str(model).encode()+b"\0")
+    x=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,
+              hasher=lambda *a:pytest.fail("key flag missing"))
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+
+
+def test_process_restart_during_hash_is_hold(tmp_path):
+    model=tmp_path/"model.gguf";model.write_bytes(b"test")
+    proc=proc_fixture(tmp_path,model)
+    def hash_and_rewrite(*args):
+        (proc/"4620"/"stat").write_text(
+            "4620 (llama-server) S "+" ".join(["0"]*18+["9999"]+["0"]*10))
+        return True
+    x=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,
+              hasher=hash_and_rewrite)
+    assert not x["guarded_disk_model_matches_pinned_sha256"]
+    assert not x["exact_guarded_process_owner_and_identity_verified"]
+
+
+def test_real_fd_hash_accepts_synthetic_owned_regular_file(tmp_path):
+    path=tmp_path/"model.gguf";data=b"synthetic-immutable-bytes";path.write_bytes(data)
+    assert g.hash_file(path,tmp_path,os.geteuid(),expected_bytes=len(data),
+                       expected_sha256=hashlib.sha256(data).hexdigest())
+
+
+@pytest.mark.parametrize("change",["sha","length","symlink","missing","foreign","outside"])
+def test_real_fd_hash_rejects_invalid_data(tmp_path,change):
+    path=tmp_path/"model.gguf";data=b"synthetic bytes";path.write_bytes(data)
+    sha=hashlib.sha256(data).hexdigest();size=len(data)
+    if change=="sha":sha="f"*64
+    if change=="length":size+=1
+    if change=="symlink":
+        target=tmp_path/"target";path.rename(target);path.symlink_to(target)
+    if change=="missing":path.unlink()
+    if change=="foreign":
+        assert not g.hash_file(path,tmp_path,os.geteuid()+1,
+                               expected_bytes=size,expected_sha256=sha)
+        return
+    if change=="outside":
+        assert not g.hash_file(Path("/private/synthetic"),tmp_path,os.geteuid(),
+                               expected_bytes=size,expected_sha256=sha)
+        return
+    assert not g.hash_file(path,tmp_path,os.geteuid(),
+                           expected_bytes=size,expected_sha256=sha)
+
+
+def test_nested_symlink_directory_rejected(tmp_path):
+    target=tmp_path/"actual";target.mkdir()
+    (target/"model.gguf").write_bytes(b"ok")
+    alias=tmp_path/"alias";alias.symlink_to(target,target_is_directory=True)
+    assert not g.hash_file(alias/"model.gguf",tmp_path,os.geteuid(),
+                           expected_bytes=2,expected_sha256=hashlib.sha256(b"ok").hexdigest())
+
+
+def test_wrong_host_main_always_exits_hold(monkeypatch,capsys):
+    monkeypatch.setattr(g,"audit",lambda:{"verdict":"HOLD","router_cutover_authorized":False})
+    assert g.main()==78
+    assert json.loads(capsys.readouterr().out)["router_cutover_authorized"] is False
+
+
+def test_owner_pin_matches_guarded_canary_reference_without_executing_it():
+    """Guard against silently diverging trusted SHA/size reference sources."""
+    import ast
+    source = (Path(__file__).resolve().parents[1] / "scripts"
+              / "joyner_minicpm_guarded_canary.py")
+    tree = ast.parse(source.read_text())
+    expected = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Name)
+                        and target.id in ("EXPECTED_MODEL_BYTES", "EXPECTED_MODEL_SHA256")):
+                    expected[target.id] = ast.literal_eval(node.value)
+    assert expected == {
+        "EXPECTED_MODEL_BYTES": g.PINNED_BYTES,
+        "EXPECTED_MODEL_SHA256": g.PINNED_SHA256,
+    }
+
+
+def test_matching_unapproved_nonroot_identity_cannot_attest(tmp_path):
+    model=tmp_path/"model.gguf";model.write_bytes(b"synthetic")
+    proc=proc_fixture(tmp_path,model,uid=1001)
+    result=g.audit(hostname="joyner",euid=1001,proc_root=proc,home=tmp_path,
+                   hasher=lambda *a:pytest.fail("unapproved UID hashed"))
+    assert result["guarded_owner_identity_verified"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+def test_guarded_home_mapping_mismatch_denied_before_proc_scan(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(g.pwd,"getpwuid",
+                        lambda uid:SimpleNamespace(pw_dir="/nonmatching-guarded-home"))
+    monkeypatch.setattr(g,"_processes",
+                        lambda *a:pytest.fail("process scan after wrong home"))
+    result=g.audit(hostname="joyner",euid=g.APPROVED_GUARDED_UID,
+                   proc_root=Path("/proc"),home=g.APPROVED_HOME)
+    assert result["guarded_owner_identity_verified"] is False
+    assert result["guarded_process_pid"] is None
+
+
+def test_real_effective_saved_uid_must_match_guarded_owner(tmp_path):
+    model=tmp_path/"model.gguf";model.write_bytes(b"synthetic")
+    proc=proc_fixture(tmp_path,model,uid=1000)
+    (proc/"4620"/"status").write_text("Uid:\t1000\t1001\t1000\t1000\n")
+    result=g.audit(hostname="joyner",euid=1000,proc_root=proc,home=tmp_path,
+                   hasher=lambda *a:pytest.fail("cross-UID process hashed"))
+    assert result["guarded_process_pid"] is None
+    assert not result["guarded_disk_model_matches_pinned_sha256"]
+
+
+def test_symlinked_ancestor_above_approved_home_is_denied(tmp_path):
+    actual=tmp_path/"real";actual.mkdir()
+    real_home=actual/"guarded";real_home.mkdir()
+    path=real_home/"model.gguf";data=b"synthetic";path.write_bytes(data)
+    alias=tmp_path/"alias";alias.symlink_to(actual,target_is_directory=True)
+    alias_home=alias/"guarded"
+    disguised=alias_home/"model.gguf"
+    assert g._allowed_path(disguised,alias_home) is True
+    assert not g.hash_file(disguised,alias_home,os.geteuid(),
+                           expected_bytes=len(data),
+                           expected_sha256=hashlib.sha256(data).hexdigest())
+
+
+def test_replaced_parent_during_streaming_hash_fails_closed(tmp_path,monkeypatch):
+    parent=tmp_path/"models";parent.mkdir()
+    path=parent/"model.gguf";data=b"synthetic-model-bytes";path.write_bytes(data)
+    original_read=os.read
+    changed=[]
+    def intercept(fd,count):
+        payload=original_read(fd,count)
+        if payload and not changed:
+            moved=tmp_path/"moved"
+            parent.rename(moved)
+            parent.symlink_to(moved,target_is_directory=True)
+            changed.append(True)
+        return payload
+    monkeypatch.setattr(g.os,"read",intercept)
+    assert not g.hash_file(path,tmp_path,os.geteuid(),
+                           expected_bytes=len(data),
+                           expected_sha256=hashlib.sha256(data).hexdigest())
+    assert changed==[True]
+
+
+def test_replaced_final_file_during_streaming_hash_fails_closed(tmp_path,monkeypatch):
+    path=tmp_path/"model.gguf";data=b"synthetic-model-bytes";path.write_bytes(data)
+    original_read=os.read
+    changed=[]
+    def intercept(fd,count):
+        payload=original_read(fd,count)
+        if payload and not changed:
+            path.rename(tmp_path/"renamed-original")
+            path.write_bytes(data)
+            changed.append(True)
+        return payload
+    monkeypatch.setattr(g.os,"read",intercept)
+    assert not g.hash_file(path,tmp_path,os.geteuid(),
+                           expected_bytes=len(data),
+                           expected_sha256=hashlib.sha256(data).hexdigest())
+    assert changed==[True]
+
+
+def test_missing_path_after_open_rejected(tmp_path,monkeypatch):
+    path=tmp_path/"model.gguf";data=b"synthetic-model-bytes";path.write_bytes(data)
+    original_read=os.read
+    def intercept(fd,count):
+        payload=original_read(fd,count)
+        if payload and path.exists():
+            path.unlink()
+        return payload
+    monkeypatch.setattr(g.os,"read",intercept)
+    assert not g.hash_file(path,tmp_path,os.geteuid(),
+                           expected_bytes=len(data),
+                           expected_sha256=hashlib.sha256(data).hexdigest())
+
+
+def test_live_socket_inode_match_required_before_model_hash(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    (root/"4620"/"fd"/"8").unlink()
+    (root/"4620"/"fd"/"8").symlink_to("socket:[999999]")
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:pytest.fail("hash without owned listener"))
+    assert result["guarded_listener_socket_inode_bound_to_process"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+@pytest.mark.parametrize("mutation",["missing_tcp","not_listening","wrong_port","bad_inode"])
+def test_missing_or_wrong_proc_net_socket_denies_custody(tmp_path,mutation):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    tcp=root/"4620"/"net"/"tcp"
+    if mutation=="missing_tcp":
+        tcp.unlink()
+    elif mutation=="not_listening":
+        tcp.write_text(tcp.read_text().replace(" 0A ", " 01 "))
+    elif mutation=="wrong_port":
+        tcp.write_text(tcp.read_text().replace(f"{g.PORT:04X}", "47A1"))
+    else:
+        tcp.write_text(tcp.read_text().replace("123456", "not_numeric"))
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:pytest.fail("hash without correct socket"))
+    assert result["guarded_listener_socket_inode_bound_to_process"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+def test_listener_disappearing_during_hash_denies_positive_receipt(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    def lose_listener(path,home,uid):
+        (root/"4620"/"fd"/"8").unlink()
+        return True
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lose_listener)
+    assert result["exact_guarded_process_owner_and_identity_verified"] is True
+    assert result["guarded_listener_socket_inode_bound_to_process"] is False
+    assert result["guarded_disk_model_matches_pinned_sha256"] is False
+
+
+def test_ipv6_listener_socket_inode_matches_owner(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    net=root/"4620"/"net"
+    (net/"tcp").unlink()
+    (net/"tcp6").write_text(
+        "sl local_address rem_address st tx_queue tr tm->when retrnsmt uid timeout inode\n"
+        f"0: {'0'*32}:{g.PORT:04X} {'0'*32}:0000 0A 00000000:00000000 "
+        "00:00000000 00000000 1000 0 123456 1\n"
+    )
+    assert g._owns_live_listening_socket(root/"4620") is True
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:True)
+    assert result["guarded_listener_socket_inode_bound_to_process"] is True
+    assert result["guarded_disk_model_matches_pinned_sha256"] is True
+
+
+def test_live_socket_witness_does_not_emit_proc_inode_or_key(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    result=g.audit(hostname="joyner",euid=1000,proc_root=root,home=tmp_path,
+                   hasher=lambda *a:True)
+    encoded=json.dumps(result)
+    assert "123456" not in encoded
+    assert "SYNTHETIC-SECRET" not in encoded
+    assert result["guarded_listener_socket_inode_bound_to_process"] is True
+    assert result["resident_gpu_weights_verified"] is False
+    assert result["router_cutover_authorized"] is False
+
+
+def test_socket_owner_not_proven_with_wrong_port_argument(tmp_path):
+    model=tmp_path/"guarded.gguf";model.write_bytes(b"synthetic")
+    root=proc_fixture(tmp_path,model)
+    assert not g._owns_live_listening_socket(root/"4620",port=1234)
