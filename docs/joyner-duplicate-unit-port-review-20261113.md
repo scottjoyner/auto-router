@@ -347,3 +347,31 @@ Even that would prove owner/process/disk file custody only: live GPU
 weight identity, request-contract equivalence, authenticated client
 access, routing cutover, lease ownership and legacy proxy retirement
 remain independent production HOLD gates.
+
+## Guarded process-to-listener inode custody — November 14, 2026
+
+An owner-executed process may claim --port 18320 in its command line
+without actually holding a listening socket: another service could have
+bound the port, the listener could have closed, or the process might
+still be starting. A matching argv and disk hash therefore do not alone
+prove which process is serving guarded MiniCPM traffic.
+
+The guarded-owner verifier now inspects only Linux procfs for the already
+selected and approved process: its tcp/tcp6 LISTEN table, matching numeric
+port and socket inode, and its own fd symlinks. It requires a socket inode
+for port 18320 to appear in that process's own fd table **before and after**
+the model hash; the same process PID/starttime/model/owner must remain
+stable across the hash. No procfs addresses, command lines, socket inodes,
+key-file paths, or model bytes are emitted in the JSON.
+
+This establishes only an instantaneous process-to-listener custody match;
+it does not prove external ingress, model answers, authenticated request
+contract, or resident GPU weight state. The check fails closed if procfs
+is inaccessible or the listener disappears, and continues to return HOLD
+and exit 78 even after a successful receipt.
+
+Synthetic offline tests include a wrong or absent socket inode, a
+non-LISTEN socket, wrong port, inaccessible tcp table, IPv6-only listen,
+a disappearing listener during hashing and receipt redaction. The
+guarded-owner account boundary is unchanged: no sudo/su, user-switching,
+guarded key-file read, model-generation request, or service change.
