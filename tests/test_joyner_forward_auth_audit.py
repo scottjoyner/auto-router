@@ -137,3 +137,65 @@ def test_exit_code_remains_denied_even_when_everything_401(monkeypatch,capsys):
     assert m.main()==78
     data=json.loads(capsys.readouterr().out)
     assert data["approved_for_routing"] is False
+
+
+def test_wildcard_ipv4_socket_counts_as_local_bind_not_remote_reachability():
+    seen = {("0.0.0.0", 1234), ("0.0.0.0", 1236),
+            (TAIL, 18320), (TAIL, 18321)}
+    def status(endpoint, timeout):
+        return (401, None) if endpoint.port in (18320, 18321) else (200, None)
+    report = m.audit(LAN, TAIL, probe=status,
+                     observed_listeners=seen, node_hostname="joyner")
+    assert report["status"] == "PERIMETER_NO_GO"
+    assert report["external_reachability_tested"] is False
+    assert report["model_catalog_probe_origin"] == "joyner_host_only"
+    assert len(report["unauthenticated_model_catalogs"]) == 4
+    assert len(report["missing_credential_rejected"]) == 2
+    for row in report["endpoints"]:
+        assert row["listener_bound_on_joyner"] is True
+        if row["port"] in (1234, 1236):
+            assert row["listener_match_type"] == "wildcard_ipv4"
+            assert row["classification"] == "CATALOG_READABLE_WITHOUT_CREDENTIAL"
+        else:
+            assert row["listener_match_type"] == "exact_ipv4"
+            assert row["classification"] == "MISSING_CREDENTIAL_REJECTED"
+        assert row["cross_host_reachability_verified"] is False
+        assert row["approved_for_dispatch"] is False
+
+
+def test_specific_listener_precedes_wildcard_match():
+    report = m.audit(
+        LAN, TAIL, probe=lambda *a: (401, None),
+        observed_listeners={(LAN, 1234), ("0.0.0.0", 1234)},
+        node_hostname="joyner",
+    )
+    chosen = {row["name"]: row for row in report["endpoints"]}
+    assert chosen["toolcall-lan"]["listener_match_type"] == "exact_ipv4"
+    assert chosen["toolcall-tailnet-forward"]["listener_match_type"] == "wildcard_ipv4"
+    assert chosen["ling-lan"]["listener_match_type"] == "no_observed_ipv4_listener"
+    assert report["approved_for_routing"] is False
+
+
+def test_ipv6_wildcard_does_not_invent_ipv4_bind():
+    observed = m.listener_addresses(
+        "LISTEN 0 512 [::]:1234 [::]:*\n"
+    )
+    assert observed == set()
+    report = m.audit(LAN, TAIL, probe=lambda *a: (200, None),
+                     observed_listeners=observed, node_hostname="joyner")
+    assert report["unauthenticated_model_catalogs"] == []
+    assert all(x["listener_bound_on_joyner"] is False
+               for x in report["endpoints"])
+    assert report["external_reachability_tested"] is False
+
+
+def test_wrong_host_cannot_infer_wildcard_exposure():
+    report = m.audit(
+        LAN, TAIL, probe=lambda *a: pytest.fail("unexpected remote GET"),
+        observed_listeners={("0.0.0.0", 1234)},
+        node_hostname="x1-370",
+    )
+    assert report["model_catalog_probe_origin"] == "none"
+    assert all(r["listener_match_type"] == "wrong_observer_host"
+               for r in report["endpoints"])
+    assert report["unauthenticated_model_catalogs"] == []
