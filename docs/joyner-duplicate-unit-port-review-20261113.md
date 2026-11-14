@@ -66,3 +66,18 @@ this receipt. Forward only JSON fields from the defined schema.
    and signed custody receipts.
 4. Until then: HOLD. Do not disable, stop, mask, restart, reconfigure,
    redirect traffic, alter credentials or allocate newly visible GPU RAM.
+
+## Privacy refinement before merge review
+
+The observer necessarily reads the bounded contents of the four approved
+unit fragments to parse numeric ports and compute hashes. Those bytes may
+include sensitive launch arguments, so the receipt MUST NOT claim that
+no sensitive definition text was read. The published receipt instead states
+that unit definitions were inspected, credential values were not emitted,
+and external environment files were not opened.
+
+The fragment reader rejects nonstandard paths, symlinks and any fragment
+outside the current user's standard .config/systemd/user directory. This
+prevents a crafted FragmentPath from turning the observer into a file reader
+for an unrelated credential or model path. The returned JSON includes only
+allowlisted unit status fields and fragment digests.
