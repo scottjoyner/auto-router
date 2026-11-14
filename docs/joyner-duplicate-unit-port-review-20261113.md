@@ -255,3 +255,50 @@ runs synthetic tests for this new source pin (including wrong-host,
 mismatched owner, duplicate process, missing or replaced file, symlink,
 invalid digest and never-authorize-cutover properties). No CI job accesses
 Joyner or downloads a real model.
+
+## Guarded MiniCPM owner-bound, hash-only acceptance — November 14, 2026
+
+The guarded MiniCPM service on port 18320 runs under a different non-root
+account from the Fleet Commander SSH user. Read-only process metadata
+identified that owner mismatch, and the guarded model file was not readable
+from the SSH session. That is a protection boundary, **not** permission to
+elevate privileges, change ownership/modes, or inspect the guarded key.
+
+`scripts/joyner_guarded_minicpm_owner_digest.py` is the narrow, offline-tested
+custody check intended for execution **only by the already-authorized
+guarded service owner** through a recorded operator-approved execution
+channel. It does not try to invoke sudo, su, Fleet Commander privilege
+escalation, or a service action. With no approved channel, execution remains
+blocked and the existing evidence remains HOLD.
+
+The diagnostic verifies that the host is Joyner, the caller is non-root,
+and exactly one caller-owned llama-server has port 18320, a single absolute
+model-file argument and an api-key-file **flag**. It does **not** open the
+api-key-file. It requires a model path under the restricted /home/joyner
+namespace, rejects parent/path symlinks and non-regular files, requires
+file ownership by the guarded owner, and hashes the disk file through an
+O_NOFOLLOW file descriptor. Size, inode, timestamps, and process starttime
+are checked before/after hashing. The expected file size and full SHA-256
+are the same pinned values in the preexisting MiniCPM guarded canary:
+688065920 bytes, SHA-256
+81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa.
+
+Even on exact success the printed JSON receipt contains only allowlisted
+booleans and the guarded PID. It ALWAYS says HOLD, exits 78, and reports
+resident GPU weights, request-equivalence, receipt signature, production
+router approval and service-change approval as FALSE. A matching disk file
+and owning process do **not** establish that the running GPU has the right
+weights loaded, that aliases match, or that an authorized request behaves
+the same as the existing unguarded lane.
+
+Offline unit tests cover wrong host, root, owner mismatch, absent/duplicate
+process, ambiguous flags, PID restart during hashing, changed digest, file
+size, symlink, non-owner file, and hold-only semantics. The dedicated
+read-only CI workflow pins and verifies the exact PR checkout. CI never
+contacts Joyner or handles production credentials.
+
+Release remains HOLD pending an approved guarded-owner execution receipt,
+independent source/guarded alias and synthetic request-contract acceptance,
+real downstream client/credential and LAN/Tailnet contracts, rollback, and
+an operator-approved change. No running service should be stopped,
+reconfigured, or allocated more GPU resources based on this document.
