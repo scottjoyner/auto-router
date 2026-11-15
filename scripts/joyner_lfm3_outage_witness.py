@@ -235,15 +235,116 @@ def read_r9700_hardware(root: Path = Path("/sys/bus/pci/devices")) -> dict:
     }
 
 
+def read_board_pcie_context(
+        dmi: Path = Path("/sys/class/dmi/id"),
+        pci: Path = Path("/sys/bus/pci/devices")) -> dict:
+    """Board identity and bounded bridge-link census; never read PCI config.
+
+    Any partial PCI bridge census returns an unusable inventory rather than
+    a fabricated missing-link diagnosis. A given bridge is NOT assumed to
+    be the physical graphics slot.
+    """
+    def text_field(name: str) -> str | None:
+        try:
+            raw = (dmi / name).read_text().strip()
+            if not 1 <= len(raw) <= 64 or not re.fullmatch(
+                    r"[A-Za-z0-9 ._+/@-]+", raw):
+                return None
+            return raw
+        except OSError:
+            return None
+
+    board = text_field("board_name")
+    vendor = text_field("board_vendor")
+    bios = text_field("bios_version")
+    bios_date = text_field("bios_date")
+    target_board = board == "PRIME B650M-A AX II" and (
+        vendor == "ASUSTeK COMPUTER INC."
+    )
+    if bios is not None and not re.fullmatch(r"[0-9]{3,5}", bios):
+        bios = None
+    try:
+        devices = list(pci.iterdir())
+        if not devices:
+            raise ValueError("empty_pci_inventory")
+    except (OSError, ValueError):
+        return {
+            "board": board if target_board else None,
+            "target_board_verified": target_board,
+            "bios_version": bios,
+            "bios_date": bios_date,
+            "pcie_bridge_inventory_usable": False,
+            "amd_bridge_count": None,
+            "amd_bridges": [],
+            "physical_r9700_slot_identified": False,
+            "bios_update_authorized": False,
+        }
+
+    bridges = []
+    invalid = False
+    bdf_pattern = r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]"
+    for device in devices:
+        try:
+            klass = (device / "class").read_text().strip().lower()
+            if klass != "0x060400":
+                continue
+            vendor_id = (device / "vendor").read_text().strip().lower()
+            if vendor_id != "0x1022":
+                continue
+            if not re.fullmatch(bdf_pattern, device.name):
+                invalid = True
+                continue
+            speeds = {"2.5 GT/s PCIe", "5.0 GT/s PCIe",
+                      "8.0 GT/s PCIe", "16.0 GT/s PCIe",
+                      "32.0 GT/s PCIe", "64.0 GT/s PCIe"}
+            def speed(name: str) -> str | None:
+                try:
+                    v = (device / name).read_text().strip()
+                    return v if v in speeds else None
+                except OSError:
+                    return None
+            def width(name: str) -> int | None:
+                try:
+                    v = int((device / name).read_text().strip())
+                    return v if 1 <= v <= 32 else None
+                except (OSError, ValueError):
+                    return None
+            bridges.append({
+                "bdf": device.name,
+                "link_speed": speed("current_link_speed"),
+                "link_width": width("current_link_width"),
+                "max_link_speed": speed("max_link_speed"),
+                "max_link_width": width("max_link_width"),
+            })
+        except OSError:
+            invalid = True
+    bridges.sort(key=lambda b: b["bdf"])
+    # This is a snapshot of enumerated bridges, NOT a physical slot map.
+    # A root port may be absent when no downstream endpoint enumerates.
+    return {
+        "board": board if target_board else None,
+        "target_board_verified": target_board,
+        "bios_version": bios,
+        "bios_date": bios_date,
+        "pcie_bridge_inventory_usable": not invalid,
+        "amd_bridge_count": len(bridges) if not invalid else None,
+        "amd_bridges": bridges if not invalid else [],
+        "physical_r9700_slot_identified": False,
+        "bios_update_authorized": False,
+    }
+
+
 def capture(runner=_run, health=local_health,
             memory=_read_memory, boot=_boot,
-            hardware=read_r9700_hardware) -> dict:
+            hardware=read_r9700_hardware,
+            board_context=read_board_pcie_context) -> dict:
     """One read-only bounded snapshot. No hidden writes or network targets."""
     return {
         "boot": boot(), "units": [unit_snapshot(name, runner) for name in UNITS],
         "ports": ports_snapshot(runner),
         "local_lfm3_health_http": health(),
         "resources": memory(), "r9700_hardware": hardware(),
+        "board_pcie": board_context(),
     }
 
 
@@ -284,6 +385,7 @@ def evaluate(before: dict, after: dict, *, host_ok: bool) -> dict:
         "local_lfm3_health_http": after["local_lfm3_health_http"],
         "resources": after["resources"],
         "r9700_hardware": after.get("r9700_hardware", {}),
+        "board_pcie": after.get("board_pcie", {}),
         "same_pci_identity_during_observation": (
             before.get("r9700_hardware") == after.get("r9700_hardware")
             and before.get("r9700_hardware", {}).get("pci_inventory_usable") is True
@@ -301,7 +403,9 @@ def evaluate(before: dict, after: dict, *, host_ok: bool) -> dict:
 
 def audit(*, hostname: str | None = None, runner=_run,
           health=local_health, memory=_read_memory, boot=_boot,
-          hardware=read_r9700_hardware, sleep=time.sleep) -> dict:
+          hardware=read_r9700_hardware,
+          board_context=read_board_pcie_context,
+          sleep=time.sleep) -> dict:
     host_ok = (hostname or socket.gethostname()).split(".", 1)[0].lower() == HOST
     if not host_ok:
         return evaluate(
@@ -309,12 +413,13 @@ def audit(*, hostname: str | None = None, runner=_run,
             {"units": [], "boot": {"verified": False},
              "ports": {"socket_inventory_usable": False, "listening": {}},
              "local_lfm3_health_http": None, "resources": {},
-             "r9700_hardware": {"pci_inventory_usable": False}},
+             "r9700_hardware": {"pci_inventory_usable": False},
+             "board_pcie": {"target_board_verified": False}},
             host_ok=False,
         )
-    before = capture(runner, health, memory, boot, hardware)
+    before = capture(runner, health, memory, boot, hardware, board_context)
     sleep(2)
-    after = capture(runner, health, memory, boot, hardware)
+    after = capture(runner, health, memory, boot, hardware, board_context)
     return evaluate(before, after, host_ok=True)
 
 

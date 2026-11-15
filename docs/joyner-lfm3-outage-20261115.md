@@ -80,3 +80,52 @@ channel. Fail closed if no accessible evidence source exists.
 
 The source-only PCI test uses fake sysfs directories and synthetic IDs;
 hosted CI never touches a physical PCI bus.
+
+## Motherboard, BIOS and PCIe bridge acceptance — November 15, ~18:10 EST
+
+The independent read-only DMI and PCIe root/bridge census identified:
+- ASUS PRIME B650M-A AX II, BIOS 3014, DMI BIOS date 07/17/2024.
+- 14 AMD PCI bridge functions, inventoried by current BDF with normalized
+  current/max link speeds and widths only; the inventory was readable.
+- Selected live bridge examples include current 0000:00:01.2 at
+  32 GT/s x4, 0000:00:02.1 at 16 GT/s x4, 0000:00:08.1 at 16 GT/s x16,
+  and 0000:03:00.0 at 16 GT/s x4. A bridge with a healthy local link
+  does NOT prove that a formerly attached GPU endpoint is present.
+- The R9700 1002:7551 PCI endpoint remains absent from complete PCI
+  enumeration. The old 03:00.0 address is currently a different bridge:
+  the historical BDF is *not* a stable device identifier.
+- New read-only witness reports
+  physical_r9700_slot_identified=false and bios_update_authorized=false
+  even when all 14 bridge records are present.
+- Latest live snapshot: LFM3 still has no HTTP health, restart count
+  392; Kipnerter bridge restart count 807. Canonical MiniCPM and Ling
+  remain independently service-healthy. Do not infer that 32 GT/s x4
+  is the physical PCIEX16_1 GPU slot.
+
+Official board specifications list one PCIe 4.0 x16 slot with x16
+electrical connectivity (and three mechanically x16 slots operating
+at x1); consult the actual board layout and expansion card power
+instructions before identifying the R9700 physical slot:
+https://www.asus.com/us/motherboards-components/motherboards/prime/prime-b650m-a-ax-ii/
+
+ASUS firmware support lists BIOS v4004 published 2026-09-21, while this
+board reports BIOS v3014. The ASUS page warns for version 3854 that
+firmware cannot be rolled back to earlier versions. New BIOS
+availability is a *review option only*, not evidence the installed BIOS
+caused the GPU disappearance, nor authorization for a flash. A change
+would require exact CPU/board/ROM compatibility review, vendor rollback
+constraints, stable power and out-of-band recovery plan, full fleet
+consumer and backup checks, and operator approval:
+https://www.asus.com/us/motherboards-components/motherboards/prime/prime-b650m-a-ax-ii/helpdesk_bios?model2Name=PRIME-B650M-A-AX-II
+
+The current SSH user cannot read /var/log/kern.log or /var/log/syslog;
+journalctl -k and dmesg also fail. Treat kernel/PCIe cause as UNKNOWN
+rather than "zero errors." The new source-only bridge witness does not
+read either log channel, device PCI config bytes, SPI/BIOS flash, GPU
+driver registers or any secret. Its synthetic tests cover accurate
+board identity, untrusted link strings, malformed device BDF,
+partial inventory, and denial of BIOS/slot admission on every outcome.
+
+Release remains hardware-enumeration HOLD. No hotplug, unbind/rebind,
+PCI bus rescan, slot/power toggle, BIOS update, GPU relocation, service
+restart, lease/router cutover or access-control change was executed.

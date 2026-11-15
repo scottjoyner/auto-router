@@ -315,3 +315,109 @@ def test_empty_pci_device_directory_is_unknown(tmp_path):
     report=w.read_r9700_hardware(root)
     assert report["pci_inventory_usable"] is False
     assert report["r9700_pci_present"] is None
+
+
+def board_fixture(tmp_path, *, board="PRIME B650M-A AX II",
+                  vendor="ASUSTeK COMPUTER INC.", bios="3014",
+                  include_bridge=True):
+    dmi=tmp_path/"dmi"
+    pci=tmp_path/"pci"
+    dmi.mkdir();pci.mkdir()
+    (dmi/"board_name").write_text(board+"\n")
+    (dmi/"board_vendor").write_text(vendor+"\n")
+    (dmi/"bios_version").write_text(bios+"\n")
+    (dmi/"bios_date").write_text("07/17/2024\n")
+    d=pci/"0000:00:01.2"
+    if include_bridge:
+        d.mkdir()
+        (d/"class").write_text("0x060400\n")
+        (d/"vendor").write_text("0x1022\n")
+        (d/"current_link_speed").write_text("32.0 GT/s PCIe\n")
+        (d/"current_link_width").write_text("4\n")
+        (d/"max_link_speed").write_text("32.0 GT/s PCIe\n")
+        (d/"max_link_width").write_text("4\n")
+    return dmi,pci
+
+
+def test_board_pcie_context_allowlisted_board_and_bridge(tmp_path):
+    dmi,pci=board_fixture(tmp_path)
+    out=w.read_board_pcie_context(dmi,pci)
+    assert out["target_board_verified"] is True
+    assert out["board"] == "PRIME B650M-A AX II"
+    assert out["bios_version"] == "3014"
+    assert out["bios_date"] == "07/17/2024"
+    assert out["pcie_bridge_inventory_usable"] is True
+    assert out["amd_bridge_count"] == 1
+    assert out["amd_bridges"] == [{
+        "bdf":"0000:00:01.2",
+        "link_speed":"32.0 GT/s PCIe",
+        "link_width":4,
+        "max_link_speed":"32.0 GT/s PCIe",
+        "max_link_width":4,
+    }]
+    assert out["physical_r9700_slot_identified"] is False
+    assert out["bios_update_authorized"] is False
+
+
+def test_empty_bridge_inventory_is_unknown(tmp_path):
+    dmi,pci=board_fixture(tmp_path,include_bridge=False)
+    out=w.read_board_pcie_context(dmi,pci)
+    assert out["pcie_bridge_inventory_usable"] is False
+    assert out["amd_bridge_count"] is None
+    assert out["bios_update_authorized"] is False
+
+
+def test_unknown_board_does_not_invent_verified_asus_model(tmp_path):
+    dmi,pci=board_fixture(tmp_path,board="Another Board")
+    out=w.read_board_pcie_context(dmi,pci)
+    assert out["board"] is None
+    assert out["target_board_verified"] is False
+    assert out["physical_r9700_slot_identified"] is False
+
+
+def test_malformed_bdf_or_partial_bridge_census_fails_closed(tmp_path):
+    dmi,pci=board_fixture(tmp_path)
+    incomplete=pci/"not_a_bdf"
+    incomplete.mkdir()
+    (incomplete/"class").write_text("0x060400")
+    (incomplete/"vendor").write_text("0x1022")
+    out=w.read_board_pcie_context(dmi,pci)
+    assert out["pcie_bridge_inventory_usable"] is False
+    assert out["amd_bridge_count"] is None
+    assert out["amd_bridges"] == []
+
+
+def test_missing_pci_class_is_unverified_not_clean_inventory(tmp_path):
+    dmi,pci=board_fixture(tmp_path)
+    (pci/"0000:00:01.2"/"class").unlink()
+    out=w.read_board_pcie_context(dmi,pci)
+    assert out["pcie_bridge_inventory_usable"] is False
+
+
+def test_invalid_link_metadata_redacted_without_fake_pass(tmp_path):
+    dmi,pci=board_fixture(tmp_path)
+    d=pci/"0000:00:01.2"
+    (d/"current_link_speed").write_text("PRIVATE-KEY-DATA")
+    (d/"current_link_width").write_text("-9")
+    out=w.read_board_pcie_context(dmi,pci)
+    assert out["pcie_bridge_inventory_usable"] is True
+    assert out["amd_bridges"][0]["link_speed"] is None
+    assert out["amd_bridges"][0]["link_width"] is None
+    assert "PRIVATE-KEY-DATA" not in json.dumps(out)
+    assert out["bios_update_authorized"] is False
+
+
+def test_board_context_does_not_claim_graphics_slot_or_recovery(tmp_path):
+    dmi,pci=board_fixture(tmp_path)
+    context=w.read_board_pcie_context(dmi,pci)
+    run,_,_=fixture_runner()
+    before=w.capture(runner=run,health=lambda:None,boot=boot_record,
+                     memory=lambda:{},hardware=lambda:{
+                         "pci_inventory_usable": True, "r9700_pci_present": False
+                     },board_context=lambda:context)
+    result=w.evaluate(before,before,host_ok=True)
+    assert result["verdict"] == "OUTAGE_HOLD"
+    assert result["board_pcie"]["target_board_verified"]
+    assert not result["board_pcie"]["physical_r9700_slot_identified"]
+    assert not result["board_pcie"]["bios_update_authorized"]
+    assert result["r9700_runtime_capability_verified"] is False
