@@ -1,0 +1,43 @@
+name: Joyner LFM3 outage witness (offline)
+
+on:
+  pull_request:
+    paths:
+      - scripts/joyner_lfm3_outage_witness.py
+      - tests/test_joyner_lfm3_outage_witness.py
+      - docs/joyner-lfm3-outage-20261115.md
+      - .github/workflows/joyner-lfm3-outage-witness.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/joyner_lfm3_outage_witness.py
+      - tests/test_joyner_lfm3_outage_witness.py
+      - .github/workflows/joyner-lfm3-outage-witness.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-outage-observer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "verified checkout SHA $EXPECTED_HEAD"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install offline runner only
+        run: python -m pip install pytest
+      - name: Test read-only report and redaction gates
+        run: |
+          python -m py_compile scripts/joyner_lfm3_outage_witness.py
+          python -m pytest -q -o addopts= -p no:cacheprovider tests/test_joyner_lfm3_outage_witness.py
