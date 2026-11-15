@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import socket
@@ -150,6 +151,25 @@ def _read_memory(path: Path = Path("/proc/meminfo")) -> dict:
     return values
 
 
+def read_pressure(root: Path = Path("/proc/pressure")) -> dict:
+    """Emit only bounded numeric avg10 PSI; unknown if partial/inaccessible."""
+    result = {}
+    for category, kind in (
+            ("memory", "some"), ("cpu", "some"), ("io", "full")):
+        key = category + "_" + kind + "_avg10"
+        try:
+            rows = (root / category).read_text().splitlines()
+            line = next(x for x in rows if x.startswith(kind + " "))
+            fields = dict(x.split("=", 1) for x in line.split()[1:] if "=" in x)
+            value = float(fields["avg10"])
+            if not math.isfinite(value) or not 0 <= value <= 100:
+                raise ValueError("invalid_psi_avg10")
+            result[key] = round(value, 2)
+        except (OSError, ValueError, KeyError, StopIteration):
+            result[key] = None
+    return result
+
+
 def _boot(path: Path = Path("/proc/sys/kernel/random/boot_id"),
           uptime: Path = Path("/proc/uptime")) -> dict:
     try:
@@ -223,12 +243,23 @@ def read_r9700_hardware(root: Path = Path("/sys/bus/pci/devices")) -> dict:
         mib = bytes_total // (1024 * 1024) if 0 < bytes_total < 2**50 else None
     except (OSError, ValueError):
         mib = None
+    try:
+        gtt_total = int((d / "mem_info_gtt_total").read_text().strip())
+        gtt_used = int((d / "mem_info_gtt_used").read_text().strip())
+        gtt_free_mib = (
+            (gtt_total - gtt_used) // (1024 * 1024)
+            if 0 < gtt_total < 2**50 and 0 <= gtt_used <= gtt_total
+            else None
+        )
+    except (OSError, ValueError):
+        gtt_free_mib = None
     return {
         "pci_inventory_usable": True,
         "r9700_pci_present": True,
         "r9700_unique_identity": True,
         "r9700_amdgpu_bound": bound,
         "r9700_vram_total_mib": mib,
+        "r9700_gtt_free_mib": gtt_free_mib,
         "r9700_pci_location": d.name if re.fullmatch(
             r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", d.name
         ) else None,
@@ -337,14 +368,15 @@ def read_board_pcie_context(
 def capture(runner=_run, health=local_health,
             memory=_read_memory, boot=_boot,
             hardware=read_r9700_hardware,
-            board_context=read_board_pcie_context) -> dict:
+            board_context=read_board_pcie_context,
+            pressure=read_pressure) -> dict:
     """One read-only bounded snapshot. No hidden writes or network targets."""
     return {
         "boot": boot(), "units": [unit_snapshot(name, runner) for name in UNITS],
         "ports": ports_snapshot(runner),
         "local_lfm3_health_http": health(),
         "resources": memory(), "r9700_hardware": hardware(),
-        "board_pcie": board_context(),
+        "board_pcie": board_context(), "pressure": pressure(),
     }
 
 
@@ -386,6 +418,7 @@ def evaluate(before: dict, after: dict, *, host_ok: bool) -> dict:
         "resources": after["resources"],
         "r9700_hardware": after.get("r9700_hardware", {}),
         "board_pcie": after.get("board_pcie", {}),
+        "pressure": after.get("pressure", {}),
         "same_pci_identity_during_observation": (
             before.get("r9700_hardware") == after.get("r9700_hardware")
             and before.get("r9700_hardware", {}).get("pci_inventory_usable") is True
@@ -405,7 +438,7 @@ def audit(*, hostname: str | None = None, runner=_run,
           health=local_health, memory=_read_memory, boot=_boot,
           hardware=read_r9700_hardware,
           board_context=read_board_pcie_context,
-          sleep=time.sleep) -> dict:
+          pressure=read_pressure, sleep=time.sleep) -> dict:
     host_ok = (hostname or socket.gethostname()).split(".", 1)[0].lower() == HOST
     if not host_ok:
         return evaluate(
@@ -414,12 +447,15 @@ def audit(*, hostname: str | None = None, runner=_run,
              "ports": {"socket_inventory_usable": False, "listening": {}},
              "local_lfm3_health_http": None, "resources": {},
              "r9700_hardware": {"pci_inventory_usable": False},
-             "board_pcie": {"target_board_verified": False}},
+             "board_pcie": {"target_board_verified": False},
+             "pressure": {}},
             host_ok=False,
         )
-    before = capture(runner, health, memory, boot, hardware, board_context)
+    before = capture(runner, health, memory, boot, hardware, board_context,
+                     pressure)
     sleep(2)
-    after = capture(runner, health, memory, boot, hardware, board_context)
+    after = capture(runner, health, memory, boot, hardware, board_context,
+                    pressure)
     return evaluate(before, after, host_ok=True)
 
 
