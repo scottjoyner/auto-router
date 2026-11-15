@@ -16,6 +16,13 @@ from typing import Any
 SOURCE_SCHEMA = "auto-router.joyner-lfm3-outage-readonly.v1"
 SCHEMA = "auto-router.joyner-r9700-maintenance-assessment.v1"
 MIN_R9700_VRAM_MIB = 30_000
+# Established Joyner new-GPU-work admission floors from issue #150.
+MIN_AVAILABLE_RAM_MIB = 10 * 1024
+MIN_SWAP_FREE_MIB = 1024
+MIN_R9700_GTT_FREE_MIB = 2048
+MAX_MEMORY_SOME_PSI_AVG10 = 1.0
+MAX_CPU_SOME_PSI_AVG10 = 2.0
+MAX_IO_FULL_PSI_AVG10 = 5.0
 MAX_AGE_SECONDS = 900
 REQUIRED_UNITS = (
     "lfm3-joyner-inference",
@@ -75,6 +82,28 @@ def classify(report: Any, *, now: datetime | None = None) -> dict:
     vram = hw.get("r9700_vram_total_mib")
     if type(vram) is not int or not MIN_R9700_VRAM_MIB <= vram <= 36_000:
         reasons.append("R9700_DISCRETE_VRAM_NOT_VERIFIED")
+    resources = _record(d.get("resources"))
+    available = resources.get("MemAvailable_mib")
+    if type(available) is not int or available < MIN_AVAILABLE_RAM_MIB:
+        reasons.append("SYSTEM_RAM_HEADROOM_INSUFFICIENT_OR_UNKNOWN")
+    swap_free = resources.get("SwapFree_mib")
+    if type(swap_free) is not int or swap_free < MIN_SWAP_FREE_MIB:
+        reasons.append("SWAP_HEADROOM_INSUFFICIENT_OR_UNKNOWN")
+    gtt_free = hw.get("r9700_gtt_free_mib")
+    if type(gtt_free) is not int or gtt_free < MIN_R9700_GTT_FREE_MIB:
+        reasons.append("R9700_GTT_HEADROOM_INSUFFICIENT_OR_UNKNOWN")
+    pressure = _record(d.get("pressure"))
+    for key, limit, reason in (
+            ("memory_some_avg10", MAX_MEMORY_SOME_PSI_AVG10,
+             "MEMORY_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+            ("cpu_some_avg10", MAX_CPU_SOME_PSI_AVG10,
+             "CPU_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+            ("io_full_avg10", MAX_IO_FULL_PSI_AVG10,
+             "IO_PRESSURE_TOO_HIGH_OR_UNKNOWN")):
+        value = pressure.get(key)
+        if (type(value) not in (float, int) or
+                not 0 <= value <= limit):
+            reasons.append(reason)
     ports = _record(_record(d.get("final_ports")).get("listening"))
     if ports.get("19175") is not True:
         reasons.append("LFM3_19175_NOT_LISTENING")

@@ -226,6 +226,8 @@ def pci_fixture(tmp_path, *, include_discrete=True, driver=True,
         (d / "vendor").write_text("0x1002\n")
         (d / "device").write_text("0x7551\n")
         (d / "mem_info_vram_total").write_text(str(vram_gib*1024**3))
+        (d / "mem_info_gtt_total").write_text(str(8*1024**3))
+        (d / "mem_info_gtt_used").write_text(str(3*1024**3))
         if driver:
             drv = tmp_path / "drivers" / "amdgpu"
             drv.mkdir(parents=True)
@@ -246,6 +248,7 @@ def test_hardware_detects_r9700_pci_and_amdgpu(tmp_path):
     assert report["r9700_unique_identity"] is True
     assert report["r9700_amdgpu_bound"] is True
     assert report["r9700_vram_total_mib"]==32768
+    assert report["r9700_gtt_free_mib"]==5120
     assert report["r9700_pci_location"]=="0000:03:00.0"
 
 
@@ -421,3 +424,60 @@ def test_board_context_does_not_claim_graphics_slot_or_recovery(tmp_path):
     assert not result["board_pcie"]["physical_r9700_slot_identified"]
     assert not result["board_pcie"]["bios_update_authorized"]
     assert result["r9700_runtime_capability_verified"] is False
+
+
+def test_pressure_reports_only_bounded_numeric_averages(tmp_path):
+    for category, typ, avg in (
+        ("memory", "some", "0.35"),
+        ("cpu", "some", "1.50"),
+        ("io", "full", "43.25"),
+    ):
+        (tmp_path/category).write_text(
+            f"{typ} avg10={avg} avg60=100 avg300=25.0 total=5000\n"
+        )
+    report=w.read_pressure(tmp_path)
+    assert report == {
+        "memory_some_avg10": 0.35,
+        "cpu_some_avg10": 1.5,
+        "io_full_avg10": 43.25,
+    }
+    assert "total" not in str(report)
+
+
+def test_incomplete_or_invalid_pressure_never_claims_zero(tmp_path):
+    (tmp_path/"memory").write_text("some avg10=nan avg60=1 total=2\n")
+    (tmp_path/"cpu").write_text("some avg10=SECRET-KEY avg60=0\n")
+    (tmp_path/"io").write_text("full avg10=999 avg60=5\n")
+    report=w.read_pressure(tmp_path)
+    assert all(x is None for x in report.values())
+    assert "SECRET" not in json.dumps(report)
+    (tmp_path/"io").unlink()
+    assert w.read_pressure(tmp_path)["io_full_avg10"] is None
+
+
+def test_r9700_gtt_missing_does_not_invent_headroom(tmp_path):
+    root=pci_fixture(tmp_path)
+    (root/"0000:03:00.0"/"mem_info_gtt_total").unlink()
+    report=w.read_r9700_hardware(root)
+    assert report["r9700_pci_present"] is True
+    assert report["r9700_gtt_free_mib"] is None
+
+
+def test_r9700_gtt_overcommitted_not_negative_headroom(tmp_path):
+    root=pci_fixture(tmp_path)
+    d=root/"0000:03:00.0"
+    (d/"mem_info_gtt_used").write_text(str(12*1024**3))
+    report=w.read_r9700_hardware(root)
+    assert report["r9700_gtt_free_mib"] is None
+
+
+def test_pressure_is_reported_only_not_repair_authorization(tmp_path):
+    context={"memory_some_avg10":0.0,"cpu_some_avg10":0.0,"io_full_avg10":44.0}
+    runner,_,_=fixture_runner()
+    before=w.capture(runner=runner,health=lambda:None,boot=boot_record,
+                     memory=lambda:{},hardware=lambda:{},
+                     board_context=lambda:{},pressure=lambda:context)
+    result=w.evaluate(before,before,host_ok=True)
+    assert result["pressure"]["io_full_avg10"] == 44.0
+    assert result["service_change_authorized"] is False
+    assert result["router_cutover_authorized"] is False

@@ -189,3 +189,59 @@ Kernel.dmesg_restrict is 1. Current SSH account cannot access kernel
 journal or protected kern.log/syslog. Obtain an authorized, sanitized
 early-boot PCIe/AMDGPU error receipt to diagnose why the GPU disappeared;
 do not weaken kernel protections as a workaround.
+
+## New safety evidence: RAM, GTT and I/O contention — November 15, ~18:49 EST
+
+A later read-only Joyner snapshot shows R9700 1002:7551 is STILL absent
+from 46 readable PCI device entries. Canonical MiniCPM and Ling remain
+active (zero restarts); LFM3 :19175 is unavailable. LFM3 recorded about
+486 restarts and Kipnerter bridge about 999 restarts during that sample.
+
+Available system RAM fell to about 460 MiB. At a second observation,
+I/O pressure (/proc/pressure/io) full.avg10 was approximately
+42.16–42.75%, while CPU and memory some.avg10 were ~0.00%. About
+3.4 GiB of swap was still free. This is material I/O contention, but
+neither the cause of the missing GPU nor proof of RAM OOM.
+
+Read-only iostat 1-second samples found the SATA disks sda and sdb at
+approximately 89–99% busy, read wait ~21–24ms. Both are 9314 GiB
+ZFS-member disks, not the two idle NVMe drives. ZFS pool state is
+ONLINE; the ZFS scrub is not actively running. A user-owned
+hashpass.sh process launched by an existing SSH session spawned
+xargs and a large sha256sum invocation against ZFS data; Python
+hashing was also observed. The script source was four lines with
+sha256sum and no literal ionice/nice/sleep control. This is a plausible
+source of disk contention. It is NOT established to be an unwanted
+job, malicious process, storage fault or cause of the PCI regression.
+Do not stop, kill, renice, reconfigure or interrupt a possibly
+intentional integrity-hash job without source owner approval.
+
+The outage observer now includes allowlisted numeric avg10 pressure
+for memory some, CPU some and I/O full; missing or malformed PSI is
+UNKNOWN, never reported as 0.0. When R9700 is actually present it
+computes available GTT from AMDGPU sysfs mem_info_gtt_total minus
+mem_info_gtt_used; invalid/missing stats => null. No arbitrary logs,
+process argv, storage filenames, device PCI config or credentials
+appear in its output.
+
+The separate offline maintenance assessor now enforces the existing
+Joyner new-GPU-work admission floors from Auto-Router issue #150:
+- at least 10,240 MiB MemAvailable;
+- at least 1,024 MiB swap free;
+- at least 2,048 MiB R9700 GTT free;
+- memory some.avg10 <= 1%, CPU some.avg10 <= 2%,
+  I/O full.avg10 <= 5%.
+
+These are safety gates for admitting new GPU work or designating a
+candidate ready for further operator review, not proof a running
+existing model must be stopped. Every invalid/missing/low value
+blocks the candidate verdict, and even all green thresholds still
+return HOLD/78 and do not authorize services, BIOS, leases or routing.
+Synthetic tests include false boolean values, strings, NaN,
+unavailable fields, GTT overcommit and the live 460MiB/42% I/O case.
+
+A live end-to-end witness→assessor pipeline returned HOLD for the
+missing R9700 and LFM3 plus low RAM and high I/O pressure. It did not
+change the hashing workflow, ZFS pool, PCI devices, models or system
+settings. The exact root cause of GPU disappearance still requires a
+protected owner boot-PCIe receipt and powered-down hardware inspection.
