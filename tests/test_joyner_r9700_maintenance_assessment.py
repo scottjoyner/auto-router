@@ -33,9 +33,16 @@ def evidence():
             "r9700_unique_identity": True,
             "r9700_amdgpu_bound": True,
             "r9700_vram_total_mib": 32768,
+            "r9700_gtt_free_mib": 4096,
             "r9700_pci_location": "0000:05:00.0",
         },
         "same_pci_identity_during_observation": True,
+        "resources": {"MemAvailable_mib": 12288, "SwapFree_mib": 2048},
+        "pressure": {
+            "memory_some_avg10": 0.0,
+            "cpu_some_avg10": 0.0,
+            "io_full_avg10": 0.0,
+        },
         "final_ports": {"listening": {
             "1234": True, "1236": True, "19175": True,
         }},
@@ -204,3 +211,60 @@ def test_main_rejects_oversized_json(monkeypatch,capsys):
     receipt=json.loads(capsys.readouterr().out)
     assert receipt["verdict"]=="HOLD"
     assert receipt["reasons"]
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("MemAvailable_mib", 460, "SYSTEM_RAM_HEADROOM_INSUFFICIENT_OR_UNKNOWN"),
+    ("MemAvailable_mib", None, "SYSTEM_RAM_HEADROOM_INSUFFICIENT_OR_UNKNOWN"),
+    ("MemAvailable_mib", "12288", "SYSTEM_RAM_HEADROOM_INSUFFICIENT_OR_UNKNOWN"),
+    ("MemAvailable_mib", True, "SYSTEM_RAM_HEADROOM_INSUFFICIENT_OR_UNKNOWN"),
+    ("SwapFree_mib", 900, "SWAP_HEADROOM_INSUFFICIENT_OR_UNKNOWN"),
+    ("SwapFree_mib", None, "SWAP_HEADROOM_INSUFFICIENT_OR_UNKNOWN"),
+])
+def test_low_missing_or_untrusted_system_resources_fail_closed(field,value,reason):
+    source=evidence()
+    source["resources"][field]=value
+    result=m.classify(source,now=NOW)
+    assert reason in result["reasons"]
+    assert result["hardware_and_services_candidate_for_human_review"] is False
+
+
+@pytest.mark.parametrize("gtt", [None,-1,0,1024,"4096",True])
+def test_gtt_headroom_unverified_or_low_blocks_review(gtt):
+    source=evidence()
+    source["r9700_hardware"]["r9700_gtt_free_mib"]=gtt
+    result=m.classify(source,now=NOW)
+    assert "R9700_GTT_HEADROOM_INSUFFICIENT_OR_UNKNOWN" in result["reasons"]
+    assert not result["hardware_and_services_candidate_for_human_review"]
+
+
+@pytest.mark.parametrize("key,value,reason", [
+    ("memory_some_avg10",1.01,"MEMORY_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+    ("memory_some_avg10",None,"MEMORY_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+    ("cpu_some_avg10",2.01,"CPU_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+    ("cpu_some_avg10","1.0","CPU_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+    ("io_full_avg10",40.0,"IO_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+    ("io_full_avg10",float("nan"),"IO_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+    ("io_full_avg10",True,"IO_PRESSURE_TOO_HIGH_OR_UNKNOWN"),
+])
+def test_psi_pressure_cannot_be_ignored_or_forged(key,value,reason):
+    source=evidence()
+    source["pressure"][key]=value
+    result=m.classify(source,now=NOW)
+    assert reason in result["reasons"]
+    assert result["verdict"]=="HOLD"
+    assert not result["hardware_and_services_candidate_for_human_review"]
+
+
+def test_specific_live_resource_pattern_blocks_review_even_if_otherwise_healthy():
+    source=evidence()
+    source["resources"]={"MemAvailable_mib":460,"SwapFree_mib":3502}
+    source["pressure"]={
+       "memory_some_avg10":0.0, "cpu_some_avg10":0.0,
+       "io_full_avg10":42.75,
+    }
+    result=m.classify(source,now=NOW)
+    assert "SYSTEM_RAM_HEADROOM_INSUFFICIENT_OR_UNKNOWN" in result["reasons"]
+    assert "IO_PRESSURE_TOO_HIGH_OR_UNKNOWN" in result["reasons"]
+    assert result["evidence_signature_verified"] is False
+    assert result["service_restart_authorized"] is False
