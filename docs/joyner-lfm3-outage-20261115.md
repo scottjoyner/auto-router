@@ -43,3 +43,40 @@ The dedicated .github/workflows/joyner-lfm3-outage-witness.yml runs only synthet
 5. Post-change evidence (only if approved): Stable port 19175 and authorized bridge health, no growing restart counters, preserved MiniCPM/Ling routes, no authentication regression, exact-head CI, and signed operator/custody receipt.
 
 Do not stop/restart models, change live systemd files or GPU layers, relax permissions, inspect credentials, alter ingress/router, launch training, or merge diagnostics as a substitute for release gates. Legacy duplicate :1234 issue #176 and ingress-auth issue #81 are separate.
+
+## Material dGPU enumeration regression — November 15, 2026
+
+The independent November 8 source-of-truth in Auto-Router issue #150
+documented Radeon AI PRO R9700 at PCI 0000:03:00.0 (AMD 1002:7551),
+AMDGPU bound, about 32 GiB discrete VRAM, and an existing LFM3 runtime
+with a DRM GPU client. The November 15 17:32 EST read-only PCI inventory
+instead finds only the AMD Raphael integrated VGA device 1002:164e
+and associated audio 1002:1640. The sole graphics card has 512 MiB VRAM,
+and only /dev/dri/card0 and renderD128 are present.
+
+The outage witness now inventories all available PCI devices for exact
+AMD vendor/device 1002:7551 rather than assuming a permanent PCI bus
+address. It independently records whether PCI sysfs enumeration was
+readable, a unique R9700 identity was present, its amdgpu driver binding,
+its total discrete VRAM when available, and an allowlisted PCI BDF.
+
+Live result at approximately 17:34–17:36 EST: PCI inventory usable,
+r9700_pci_present=false, driver/VRAM evidence unavailable, no exact
+R9700 location; repeat snapshot identity stable. LFM3 :19175 still down,
+LFM3 auto-restart 317, bridge 650; canonical MiniCPM/Ling remain active.
+The tool marks r9700_runtime_capability_verified=false and
+lfm3_failure_attributed_to_r9700_loss=false. In other words, the absent
+dGPU is a verified major regression and plausible prerequisite failure,
+but a direct causation chain is NOT proven from the unreadable journal.
+
+**Do not blindly restart model services, reload amdgpu, perform a PCI
+rescan, flash BIOS, reboot, pull/reseat the card, cycle rack/Govee power,
+change GPU assignments, or move the GPU to xwing.** Those are separate
+state-changing maintenance actions requiring operator authorization,
+hardware inspection, a power/slot/firmware/driver diagnostic, known-good
+rollback and verified host-service consumers. First obtain a bounded
+boot-time kernel/PCIe error classification from an authorized logging
+channel. Fail closed if no accessible evidence source exists.
+
+The source-only PCI test uses fake sysfs directories and synthetic IDs;
+hosted CI never touches a physical PCI bus.
