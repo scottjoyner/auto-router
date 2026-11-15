@@ -210,3 +210,92 @@ def test_main_json_and_hold(monkeypatch,capsys):
     monkeypatch.setattr(w,"audit",lambda:{"verdict":"OUTAGE_HOLD","exit_code":78})
     assert w.main()==78
     assert json.loads(capsys.readouterr().out)["exit_code"]==78
+
+
+def pci_fixture(tmp_path, *, include_discrete=True, driver=True,
+                vram_gib=32, extra_discrete=False):
+    root = tmp_path / "sys" / "bus" / "pci" / "devices"
+    root.mkdir(parents=True)
+    igpu = root / "0000:0d:00.0"
+    igpu.mkdir()
+    (igpu / "vendor").write_text("0x1002\n")
+    (igpu / "device").write_text("0x164e\n")
+    if include_discrete:
+        d = root / "0000:03:00.0"
+        d.mkdir()
+        (d / "vendor").write_text("0x1002\n")
+        (d / "device").write_text("0x7551\n")
+        (d / "mem_info_vram_total").write_text(str(vram_gib*1024**3))
+        if driver:
+            drv = tmp_path / "drivers" / "amdgpu"
+            drv.mkdir(parents=True)
+            (d / "driver").symlink_to(drv)
+    if extra_discrete:
+        d = root / "0000:05:00.0"
+        d.mkdir()
+        (d / "vendor").write_text("0x1002\n")
+        (d / "device").write_text("0x7551\n")
+    return root
+
+
+def test_hardware_detects_r9700_pci_and_amdgpu(tmp_path):
+    root=pci_fixture(tmp_path)
+    report=w.read_r9700_hardware(root)
+    assert report["pci_inventory_usable"] is True
+    assert report["r9700_pci_present"] is True
+    assert report["r9700_unique_identity"] is True
+    assert report["r9700_amdgpu_bound"] is True
+    assert report["r9700_vram_total_mib"]==32768
+    assert report["r9700_pci_location"]=="0000:03:00.0"
+
+
+def test_hardware_regression_only_raphael_means_no_discrete(tmp_path):
+    root=pci_fixture(tmp_path,include_discrete=False)
+    report=w.read_r9700_hardware(root)
+    assert report["pci_inventory_usable"] is True
+    assert report["r9700_pci_present"] is False
+    assert report["r9700_amdgpu_bound"] is None
+    assert report["r9700_vram_total_mib"] is None
+    assert report["r9700_pci_location"] is None
+
+
+def test_pci_enumeration_unavailable_is_unknown_not_absence(tmp_path):
+    report=w.read_r9700_hardware(tmp_path/"not-present")
+    assert report["pci_inventory_usable"] is False
+    assert report["r9700_pci_present"] is None
+
+
+def test_amd_device_without_driver_is_not_gpu_ready(tmp_path):
+    report=w.read_r9700_hardware(pci_fixture(tmp_path,driver=False))
+    assert report["r9700_pci_present"] is True
+    assert report["r9700_amdgpu_bound"] is False
+
+
+def test_duplicate_hardware_identity_refuses_unique_gpu_custody(tmp_path):
+    root=pci_fixture(tmp_path,extra_discrete=True)
+    report=w.read_r9700_hardware(root)
+    assert report["r9700_pci_present"] is True
+    assert report["r9700_unique_identity"] is False
+    assert report["r9700_amdgpu_bound"] is None
+    assert report["r9700_pci_location"] is None
+
+
+def test_discrete_gpu_reappears_without_becoming_release_authorization(tmp_path):
+    report=w.read_r9700_hardware(pci_fixture(tmp_path))
+    runner,_,_ = fixture_runner(lfm3="activating")
+    base=lambda: w.capture(runner=runner,health=lambda:None,
+                           boot=boot_record,memory=lambda:{},hardware=lambda:report)
+    verdict=w.evaluate(base(),base(),host_ok=True)
+    assert verdict["verdict"]=="OUTAGE_HOLD"
+    assert verdict["same_pci_identity_during_observation"] is True
+    assert verdict["r9700_hardware"]["r9700_amdgpu_bound"] is True
+    assert verdict["r9700_runtime_capability_verified"] is False
+    assert verdict["lfm3_failure_attributed_to_r9700_loss"] is False
+    assert verdict["service_change_authorized"] is False
+
+
+def test_hardware_readout_does_not_include_raw_device_config(tmp_path):
+    root=pci_fixture(tmp_path)
+    (root/"0000:03:00.0"/"config").write_text("SYNTHETIC-SECRET")
+    report=w.read_r9700_hardware(root)
+    assert "SYNTHETIC-SECRET" not in json.dumps(report)

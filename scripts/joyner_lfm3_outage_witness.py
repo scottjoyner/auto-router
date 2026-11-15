@@ -166,14 +166,73 @@ def _boot(path: Path = Path("/proc/sys/kernel/random/boot_id"),
                 "verified": False}
 
 
+def read_r9700_hardware(root: Path = Path("/sys/bus/pci/devices")) -> dict:
+    """Read exactly AMD 1002:7551 PCI identity and driver/VRAM metadata.
+
+    PCI bus/device locations can change across reboots: do not insist on
+    historical BDF 0000:03:00.0. Absence is meaningful only when the
+    sysfs device enumeration itself was accessible.
+    """
+    try:
+        devices = list(root.iterdir())
+    except OSError:
+        return {
+            "pci_inventory_usable": False,
+            "r9700_pci_present": None,
+            "r9700_amdgpu_bound": None,
+            "r9700_vram_total_mib": None,
+            "r9700_pci_location": None,
+        }
+    found = []
+    for d in devices:
+        try:
+            if ((d / "vendor").read_text().strip().lower() == "0x1002"
+                    and (d / "device").read_text().strip().lower() == "0x7551"):
+                found.append(d)
+        except OSError:
+            continue
+    # One observed exact AMD vendor/device identity is required. Do not
+    # invent a "usable GPU" verdict from an ambiguous or partial census.
+    if len(found) != 1:
+        return {
+            "pci_inventory_usable": True,
+            "r9700_pci_present": len(found) > 0,
+            "r9700_unique_identity": False,
+            "r9700_amdgpu_bound": None,
+            "r9700_vram_total_mib": None,
+            "r9700_pci_location": None,
+        }
+    d = found[0]
+    try:
+        bound = (d / "driver").is_symlink() and (d / "driver").resolve().name == "amdgpu"
+    except OSError:
+        bound = False
+    try:
+        bytes_total = int((d / "mem_info_vram_total").read_text().strip())
+        mib = bytes_total // (1024 * 1024) if 0 < bytes_total < 2**50 else None
+    except (OSError, ValueError):
+        mib = None
+    return {
+        "pci_inventory_usable": True,
+        "r9700_pci_present": True,
+        "r9700_unique_identity": True,
+        "r9700_amdgpu_bound": bound,
+        "r9700_vram_total_mib": mib,
+        "r9700_pci_location": d.name if re.fullmatch(
+            r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", d.name
+        ) else None,
+    }
+
+
 def capture(runner=_run, health=local_health,
-            memory=_read_memory, boot=_boot) -> dict:
+            memory=_read_memory, boot=_boot,
+            hardware=read_r9700_hardware) -> dict:
     """One read-only bounded snapshot. No hidden writes or network targets."""
     return {
         "boot": boot(), "units": [unit_snapshot(name, runner) for name in UNITS],
         "ports": ports_snapshot(runner),
         "local_lfm3_health_http": health(),
-        "resources": memory(),
+        "resources": memory(), "r9700_hardware": hardware(),
     }
 
 
@@ -213,6 +272,13 @@ def evaluate(before: dict, after: dict, *, host_ok: bool) -> dict:
         "final_units": after["units"], "final_ports": after["ports"],
         "local_lfm3_health_http": after["local_lfm3_health_http"],
         "resources": after["resources"],
+        "r9700_hardware": after.get("r9700_hardware", {}),
+        "same_pci_identity_during_observation": (
+            before.get("r9700_hardware") == after.get("r9700_hardware")
+            and before.get("r9700_hardware", {}).get("pci_inventory_usable") is True
+        ),
+        "r9700_runtime_capability_verified": False,
+        "lfm3_failure_attributed_to_r9700_loss": False,
         "log_root_cause_verified": False,
         "protected_key_read": False, "model_request_sent": False,
         "model_generation_performed": False,
@@ -224,19 +290,20 @@ def evaluate(before: dict, after: dict, *, host_ok: bool) -> dict:
 
 def audit(*, hostname: str | None = None, runner=_run,
           health=local_health, memory=_read_memory, boot=_boot,
-          sleep=time.sleep) -> dict:
+          hardware=read_r9700_hardware, sleep=time.sleep) -> dict:
     host_ok = (hostname or socket.gethostname()).split(".", 1)[0].lower() == HOST
     if not host_ok:
         return evaluate(
             {"units": [], "boot": {"verified": False}},
             {"units": [], "boot": {"verified": False},
              "ports": {"socket_inventory_usable": False, "listening": {}},
-             "local_lfm3_health_http": None, "resources": {}},
+             "local_lfm3_health_http": None, "resources": {},
+             "r9700_hardware": {"pci_inventory_usable": False}},
             host_ok=False,
         )
-    before = capture(runner, health, memory, boot)
+    before = capture(runner, health, memory, boot, hardware)
     sleep(2)
-    after = capture(runner, health, memory, boot)
+    after = capture(runner, health, memory, boot, hardware)
     return evaluate(before, after, host_ok=True)
 
 
