@@ -183,14 +183,25 @@ def read_r9700_hardware(root: Path = Path("/sys/bus/pci/devices")) -> dict:
             "r9700_vram_total_mib": None,
             "r9700_pci_location": None,
         }
+    if not devices:
+        return {"pci_inventory_usable": False,
+                "r9700_pci_present": None, "r9700_unique_identity": False,
+                "r9700_amdgpu_bound": None, "r9700_vram_total_mib": None,
+                "r9700_pci_location": None}
     found = []
+    unreadable = False
     for d in devices:
         try:
             if ((d / "vendor").read_text().strip().lower() == "0x1002"
                     and (d / "device").read_text().strip().lower() == "0x7551"):
                 found.append(d)
         except OSError:
-            continue
+            unreadable = True
+    if unreadable:
+        return {"pci_inventory_usable": False,
+                "r9700_pci_present": None, "r9700_unique_identity": False,
+                "r9700_amdgpu_bound": None, "r9700_vram_total_mib": None,
+                "r9700_pci_location": None}
     # One observed exact AMD vendor/device identity is required. Do not
     # invent a "usable GPU" verdict from an ambiguous or partial census.
     if len(found) != 1:

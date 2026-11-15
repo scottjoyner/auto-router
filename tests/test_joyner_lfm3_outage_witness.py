@@ -299,3 +299,19 @@ def test_hardware_readout_does_not_include_raw_device_config(tmp_path):
     (root/"0000:03:00.0"/"config").write_text("SYNTHETIC-SECRET")
     report=w.read_r9700_hardware(root)
     assert "SYNTHETIC-SECRET" not in json.dumps(report)
+
+
+def test_partial_pci_entry_read_failure_is_unknown_not_absence(tmp_path):
+    root=pci_fixture(tmp_path,include_discrete=False)
+    (root/"0000:05:00.0").mkdir()
+    report=w.read_r9700_hardware(root)
+    assert report["pci_inventory_usable"] is False
+    assert report["r9700_pci_present"] is None
+
+
+def test_empty_pci_device_directory_is_unknown(tmp_path):
+    root=tmp_path/"pci"
+    root.mkdir()
+    report=w.read_r9700_hardware(root)
+    assert report["pci_inventory_usable"] is False
+    assert report["r9700_pci_present"] is None
