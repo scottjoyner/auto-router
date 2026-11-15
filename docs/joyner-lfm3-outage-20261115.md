@@ -129,3 +129,63 @@ partial inventory, and denial of BIOS/slot admission on every outcome.
 Release remains hardware-enumeration HOLD. No hotplug, unbind/rebind,
 PCI bus rescan, slot/power toggle, BIOS update, GPU relocation, service
 restart, lease/router cutover or access-control change was executed.
+
+## Physical inspection and post-maintenance assessment — November 15
+
+ASUS official E24013 user manual (June 2024), printed page 1-2
+(PDF viewer zero-index page 11), identifies PCIEX16_1 as the TOP
+full-length graphics slot directly below M.2_1. This one slot is
+PCIe 4.0 x16 electrically. The three remaining full-length slots
+are PCIe x1 electrically. This identifies the first slot to inspect
+on a safely powered-down system, but current Linux sysfs cannot prove
+which slot contains the missing R9700.
+
+Official motherboard manual and layout:
+https://dlcdnets.asus.com/pub/ASUS/mb/SocketAM5/PRIME_B650M-A_AX_II/E24013_PRIME_B650M-A_AX_II_UM_V2_WEB.pdf
+
+The ASUS manual requires removing power before manipulating expansion
+cards. The physical operator must first authorize a controlled
+shutdown and power isolation, then document the GPU slot, latch,
+auxiliary GPU power connectors, PSU cabling and any obvious damage.
+Do not open a PSU or touch a card while powered. Obtain the specific
+R9700 card vendor guide before assuming connector counts or wattage.
+No hardware work is authorized by this research document.
+
+The source-only post-maintenance assessor is
+scripts/joyner_r9700_maintenance_assessment.py. It consumes JSON
+from scripts/joyner_lfm3_outage_witness.py and makes NO live system,
+network, file or service calls itself. For approved Fleet Commander
+read-only execution:
+
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=yes joyner python3 - \
+      < scripts/joyner_lfm3_outage_witness.py \
+      | python3 scripts/joyner_r9700_maintenance_assessment.py
+
+Both tools always terminate with HOLD exit 78.
+
+A future candidate for human review must demonstrate a fresh same-boot
+Joyner source receipt: correct ASUS board, PCI vendor/device 1002:7551
+unique and stable, AMDGPU driver bound, discrete VRAM between 30000 and
+36000 MiB, healthy port 19175, unchanged working canonical 1234/1236,
+active required services and no restart growth during the observation.
+Unknown/partial PCI, stale evidence, duplicated service records, wrong
+host, changed boot or any source safety violation => HOLD with fixed
+sanitized reasons. Healthy observations are only a CANDIDATE for review,
+never permission for service or router cutover.
+
+The source receipt is not cryptographically signed and is not sufficient
+to establish physical power/slot inspection, resident GPU weights,
+authenticated inference contract, ingress authentication, GPU lease,
+operator signoff, or maintenance authorization. Even a fully positive
+assessment prints verdict HOLD and exit 78. The assessor passed 27
+synthetic adversarial offline tests, including malformed/untrusted JSON.
+
+The live bounded read-only pipeline on Nov 15 returned HOLD with
+R9700 absent, driver/VRAM unavailable and LFM3 :19175 unreachable.
+The old service stop/disable, BIOS update, PCI rescan, GPU move,
+reboot, rack power, key access and model restart remain unauthorized.
+
+Kernel.dmesg_restrict is 1. Current SSH account cannot access kernel
+journal or protected kern.log/syslog. Obtain an authorized, sanitized
+early-boot PCIe/AMDGPU error receipt to diagnose why the GPU disappeared;
+do not weaken kernel protections as a workaround.
