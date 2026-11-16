@@ -1,0 +1,160 @@
+name: Router reviewed image custody (NO DEPLOY)
+
+on:
+  push:
+    branches:
+      - security/router-integrated-image-custody-20261116
+
+permissions:
+  contents: read
+
+jobs:
+  reviewed-image-custody:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      GITHUB_ACTIONS: "true"
+      AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: smoke-service-token
+      AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE: /dev/null
+    steps:
+      - name: Check out exact reviewed push without retained credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable source identity and isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/security/router-integrated-image-custody-20261116"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all -- src Dockerfile config)"
+          git diff --check HEAD^ HEAD
+          echo "Reviewed source identity: $GITHUB_SHA"
+
+      - name: Build and start synthetic strict-offline container and Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.yml -f docker-compose.integration.yml up -d --build
+
+      - name: Require healthy loopback CI router
+        shell: bash
+        run: |
+          set -euo pipefail
+          healthy=false
+          for i in $(seq 1 24); do
+            if test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8088/health)" = "200"; then
+              healthy=true
+              break
+            fi
+            sleep 3
+          done
+          test "$healthy" = "true"
+
+      - name: Prove anonymously denied administrative GETs without reading responses
+        run: python3 -B scripts/admin_auth_readonly_canary.py --port 8088
+
+      - name: Prove synthetic positive and wrong-token operator-auth statuses
+        run: python3 -B -m scripts.admin_positive_auth_ci_canary --explicit-ci-synthetic-only
+
+      - name: Prove denial from independent disposable Docker-network peer
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id=$(docker inspect --format '{{.Image}}' auto-router-smoke)
+          test -n "$image_id"
+          docker run --rm --network auto-router-smoke \
+            --volume "$PWD/scripts:/canary-scripts:ro" \
+            --env CI=true --env GITHUB_ACTIONS=true \
+            --env AUTO_ROUTER_CI_DOCKER_PEER=true \
+            "$image_id" python -B /canary-scripts/ci_admin_docker_peer.py
+
+      - name: Verify installed container code and image against exact Git source
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python3 -B scripts/verify_ci_built_image_provenance.py \
+            --explicit-ci-smoke-only \
+            --out ci-artifacts/router-ci-integrated-image.json
+
+      - name: Prepare short-lived unsigned review-only image archive and custody manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id=$(docker inspect --format '{{.Image}}' auto-router-smoke)
+          docker image save "$image_id" | gzip -1 -n > ci-artifacts/router-review-only-image.tar.gz
+          python3 -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          folder = Path("ci-artifacts")
+          image_archive = folder / "router-review-only-image.tar.gz"
+          image_receipt = json.loads((folder / "router-ci-integrated-image.json").read_text())
+          size = image_archive.stat().st_size
+          if not (0 < size <= 536870912):
+              raise SystemExit("HOLD: image archive outside bounded size")
+          if image_receipt.get("gate") != "PASS_CI_BUILD_ONLY":
+              raise SystemExit("HOLD: installed image/source proof absent")
+          if image_receipt.get("checkout_git_sha") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("HOLD: source SHA mismatch")
+          inspected = subprocess.run(
+              ["docker", "inspect", "--format", "{{.Image}}", "auto-router-smoke"],
+              capture_output=True, text=True, check=True, timeout=10
+          ).stdout.strip()
+          if inspected != image_receipt.get("built_image_sha256"):
+              raise SystemExit("HOLD: mutable image identity")
+          digest = hashlib.sha256(image_archive.read_bytes()).hexdigest()
+          manifest = {
+              "schema": "auto-router.review-only-image-handoff.v1",
+              "checkout_git_sha": os.environ["GITHUB_SHA"],
+              "built_image_sha256": inspected,
+              "archive_sha256": digest,
+              "archive_size_bytes": size,
+              "source_build_proof": image_receipt["gate"],
+              "transport": "private GitHub Actions ephemeral artifact",
+              "production_deployed": False,
+              "production_ready": False,
+              "signed": False,
+              "rollback_proven": False,
+              "operator_approved": False,
+              "release_gate": "HOLD",
+          }
+          (folder / "router-review-only-manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+          )
+          (folder / "router-review-only-image.tar.gz.sha256").write_text(
+              digest + "  router-review-only-image.tar.gz\n"
+          )
+          print(json.dumps({
+              "schema": manifest["schema"],
+              "checkout_git_sha": manifest["checkout_git_sha"],
+              "archive_sha256": digest,
+              "archive_size_bytes": size,
+              "production_ready": False,
+              "release_gate": "HOLD"
+          }, sort_keys=True))
+          PY
+
+      - name: Preserve private short-lived unsigned image and nonsecret custody evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-review-only-image-custody
+          path: |
+            ci-artifacts/router-ci-integrated-image.json
+            ci-artifacts/router-review-only-image.tar.gz
+            ci-artifacts/router-review-only-image.tar.gz.sha256
+            ci-artifacts/router-review-only-manifest.json
+          retention-days: 3
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Tear down disposable CI network and volumes
+        if: always()
+        shell: bash
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.integration.yml down -v || true
