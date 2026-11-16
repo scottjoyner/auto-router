@@ -81,9 +81,18 @@ def fixture_client(monkeypatch):
                         lambda: SimpleNamespace(admin_token=ADMIN_TOKEN))
     from auto_router import main as main_module
 
-    # No FastAPI lifespan; never run providers, background tasks or services.
-    with TestClient(main_module.app, raise_server_exceptions=False) as client:
+    # FastAPI TestClient context-manager entry would run application lifespan,
+    # creating background tasks and attempting live provider/storage startup.
+    # This security proof must exercise routes only, without that lifecycle.
+    def deny_lifespan(*_args, **_kwargs):
+        raise AssertionError("security regression must not start app lifespan")
+
+    monkeypatch.setattr(main_module.app.router, "lifespan_context", deny_lifespan)
+    client = TestClient(main_module.app, raise_server_exceptions=False)
+    try:
         yield client, main_module.app
+    finally:
+        client.close()
 
 
 def _example_path(route):
