@@ -115,15 +115,25 @@ def test_known_admin_token_still_allows_fixture_only_provider_inventory(
     client, app = fixture_client
     from auto_router import main as main_module
     original = main_module.state.providers
+    # Authorized operator inventory stays useful while raw config and future
+    # credential-bearing fields are never serialized into the response.
     main_module.state.providers = SimpleNamespace(
-        providers=[SimpleNamespace(model_dump=lambda:{"name":"synthetic-only"})]
+        providers=[SimpleNamespace(model_dump=lambda:{
+            "name": "synthetic-only",
+            "models": [{"alias": "test-model", "secret": "SECRET_MODEL"}],
+            "headers": {"Authorization": "SECRET_HEADER"},
+            "api_key_env": "SECRET_ENV",
+        })]
     )
     try:
         assert client.get("/admin/providers").status_code == 401
         good = client.get("/admin/providers",
                           headers={"X-Admin-Token": ADMIN_TOKEN})
         assert good.status_code == 200
-        assert good.json() == {"providers":[{"name":"synthetic-only"}]}
+        assert good.json() == {"providers":[{
+            "name":"synthetic-only", "models":[{"alias":"test-model"}]
+        }]}
+        assert "SECRET_" not in good.text
     finally:
         main_module.state.providers = original
 
