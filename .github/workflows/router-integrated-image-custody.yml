@@ -34,6 +34,12 @@ jobs:
           git diff --check HEAD^ HEAD
           echo "Reviewed source identity: $GITHUB_SHA"
 
+      - name: Install synthetic contract test dependencies
+        run: python3 -m pip install -e '.[dev]'
+
+      - name: Verify AssistX provider discovery survives secret-safe redaction
+        run: python3 -m pytest -q tests/test_assistx_provider_schema_contract.py
+
       - name: Build and start synthetic strict-offline container and Redis
         shell: bash
         run: |
