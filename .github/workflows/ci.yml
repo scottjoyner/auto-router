@@ -16,6 +16,10 @@ jobs:
           python-version: '3.12'
       - name: Install
         run: python -m pip install -e '.[dev]'
+      - name: Test reviewed Joyner R9700 PCI startup condition (offline)
+        # Blocking research-specific acceptance: no GPU, driver, credentials,
+        # model loading, network access, or remote service commands.
+        run: python -B -m pytest -q -p no:cacheprovider research/joyner-r9700-startgate-20261116/test_r9700_pci_condition.py
       - name: Compile reconciliation paths
         run: |
           python -m py_compile \
