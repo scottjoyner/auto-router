@@ -245,3 +245,61 @@ missing R9700 and LFM3 plus low RAM and high I/O pressure. It did not
 change the hashing workflow, ZFS pool, PCI devices, models or system
 settings. The exact root cause of GPU disappearance still requires a
 protected owner boot-PCIe receipt and powered-down hardware inspection.
+
+## Pinned service preflight custody and upstream bridge dependence — Nov 15 ~19:16 EST
+
+A read-only systemd property check now narrows the observed failure:
+- lfm3-joyner-inference.service ExecStartPre is a Python script
+  named server_preflight.py and its last recorded code is exited/status=1.
+  The main llama-server ExecStart cannot proceed while this gate refuses.
+- kipnerter-lfm3-r9700-bridge.service ExecStartPre performs a fail-on-error
+  curl request to 127.0.0.1:19175/health. Its last recorded preflight
+  code is exited/status=7 (curl could not connect), consistent with the
+  absent LFM3 listener and no HTTP health. The bridge's failure is thus
+  plausibly an intended fail-closed upstream dependency rather than an
+  independent software regression.
+- The LFM3 Python source is a 1946-byte same-owner ordinary non-symlink
+  file. Its full SHA256 is
+  ab39f744258023a91464ba53815c63092cf0d0fb5a143eff54861eda92f1f685.
+  It verifies the pinned model's 1049615680-byte file size and SHA256,
+  runtime executable, and API key-file *metadata*, then requires at
+  least 30 GiB of GPU VRAM via its configured AMD GPU device and at
+  least 2200 MiB MemAvailable. These are explicit guards in this exact
+  source, not proposed thresholds. The current device is absent and
+  MemAvailable was ~490-574MiB; if reached, either guard refuses startup.
+  We do NOT claim the GPU or RAM check was the first failing expression:
+  the script runs model, runtime and protected key metadata checks first.
+  We did not execute the script or read the model or key.
+- Two exact systemd ExecStartPre command hashes have been pinned
+  independently of source SHA; change to either command => unverified,
+  not "equivalent" based on a similar-looking health URL.
+  The bridge command has fail-mode and the exact loopback health target.
+
+The additional file scripts/joyner_lfm3_preflight_custody.py checks only
+host joyner, the two allowlisted unit definitions, bounded ExecStartPre
+status properties and an allowlisted same-owner script under the SSH
+account's home. It uses pinned SHA256s and AST syntax validation.
+Its output is fixed JSON booleans and integer RAM only. It does NOT
+execute systemd preflights, open an API key, hash model bytes, issue
+model requests, expose raw ExecStart/Environment/command arguments or
+emit source paths. An old/error status may be stale: preflight result
+here is a bounded LAST-RECORDED status, not a fresh execution attempt.
+
+The observer always returns HOLD exit78. It distinguishes (a) verified
+source and command custody, (b) observed preflight nonzero statuses,
+(c) missing R9700 and low RAM, and (d) bridge health dependency. It
+never authorizes removing safety guards, restarting a unit, or changing
+GPU allocation. The new synthetic suite covers command digest drift,
+wrong host, unknown status, synthetic credential canaries, Symlinked/
+changed source, partial PCI, and missing RAM with no live execution.
+
+Even after replacing/reseating/recovering the R9700, source acceptance
+requires independent GPU + RAM/PSI/GTT and client/authentication gates;
+the existing health-only bridge must not be promoted if its upstream
+GPU lease and test contracts are unverified. No production change made.
+
+In parallel, the current IO bottleneck is sourced to user SSH
+hashpass.sh → xargs → sha256sum over ZFS sda/sdb, with ZFS ARC ~8.5GiB
+and elevated IO PSI; this may contribute to low MemAvailable but is
+separate from the physical GPU disappearance. Hash job scheduling is
+a distinct owner decision. Its processes and pool were not modified.
