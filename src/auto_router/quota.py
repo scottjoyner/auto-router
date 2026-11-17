@@ -381,9 +381,16 @@ class RedisQuotaManager:
 
 
 def build_quota_manager(redis_url: str | None = None):
-    if redis_url and redis_lib is not None:
-        try:
-            return RedisQuotaManager(redis_url)
-        except Exception:
-            return InMemoryQuotaManager()
-    return InMemoryQuotaManager()
+    """Keep in-memory quota only for explicitly unconfigured offline use.
+
+    A configured Redis-backed quota is an admission requirement: silently
+    switching to process-local counters would reset quotas on every restart.
+    """
+    if not redis_url:
+        return InMemoryQuotaManager()
+    if redis_lib is None:
+        raise RuntimeError("Redis quota backend required but redis client is not installed")
+    try:
+        return RedisQuotaManager(redis_url)
+    except Exception as exc:
+        raise RuntimeError("Redis quota backend unavailable; refusing in-memory fallback") from exc
