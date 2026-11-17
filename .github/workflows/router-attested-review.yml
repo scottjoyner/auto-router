@@ -105,6 +105,7 @@ jobs:
             --tmpfs /tmp:rw,nosuid,noexec,size=64m \
             -e PYTHONDONTWRITEBYTECODE=1 \
             -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_REDIS_URL= \
             -e AUTO_ROUTER_DATABASE_URL=sqlite:////tmp/router-lifespan-acceptance.sqlite3 \
             -e AUTO_ROUTER_DATABASE_PLACEMENT_REQUIRED=false \
             -e AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT=true \
