@@ -394,3 +394,13 @@ def build_quota_manager(redis_url: str | None = None):
         return RedisQuotaManager(redis_url)
     except Exception as exc:
         raise RuntimeError("Redis quota backend unavailable; refusing in-memory fallback") from exc
+
+
+def quota_backend_is_ready(redis_url: str | None, backend_name: str, redis_status: str) -> bool:
+    """A Redis-configured router must not advertise readiness without Redis quota.
+
+    Explicit no-Redis offline fixtures may continue using in-memory quotas.
+    """
+    if not redis_url:
+        return True
+    return backend_name == "RedisQuotaManager" and redis_status == "ok"
