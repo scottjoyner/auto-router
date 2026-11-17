@@ -75,3 +75,19 @@ def test_redis_configured_uses_connected_backend(monkeypatch: pytest.MonkeyPatch
     quota = build_quota_manager("redis://localhost:6379/0")
     assert isinstance(quota, ConnectedRedis)
     assert quota.redis_url == "redis://localhost:6379/0"
+
+
+@pytest.mark.parametrize(
+    ("redis_url", "backend", "status", "expected"),
+    [
+        ("", "InMemoryQuotaManager", "not_configured", True),
+        ("redis://localhost:6379/0", "InMemoryQuotaManager", "not_connected", False),
+        ("redis://localhost:6379/0", "InMemoryQuotaManager", "ok", False),
+        ("redis://localhost:6379/0", "RedisQuotaManager", "down", False),
+        ("redis://localhost:6379/0", "RedisQuotaManager", "ok", True),
+    ],
+)
+def test_quota_backend_health_fails_closed(
+    redis_url: str, backend: str, status: str, expected: bool
+) -> None:
+    assert quota_mod.quota_backend_is_ready(redis_url, backend, status) is expected
