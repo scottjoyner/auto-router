@@ -42,6 +42,8 @@ async def _fake_gateway_status() -> dict[str, object]:
 
 
 def test_health_reports_warning_outbox_pressure_without_degrading(monkeypatch) -> None:
+    # FakeQuota is intentionally a no-Redis offline fixture.
+    monkeypatch.setattr(main_module, "get_settings", lambda: SimpleNamespace(redis_url=""))
     monkeypatch.setattr(main_module, "build_agentgateway_status", _fake_gateway_status)
     monkeypatch.setattr(
         main_module,
