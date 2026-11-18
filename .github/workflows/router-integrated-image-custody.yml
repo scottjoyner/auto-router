@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - security/router-integrated-image-custody-20261116
+      - security/combined-admin-redis-review-20261117
 
 permissions:
   contents: read
@@ -28,7 +29,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/security/router-integrated-image-custody-20261116"
+          case "$GITHUB_REF" in
+            refs/heads/security/router-integrated-image-custody-20261116|refs/heads/security/combined-admin-redis-review-20261117) ;;
+            *) echo "HOLD: source branch outside review-only allowlist" >&2; exit 1 ;;
+          esac
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=all -- src Dockerfile config)"
           git diff --check HEAD^ HEAD
