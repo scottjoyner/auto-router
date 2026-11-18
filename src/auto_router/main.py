@@ -43,7 +43,7 @@ from auto_router.live_model_routes import merge_discovered_lmstudio_providers, r
 from auto_router.memory_client import MemoryClient
 from auto_router.memory_store import MemoryStore
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
-from auto_router.quota import build_quota_manager
+from auto_router.quota import build_quota_manager, quota_backend_is_ready
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
@@ -406,13 +406,18 @@ async def health() -> dict[str, Any]:
     # A live telemetry trickle sits at 'warning' (draining, below the critical
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
-    overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
-    redis_ok = "not_configured"
+    redis_url = get_settings().redis_url
+    redis_ok = "not_connected" if redis_url else "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
             redis_ok = "ok" if await asyncio.to_thread(state.quota.client.ping) else "down"
         except Exception:
             redis_ok = "down"
+    overall_ok = (
+        not open_circuits
+        and outbox_pressure["level"] != "critical"
+        and quota_backend_is_ready(redis_url, state.quota_backend, redis_ok)
+    )
     
     return {
         "ok": overall_ok,
