@@ -127,7 +127,7 @@ jobs:
               "archive_sha256": digest,
               "archive_size_bytes": size,
               "source_build_proof": image_receipt["gate"],
-              "transport": "private GitHub Actions ephemeral artifact",
+              "transport": "GitHub Actions artifact attached to a public repository; not a private secret channel",
               "production_deployed": False,
               "production_ready": False,
               "signed": False,
@@ -151,7 +151,7 @@ jobs:
           }, sort_keys=True))
           PY
 
-      - name: Preserve private short-lived unsigned image and nonsecret custody evidence
+      - name: Preserve short-lived UNSIGNED public-repository review artifact and nonsecret evidence
         uses: actions/upload-artifact@v4
         with:
           name: router-review-only-image-custody
