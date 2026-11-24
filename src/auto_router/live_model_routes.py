@@ -112,16 +112,20 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
         provider = snapshot.provider
         ok = bool(snapshot.ok)
         prior_ok = _LIVE_OK_STATE.get(provider)
-        signature = (
-            state.model_registry._snapshot_signature(snapshot.models)
-            if hasattr(state, "model_registry")
-            else None
-        )
+        # A missing or failing optional registry signature must not prevent
+        # a fresh observation or a bounded registry write attempt. Without a
+        # signature we cannot safely suppress a write as "unchanged".
+        signature = None
+        if hasattr(state, "model_registry"):
+            try:
+                signature = state.model_registry._snapshot_signature(snapshot.models)
+            except Exception:
+                pass
         prior_sig = _LIVE_SIG_STATE.get(provider)
         changed = (
             prior_ok is None
             or prior_ok != ok
-            or (ok and prior_sig is not None and prior_sig != signature)
+            or (ok and (signature is None or prior_sig != signature))
         )
         _LIVE_OK_STATE[provider] = ok
         _LIVE_SIG_STATE[provider] = signature
@@ -147,7 +151,7 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
                 "drift": False,
                 "signature": signature,
                 "previous_signature": prior_sig,
-                "error": snapshot.error,
+                "error": snapshot.error or registry_error,
                 "models": snapshot.models,
             }
         if hasattr(state, "signal_registry"):
