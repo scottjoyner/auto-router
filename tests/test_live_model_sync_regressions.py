@@ -89,3 +89,35 @@ def test_malformed_metadata_does_not_block_valid_records():
     assert sync_live_models_to_providers(state) == 1
     assert [m.provider_model for m in state.providers.providers[0].models] == ["first", "second"]
 
+
+
+def test_signature_failure_does_not_suppress_fresh_observations(monkeypatch):
+    import asyncio
+    import auto_router.live_model_routes as routes
+
+    class Registry:
+        def __init__(self):
+            self.writes = 0
+        def _snapshot_signature(self, models):
+            raise ValueError("unavailable")
+        def latest_for_provider(self, provider):
+            return None
+        def save_snapshot(self, snapshot):
+            self.writes += 1
+            raise OSError("read-only")
+
+    async def fetch(provider):
+        return [{"id": "new"}]
+
+    monkeypatch.setattr(routes, "fetch_provider_models", fetch)
+    monkeypatch.setattr(routes, "_LIVE_OK_STATE", {})
+    monkeypatch.setattr(routes, "_LIVE_SIG_STATE", {})
+    registry = Registry()
+    provider = ProviderConfig(name="signature-test", type="lmstudio",
+                              base_url="http://localhost:1234/v1", quota_class="local")
+    state = SimpleNamespace(live_models=LiveModelCache(), model_registry=registry)
+    for _ in range(2):
+        records = asyncio.run(routes.refresh_provider_models(state, [provider]))
+        assert records[0]["ok"] is True
+        assert records[0]["registry_error"] == "read-only"
+    assert registry.writes == 2
