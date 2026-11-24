@@ -1,5 +1,27 @@
+import logging
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import auto_router.quota as quota_module
 from auto_router.models import ModelConfig, ProviderConfig
-from auto_router.quota import InMemoryQuotaManager, build_quota_manager
+from auto_router.quota import InMemoryQuotaManager, RedisQuotaManager, build_quota_manager
+
+
+class _FakeClock:
+    """Monotonic clock that advances only when the fake sleep is called."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, delay: float) -> None:
+        self.now += delay
+
+
+def _fake_redis_module(from_url: MagicMock):
+    return SimpleNamespace(Redis=SimpleNamespace(from_url=from_url))
 
 
 def test_quota_reservation_respects_request_limit() -> None:
@@ -44,3 +66,80 @@ def test_build_quota_manager_falls_back_to_memory_without_redis() -> None:
     quota = build_quota_manager(None)
 
     assert isinstance(quota, InMemoryQuotaManager)
+    assert quota.redis_fallback is False
+
+
+def test_redis_loading_transient_recovers_to_redis_backend(monkeypatch, caplog) -> None:
+    """A Redis LOADING ping failure is retried, not treated as a permanent outage."""
+    loading_error = RuntimeError("LOADING Redis is loading the dataset in memory")
+    client = SimpleNamespace(ping=MagicMock(return_value=True), close=MagicMock())
+    from_url = MagicMock(side_effect=[loading_error, client])
+    monkeypatch.setattr(quota_module, "redis_lib", _fake_redis_module(from_url))
+    clock = _FakeClock()
+    sleeps: list[float] = []
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock.sleep(delay)
+
+    with caplog.at_level(logging.WARNING, logger=quota_module.logger.name):
+        quota = build_quota_manager(
+            "redis://redis:6379/0",
+            startup_retry_seconds=10,
+            sleep=sleep,
+            clock=clock,
+        )
+
+    assert isinstance(quota, RedisQuotaManager)
+    assert quota.client is client
+    assert not quota.redis_fallback
+    assert from_url.call_count == 2
+    assert sleeps == [0.5]
+    assert any("LOADING" in record.getMessage() for record in caplog.records)
+
+
+def test_redis_permanent_failure_falls_back_with_warning_and_flag(monkeypatch, caplog) -> None:
+    """Permanent LOADING/outage still uses the safe in-memory fallback, visibly."""
+    loading_error = RuntimeError("LOADING Redis is loading the dataset in memory")
+    from_url = MagicMock(side_effect=loading_error)
+    monkeypatch.setattr(quota_module, "redis_lib", _fake_redis_module(from_url))
+    clock = _FakeClock()
+    sleeps: list[float] = []
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock.sleep(delay)
+
+    with caplog.at_level(logging.WARNING, logger=quota_module.logger.name):
+        quota = build_quota_manager(
+            "redis://redis:6379/0",
+            startup_retry_seconds=2,
+            sleep=sleep,
+            clock=clock,
+        )
+
+    assert isinstance(quota, InMemoryQuotaManager)
+    assert quota.redis_fallback is True
+    assert "LOADING" in quota.redis_fallback_reason
+    assert quota.redis_fallback_attempts == 4
+    assert sleeps == [0.5, 1.0, 0.5]
+    assert from_url.call_count == 4
+    assert any("in-memory fallback" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_unexpected_startup_exception_is_recorded_not_silently_swallowed(monkeypatch, caplog) -> None:
+    """The broad fallback path also logs and records whatever it caught."""
+    monkeypatch.setattr(quota_module, "redis_lib", _fake_redis_module(MagicMock()))
+
+    def boom(*args, **kwargs):
+        raise ValueError("unexpected startup failure")
+
+    monkeypatch.setattr(quota_module, "RedisQuotaManager", boom)
+
+    with caplog.at_level(logging.WARNING, logger=quota_module.logger.name):
+        quota = build_quota_manager("redis://redis:6379/0")
+
+    assert isinstance(quota, InMemoryQuotaManager)
+    assert quota.redis_fallback is True
+    assert "unexpected startup failure" in quota.redis_fallback_reason
+    assert any("in-memory fallback" in record.getMessage().lower() for record in caplog.records)

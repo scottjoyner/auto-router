@@ -396,13 +396,25 @@ async def health() -> dict[str, Any]:
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
     overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
-    redis_ok = "not_configured"
-    if hasattr(state, "quota") and hasattr(state.quota, "client"):
+    redis_detail = None
+    quota_manager = getattr(state, "quota", None)
+    if getattr(quota_manager, "redis_fallback", False):
+        # A configured Redis that failed at startup must not be reported as
+        # "not_configured" — that is the silent fallback recorded in ADR-002.
+        redis_ok = "fallback_in_memory"
+        redis_detail = quota_manager.redis_fallback_reason
+    elif hasattr(quota_manager, "client"):
         try:
-            redis_ok = "ok" if await asyncio.to_thread(state.quota.client.ping) else "down"
-        except Exception:
+            redis_ok = "ok" if await asyncio.to_thread(quota_manager.client.ping) else "down"
+        except Exception as exc:
             redis_ok = "down"
-    
+            redis_detail = repr(exc)
+    else:
+        redis_ok = "not_configured"
+    redis_dep: dict[str, Any] = {"status": redis_ok}
+    if redis_detail:
+        redis_dep["detail"] = redis_detail
+
     return {
         "ok": overall_ok,
         "status": "ok" if overall_ok else "degraded",
@@ -410,7 +422,7 @@ async def health() -> dict[str, Any]:
         "version": __version__,
         "uptime": time.time() - _start_time,
         "deps": {
-            "redis": {"status": redis_ok},
+            "redis": redis_dep,
         },
         "context_revision": state.context.revision,
         "context_source": state.context.source,
