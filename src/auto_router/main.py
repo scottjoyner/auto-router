@@ -35,7 +35,7 @@ from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
 from auto_router.model_registry import ModelRegistryStore
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
-from auto_router.policy import PolicyEngine
+from auto_router.policy import NoCapableProviderError, PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
@@ -762,7 +762,17 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     # Overlay fleet power tiers (DAILY/CONSERVE/SURVIVE) so battery-state nodes
     # are demoted/parked on top of probe evidence.
     _apply_power_tiers_to_policy()
-    plan = state.policy_engine.plan(router_request)
+    try:
+        plan = state.policy_engine.plan(router_request)
+    except NoCapableProviderError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "no provider satisfies required capabilities",
+                "required_capabilities": sorted(exc.required),
+                "route": exc.route,
+            },
+        ) from exc
     settings = get_settings()
     # Hard bounds so a fleet full of dead/hung nodes can never make a single
     # request hang for (attempt_timeout * candidate_count). We stop trying once

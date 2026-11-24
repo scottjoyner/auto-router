@@ -11,6 +11,23 @@ from auto_router.settings import get_settings
 
 _RESERVATIONS_PATH = Path("/run/assistx/fleet_reservations.json")
 
+
+class NoCapableProviderError(RuntimeError):
+    """No enabled provider/model satisfies the request's required capabilities.
+
+    Raised fail-closed by ``PolicyEngine.plan()`` when a request explicitly asks
+    for a capability (e.g. ``embeddings``) and no candidate can provide it, so
+    the router never dispatches that traffic to a chat-only node.
+    """
+
+    def __init__(self, required: set[str], route: str) -> None:
+        self.required = frozenset(required)
+        self.route = route
+        super().__init__(
+            f"no provider satisfies required capabilities {sorted(required)} "
+            f"for route {route}"
+        )
+
 _LATENCY_CACHE = Path(get_settings().latency_cache_path)
 
 # Latency awareness for `auto`: nodes whose measured round-trip latency sits
@@ -129,6 +146,13 @@ class PolicyEngine:
         profile_name = self.classify_profile(request)
         profile = self.policies.profiles.get(profile_name) or self._fallback_profile()
         stages = [self._build_stage(stage, request) for stage in profile.stages]
+        # Fail closed when an explicitly requested capability has no provider.
+        # _build_stage() now filters on those capabilities, so an embeddings
+        # request with no embeddings-capable node yields an empty plan rather
+        # than dispatching to chat-only nodes and tripping their breakers. Name
+        # that condition explicitly instead of a generic "all providers failed".
+        if request.required_capabilities and not any(stage.candidates for stage in stages):
+            raise NoCapableProviderError(request.required_capabilities, request.route)
         # Reserve the intended (top) candidate of each stage at plan time so
         # concurrent requests planning in parallel don't all pick the same node --
         # plan() runs atomically on the event loop, so the next request's plan sees
@@ -176,6 +200,12 @@ class PolicyEngine:
         return None
 
     def _build_stage(self, policy_stage: PolicyStage, request: RouterRequest) -> ExecutionStage:
+        # Request-level capabilities (e.g. embeddings on /v1/embeddings) are as
+        # binding as the policy stage's own set. Merge them before candidate
+        # selection so a chat-only model can never receive embedding traffic.
+        required = self._required_capabilities_for_request(
+            policy_stage.required_capabilities | request.required_capabilities, request
+        )
         candidates: list[ProviderCandidate] = []
         for provider in self.providers.enabled():
             if self._provider_reserved(provider):
@@ -184,9 +214,6 @@ class PolicyEngine:
                 continue
             if policy_stage.provider_classes and str(provider.quota_class) not in policy_stage.provider_classes:
                 continue
-            required = self._required_capabilities_for_request(
-                policy_stage.required_capabilities, request
-            )
             for model in provider.models:
                 if not self._model_matches(model, required):
                     continue
@@ -203,9 +230,7 @@ class PolicyEngine:
         return ExecutionStage(
             purpose=policy_stage.purpose,
             candidates=candidates,
-            required_capabilities=self._required_capabilities_for_request(
-                policy_stage.required_capabilities, request
-            ),
+            required_capabilities=required,
             allow_local_fallback=policy_stage.allow_local_fallback,
             optional=policy_stage.optional,
         )

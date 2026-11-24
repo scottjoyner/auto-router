@@ -3,7 +3,12 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 import auto_router.main as main_module
+from auto_router.models import RouterRequest
+from auto_router.policy import NoCapableProviderError
 from auto_router.quota import InMemoryQuotaManager
 
 
@@ -123,6 +128,30 @@ def test_health_keeps_not_configured_when_no_redis_was_configured(monkeypatch) -
     result = asyncio.run(main_module.health())
 
     assert result["deps"]["redis"] == {"status": "not_configured"}
+
+
+class _NoCapablePlanner:
+    def plan(self, request) -> None:
+        raise NoCapableProviderError({"embeddings"}, request.route)
+
+
+def test_execute_maps_no_capable_provider_to_typed_503(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "_fleet_health_map", lambda: {})
+    monkeypatch.setattr(main_module, "_apply_power_tiers_to_policy", lambda: None)
+    monkeypatch.setattr(main_module, "state", SimpleNamespace(policy_engine=_NoCapablePlanner()))
+    request = RouterRequest(
+        request_id="emb-1",
+        route="embeddings",
+        required_capabilities={"embeddings"},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(main_module._execute(request))
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "no provider satisfies required capabilities"
+    assert exc_info.value.detail["required_capabilities"] == ["embeddings"]
+    assert exc_info.value.detail["route"] == "embeddings"
 
 
 def test_router_request_marks_private_payload_local_only() -> None:
