@@ -201,16 +201,41 @@ def _infer_capabilities(model_id: str, metadata: dict) -> set[str]:
 
 
 def _is_model_loaded(entry: Any) -> bool:
-    """A model is resident iff LM Studio reports loaded instances. The top-level
-    ``loaded`` boolean is unreliable; the authoritative signal is
-    ``raw.loaded_instances`` (non-empty = actually running on the endpoint)."""
+    """Use native residency evidence without coercing unknown or malformed values."""
     if not isinstance(entry, dict):
         return False
-    raw = entry.get("raw", {}) or {}
-    instances = raw.get("loaded_instances") or entry.get("loaded_instances") or []
-    if isinstance(instances, list) and instances:
-        return True
-    return bool(entry.get("loaded"))
+    if entry.get("residency") == "unknown" or entry.get("source") == "openai_compat_fallback":
+        return False
+    raw = entry.get("raw", {})
+    if not isinstance(raw, dict):
+        return False
+    if "loaded_instances" in raw:
+        instances = raw["loaded_instances"]
+        return isinstance(instances, list) and bool(instances) and all(
+            isinstance(instance, dict) and bool(instance) for instance in instances
+        )
+    # Newer native versions omit loaded_instances and expose state instead.
+    # The adapter synthesizes a top-level empty list for that representation.
+    if "state" in raw:
+        state = raw["state"]
+        return isinstance(state, str) and state.strip().lower() in {"loaded", "ready", "in_use", "in-use"}
+    if "loaded_instances" in entry:
+        instances = entry["loaded_instances"]
+        return isinstance(instances, list) and bool(instances) and all(
+            isinstance(instance, dict) and bool(instance) for instance in instances
+        )
+    return entry.get("loaded") is True
+
+
+def _positive_context(*values: Any) -> int | None:
+    for value in values:
+        if type(value) is int and value > 0:
+            return value
+        if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 10:
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
+    return None
 
 
 def sync_live_models_to_providers(state: Any) -> int:
@@ -227,28 +252,39 @@ def sync_live_models_to_providers(state: Any) -> int:
         if provider.type != "lmstudio":
             continue
         snap = live.get(provider.name) or live.get(provider.id)
-        if snap is None or not snap.ok:
+        if snap is None or not snap.ok or snap.stale:
             continue
         static = {m.provider_model: m for m in provider.models}
         new_models: list[ModelConfig] = []
+        seen: set[str] = set()
         for entry in snap.models:
-            # Only advertise models that are actually resident on the endpoint.
-            # LM Studio's model list includes the whole downloaded catalog, so
-            # advertising unloaded models would route requests to empty endpoints
-            # (HTTP 400/500) and trip circuit breakers. Skip anything whose
-            # loaded_instances list is empty.
+            # Only advertise models with affirmative native residency evidence.
             if not _is_model_loaded(entry):
                 continue
-            mid = entry.get("id") if isinstance(entry, dict) else str(entry)
-            if not mid:
+            mid = entry.get("id")
+            if not isinstance(mid, str) or not mid.strip() or mid in seen:
                 continue
-            meta = entry.get("metadata", {}) if isinstance(entry, dict) else {}
-            ctx = meta.get("context_length") or meta.get("context_window")
+            seen.add(mid)
+            meta = entry.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
             static_model = static.get(mid)
-            caps = set(static_model.capabilities) if (static_model and static_model.capabilities) else _infer_capabilities(mid, meta)
-            cw = int(ctx) if ctx else (static_model.context_window if static_model else None)
-            new_models.append(ModelConfig(alias=mid, provider_model=mid, capabilities=caps, context_window=cw))
-        if [m.provider_model for m in new_models] != [m.provider_model for m in provider.models]:
+            cw = _positive_context(meta.get("context_length"), meta.get("context_window"),
+                                   entry.get("context_length"), entry.get("context_window"))
+            if static_model is not None:
+                # Preserve the existing exact-ID configured policy and alias.
+                # This is configuration, not an attestation of artifact identity.
+                caps = set(static_model.capabilities) or _infer_capabilities(mid, meta)
+                new_models.append(static_model.model_copy(update={
+                    "capabilities": caps,
+                    "context_window": cw if cw is not None else static_model.context_window,
+                }))
+            else:
+                # Discovery never grants agent or code-execution authority.
+                new_models.append(ModelConfig(alias=mid, provider_model=mid,
+                                              capabilities=_infer_capabilities(mid, meta),
+                                              context_window=cw))
+        if new_models != provider.models:
             providers[idx] = provider.model_copy(update={"models": new_models})
             changed += 1
     if changed:
