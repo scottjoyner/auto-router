@@ -41,13 +41,15 @@ class _QueuedWaiter:
 class RuntimeAdmissionLease:
     def __init__(self, gate: _RuntimeGate) -> None:
         self._gate = gate
-        self._released = False
+        self._release_task: asyncio.Task[None] | None = None
 
     async def release(self) -> None:
-        if self._released:
-            return
-        self._released = True
-        await self._gate.release()
+        # One release operation per lease. Shield it so cancelling a caller
+        # while the gate lock is contended cannot strand the occupied slot.
+        # Other callers await the same task rather than decrementing twice.
+        if self._release_task is None:
+            self._release_task = asyncio.create_task(self._gate.release())
+        await asyncio.shield(self._release_task)
 
     async def __aenter__(self) -> RuntimeAdmissionLease:
         return self
@@ -62,6 +64,7 @@ class _RuntimeGate:
         self._lock = asyncio.Lock()
         self._waiters: list[_QueuedWaiter] = []
         self._sequence = 0
+        self.retired = False
         self.active = 0
         self.acquired_total = 0
         self.rejected_total = 0
@@ -86,6 +89,13 @@ class _RuntimeGate:
             )
 
         async with self._lock:
+            if self.retired:
+                self.rejected_total += 1
+                raise ProviderError(
+                    f"runtime admission retired for {runtime_id}",
+                    status_code=503,
+                    retryable=True,
+                )
             if self.active < self.config.parallel_slots and not self._waiters:
                 self.active += 1
                 self.acquired_total += 1
@@ -195,6 +205,7 @@ class RuntimeAdmissionController:
     def __init__(self, providers: Iterable[ProviderConfig]) -> None:
         self._gates: dict[str, _RuntimeGate] = {}
         self._provider_runtime_keys: dict[str, str] = {}
+        self._retired_gates: dict[str, list[_RuntimeGate]] = {}
 
         for provider in providers:
             runtime_id = str(provider.runtime_instance_id or "").strip()
@@ -217,6 +228,22 @@ class RuntimeAdmissionController:
             self._gates.setdefault(runtime_id, _RuntimeGate(config))
             self._provider_runtime_keys[provider.name] = runtime_id
 
+    def inherit_retired_capacity(self, previous: RuntimeAdmissionController) -> None:
+        """Fence physical runtimes until all older-generation work drains.
+
+        Called synchronously during projection publication. Preserve outstanding
+        gates even when a runtime disappears and is later reintroduced.
+        """
+        for gate in previous._gates.values():
+            gate.retired = True
+        for runtime_id, gates in previous._retired_gates.items():
+            self._retired_gates[runtime_id] = [
+                gate for gate in gates if gate.active or gate.queued
+            ]
+        for runtime_id, gate in previous._gates.items():
+            if gate.active or gate.queued:
+                self._retired_gates.setdefault(runtime_id, []).append(gate)
+
     def runtime_key(self, candidate: ProviderCandidate) -> str:
         return self._provider_runtime_keys.get(
             candidate.provider.name,
@@ -236,6 +263,14 @@ class RuntimeAdmissionController:
                 status_code=503,
                 retryable=True,
             )
+        older = self._retired_gates.get(runtime_key, [])
+        if any(old.active or old.queued for old in older):
+            raise ProviderError(
+                f"runtime admission awaiting retired generation drain for {runtime_key}",
+                status_code=503,
+                retryable=True,
+            )
+        self._retired_gates.pop(runtime_key, None)
         return await gate.acquire(priority)
 
     def snapshot(self) -> list[dict[str, Any]]:
