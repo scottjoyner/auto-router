@@ -173,3 +173,93 @@ async def test_lease_context_releases_after_exception() -> None:
             raise RuntimeError("synthetic failure")
 
     assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_under_lock_does_not_strand_slot() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    lease = await controller.acquire(candidate)
+    gate = lease._gate
+    async with gate._lock:
+        releasing = asyncio.create_task(lease.release())
+        await asyncio.sleep(0)
+        releasing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await releasing
+    await lease.release()
+    assert controller.snapshot()[0]["active"] == 0
+    replacement = await asyncio.wait_for(controller.acquire(candidate), timeout=0.2)
+    await replacement.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_still_hands_off_to_queued_request() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    lease = await controller.acquire(candidate)
+    waiter = asyncio.create_task(controller.acquire(candidate))
+    await asyncio.sleep(0)
+    async with lease._gate._lock:
+        releasing = asyncio.create_task(lease.release())
+        await asyncio.sleep(0)
+        releasing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await releasing
+    replacement = await asyncio.wait_for(waiter, timeout=0.2)
+    await lease.release()
+    assert controller.snapshot()[0]["active"] == 1
+    await replacement.release()
+    assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_release_is_idempotent() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    lease = await controller.acquire(candidate)
+    waiter = asyncio.create_task(controller.acquire(candidate))
+    await asyncio.sleep(0)
+    await asyncio.gather(lease.release(), lease.release())
+    replacement = await asyncio.wait_for(waiter, timeout=0.2)
+    assert controller.snapshot()[0]["active"] == 1
+    await replacement.release()
+    assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_generation_handover_fences_old_physical_runtime() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    old = RuntimeAdmissionController([candidate.provider])
+    lease = await old.acquire(candidate)
+    queued = asyncio.create_task(old.acquire(candidate))
+    await asyncio.sleep(0)
+    new = RuntimeAdmissionController([candidate.provider])
+    new.inherit_retired_capacity(old)
+    with pytest.raises(ProviderError, match="retired generation drain"):
+        await new.acquire(candidate)
+    with pytest.raises(ProviderError, match="admission retired"):
+        await old.acquire(candidate)
+    await lease.release()
+    prior = await asyncio.wait_for(queued, timeout=0.2)
+    with pytest.raises(ProviderError, match="retired generation drain"):
+        await new.acquire(candidate)
+    await prior.release()
+    current = await new.acquire(candidate)
+    await current.release()
+
+
+@pytest.mark.asyncio
+async def test_runtime_removed_then_reintroduced_retains_capacity_fence() -> None:
+    candidate = _candidate()
+    first = RuntimeAdmissionController([candidate.provider])
+    lease = await first.acquire(candidate)
+    removed = RuntimeAdmissionController([])
+    removed.inherit_retired_capacity(first)
+    restored = RuntimeAdmissionController([candidate.provider])
+    restored.inherit_retired_capacity(removed)
+    with pytest.raises(ProviderError, match="retired generation drain"):
+        await restored.acquire(candidate)
+    await lease.release()
+    current = await restored.acquire(candidate)
+    await current.release()
