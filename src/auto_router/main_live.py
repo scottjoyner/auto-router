@@ -185,7 +185,12 @@ async def _release_stream_lease(
         async for chunk in body:
             yield chunk
     finally:
-        await lease.release()
+        try:
+            close = getattr(body, "aclose", None)
+            if callable(close):
+                await close()
+        finally:
+            await lease.release()
 
 
 async def _admitted_dispatch_stream(
