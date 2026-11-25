@@ -150,3 +150,15 @@ async def test_abort_always_attempts_transport_close_on_nested_failures(
         "raw_iterator_closed","http_context_exited","http_client_closed"
     ]
     assert events.count("http_client_closed")==1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_kind",["openai","agentgateway"])
+async def test_close_before_first_read_closes_http_resources(provider_kind,monkeypatch):
+    events=[]
+    response=await request_stream(fixtures(provider_kind,events,monkeypatch),provider_kind)
+    await response.body.aclose()
+    await response.body.aclose()
+    assert events[-2:]==["http_context_exited","http_client_closed"]
+    assert events.count("http_client_closed")==1
+    with pytest.raises(StopAsyncIteration):await anext(response.body)
