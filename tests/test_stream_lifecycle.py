@@ -185,6 +185,7 @@ async def test_stream_is_recorded_only_after_iterator_completion() -> None:
     }
     assert any(state == "completed" for _key, state, _data in idempotency.transitions)
     assert outbox.events[-1].event_type == "router.stream.completed"
+    assert outbox.events[-1].payload["terminal_evidence"] == "openai_sse_done"
     assert outbox.events[-1].payload["usage_status"] == "reported"
     assert outbox.events[-1].payload["usage"]["total_tokens"] == 5
 
@@ -257,3 +258,233 @@ def test_usage_collector_accepts_responses_api_usage_shape() -> None:
         "completion_tokens": 6,
         "total_tokens": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_http_200_without_done_marker_is_incomplete_not_execution_success() -> None:
+    async def body():
+        yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+        yield b'data: {"usage":{"prompt_tokens":3,"completion_tokens":1}}\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(owner)
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 2
+    assert policy.active[owner] == 0
+    assert not circuits.successes
+    assert quota.releases
+    assert len(recorded) == 1
+    assert outbox.events[-1].event_type == "router.stream.incomplete"
+    assert outbox.events[-1].payload["terminal_evidence"] == "eof_without_terminal"
+    assert outbox.events[-1].payload["acceptance_state"] == "possibly_accepted"
+    assert outbox.events[-1].payload["usage_status"] == "reported"
+    assert outbox.events[-1].payload["usage"]["prompt_tokens"] == 3
+    assert not any(state == "completed" for _, state, _ in idempotency.transitions)
+
+
+@pytest.mark.asyncio
+async def test_responses_api_completed_marker_proves_clean_terminal_without_done() -> None:
+    async def body():
+        yield b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+        yield b'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":4,"output_tokens":2}}}\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    policy.mark_inflight_start(module._owner(candidate))
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(module._owner(candidate))
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 2
+    assert circuits.successes
+    assert quota.releases == []
+    assert len(recorded) == 1
+    assert outbox.events[-1].event_type == "router.stream.completed"
+    assert outbox.events[-1].payload["terminal_evidence"] == "responses_completed"
+    assert outbox.events[-1].payload["usage"]["total_tokens"] == 6
+    assert any(state == "completed" for _, state, _ in idempotency.transitions)
+
+
+@pytest.mark.asyncio
+async def test_responses_api_declared_failure_never_counts_as_success() -> None:
+    async def body():
+        yield b'event: response.failed\ndata: {"type":"response.failed"}\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(owner)
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 1
+    assert not circuits.successes
+    assert quota.releases
+    assert outbox.events[-1].event_type == "router.stream.incomplete"
+    assert not any(status == "completed" for _, status, _ in idempotency.transitions)
+
+
+@pytest.mark.asyncio
+async def test_split_done_marker_across_network_chunks_is_valid_terminal() -> None:
+    async def body():
+        yield b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+        yield b'data: [DO'
+        yield b'NE]\n\n'
+
+    module, estimate, recorded, policy, circuits, quota, idempotency, outbox = _module(body)
+    req, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, req)
+    policy.mark_inflight_end(owner)
+    module._record_usage(req, response.provider, response.model, "final", estimate, 200, 1)
+    assert len([part async for part in response.body]) == 3
+    assert circuits.successes
+    assert outbox.events[-1].event_type == "router.stream.completed"
+    assert quota.releases == []
+
+
+def test_usage_parser_detects_terminal_without_retaining_prompt_text() -> None:
+    from auto_router.stream_lifecycle import StreamUsageCollector
+
+    collector = StreamUsageCollector()
+    collector.feed(b'data: {"choices":[{"delta":{"content":"sensitive text"}}]}\n\n')
+    assert collector.terminal_status is None
+    collector.feed(b'data: [DONE]\n\n')
+    assert collector.terminal_status == "completed"
+    collector.feed(b'data: {"type":"response.incomplete"}\n\n')
+    assert collector.terminal_status == "failed"
+
+
+
+def test_sse_failure_marker_takes_precedence_over_later_done():
+    from auto_router.stream_lifecycle import StreamUsageCollector
+
+    collector = StreamUsageCollector()
+    collector.feed(b'data: {"type":"response.failed"}\n\n')
+    collector.feed(b'data: [DONE]\n\n')
+    assert collector.terminal_status == "failed"
+    assert collector.terminal_evidence == "responses_failed"
+
+
+def test_terminal_event_evidence_is_a_small_allowlisted_metadata_label():
+    from auto_router.stream_lifecycle import StreamUsageCollector
+
+    collector = StreamUsageCollector()
+    collector.feed(
+        b'data: {"type":"response.completed","response":{"output_text":"private"}}\n\n'
+    )
+    assert collector.terminal_status == "completed"
+    assert collector.terminal_evidence == "responses_completed"
+    assert "private" not in collector.terminal_evidence
+
+@pytest.mark.asyncio
+async def test_shared_endpoint_trace_cannot_spoof_model_instance_or_claim_from_request_body() -> None:
+    async def body():
+        yield b'data: {"choices":[{"delta":{"content":"SAFE"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    module, _estimate, _records, policy, _circuits, _quota, _idem, outbox = _module(body)
+    request = _request()
+    request.metadata.update({
+        "model_instance_id": "fake-gpu-instance",
+        "runtime_instance_id": "spoofed-runtime",
+        "node_id": "spoofed-node",
+        "runtime_projection_generation": 999999,
+        "assistx_executor": {"claim_id": "attacker-forged-claim"},
+    })
+    candidate = _candidate()
+    candidate.provider.node_id = "x1-370"
+    candidate.provider.runtime_instance_id = "runtime-config-3"
+    candidate.model.model_instance_id = "model-config-7"
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, request)
+    policy.mark_inflight_end(owner)
+    list_chunks = [chunk async for chunk in response.body]
+    assert len(list_chunks) == 2
+    event = outbox.events[-1]
+    assert event.event_type == "router.stream.completed"
+    assert event.payload["runtime_instance_id"] == "runtime-config-3"
+    assert event.payload["model_instance_id"] == "model-config-7"
+    assert event.payload["node_id"] == "x1-370"
+    assert event.payload["instance_identity_source"] == "configured_route_not_runtime_attestation"
+    assert event.payload["runtime_projection_generation"] is None
+    assert event.payload["authenticated_claim_binding"] is False
+    assert event.payload["claim_id"] is None
+    assert "fake-gpu-instance" not in str(event.payload)
+    assert "attacker-forged-claim" not in str(event.payload)
+
+
+@pytest.mark.asyncio
+async def test_stream_failure_does_not_export_raw_sensitive_exception() -> None:
+    async def body():
+        yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+        raise RuntimeError("provider failed: Authorization Bearer sk_PRIVATE_SECRET")
+
+    module, _estimate, _records, policy, _circuits, _quota, _idem, outbox = _module(body)
+    request = _request()
+    candidate = _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, request)
+    policy.mark_inflight_end(owner)
+    with pytest.raises(RuntimeError):
+        async for _ in response.body:
+            pass
+    payload = outbox.events[-1].payload
+    assert payload["error_type"] == "RuntimeError"
+    assert payload["error_message"] is None
+    assert "sk_PRIVATE_SECRET" not in str(payload)
+    assert payload["terminal_evidence"] == "transport_exception"
+
+
+@pytest.mark.asyncio
+async def test_partial_stream_close_closes_upstream_and_cancels_usage() -> None:
+    closed = []
+    async def upstream():
+        try:
+            yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+        finally:
+            closed.append(True)
+
+    module, estimate, recorded, policy, circuits, quota, idem, outbox = _module(upstream)
+    request, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, request)
+    policy.mark_inflight_end(owner)
+    await anext(response.body)
+    await response.body.aclose()
+    assert closed == [True]
+    assert policy.active[owner] == 0
+    assert len(quota.releases) == 1
+    assert not circuits.failures
+    assert not circuits.successes
+    assert len(recorded) == 1
+
+
+@pytest.mark.asyncio
+async def test_never_started_stream_close_finalizes_cancelled_accounting():
+    closed=[]
+    class Upstream:
+        def __aiter__(self):return self
+        async def __anext__(self):raise AssertionError("unexpected read")
+        async def aclose(self):closed.append(True)
+    module, estimate, recorded, policy, circuits, quota, idem, outbox = _module(Upstream)
+    request, candidate = _request(), _candidate()
+    owner=module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response=await module._dispatch_stream(None,candidate,request)
+    policy.mark_inflight_end(owner)
+    await response.body.aclose()
+    await response.body.aclose()
+    assert closed==[True]
+    assert policy.active[owner]==0
+    assert len(quota.releases)==1
+    assert len(recorded)==1
+    assert not circuits.successes
