@@ -495,20 +495,12 @@ def build_quota_manager(
     sleep=time.sleep,
     clock=time.monotonic,
 ):
-    """Build the quota backend, retrying transient Redis startup failures.
-
-    A configured Redis that never becomes reachable still falls back to the
-    in-memory manager, but the fallback is logged and recorded on the returned
-    instance so callers (notably ``/health``) cannot mistake it for a system in
-    which Redis was never configured.
-    """
+    """Retry configured Redis startup; never reset quotas via process-local fallback."""
     if not redis_url:
         return InMemoryQuotaManager()
 
-    if redis_lib is None:  # pragma: no cover - import-time environment dependent
-        reason = "REDIS_URL configured but the redis package is not installed"
-        logger.error("Redis quota backend unavailable: %s; using in-memory fallback", reason)
-        return InMemoryQuotaManager(redis_fallback_reason=reason, redis_fallback_attempts=0)
+    if redis_lib is None:
+        raise RuntimeError("Redis quota backend required but redis client is not installed")
 
     try:
         return RedisQuotaManager(
@@ -519,19 +511,5 @@ def build_quota_manager(
             sleep=sleep,
             clock=clock,
         )
-    except RedisStartupError as exc:
-        reason = str(exc)
-        logger.error(
-            "Redis quota backend unavailable after %d attempt(s); "
-            "using in-memory fallback. %s",
-            exc.attempts,
-            reason,
-        )
-        return InMemoryQuotaManager(
-            redis_fallback_reason=reason,
-            redis_fallback_attempts=exc.attempts,
-        )
-    except Exception as exc:  # defensive: never swallow an unrecorded failure
-        reason = f"unexpected Redis startup error: {exc!r}"
-        logger.exception("Redis quota backend unavailable: %s; using in-memory fallback", reason)
-        return InMemoryQuotaManager(redis_fallback_reason=reason, redis_fallback_attempts=None)
+    except Exception as exc:
+        raise RuntimeError("Redis quota backend unavailable; refusing in-memory fallback") from exc
