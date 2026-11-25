@@ -173,3 +173,55 @@ async def test_lease_context_releases_after_exception() -> None:
             raise RuntimeError("synthetic failure")
 
     assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_under_lock_does_not_strand_slot() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    lease = await controller.acquire(candidate)
+    gate = lease._gate
+    async with gate._lock:
+        releasing = asyncio.create_task(lease.release())
+        await asyncio.sleep(0)
+        releasing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await releasing
+    await lease.release()
+    assert controller.snapshot()[0]["active"] == 0
+    replacement = await asyncio.wait_for(controller.acquire(candidate), timeout=0.2)
+    await replacement.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_still_hands_off_to_queued_request() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    lease = await controller.acquire(candidate)
+    waiter = asyncio.create_task(controller.acquire(candidate))
+    await asyncio.sleep(0)
+    async with lease._gate._lock:
+        releasing = asyncio.create_task(lease.release())
+        await asyncio.sleep(0)
+        releasing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await releasing
+    replacement = await asyncio.wait_for(waiter, timeout=0.2)
+    await lease.release()
+    assert controller.snapshot()[0]["active"] == 1
+    await replacement.release()
+    assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_release_is_idempotent() -> None:
+    candidate = _candidate(queue_limit=1, queue_timeout_seconds=1.0)
+    controller = RuntimeAdmissionController([candidate.provider])
+    lease = await controller.acquire(candidate)
+    waiter = asyncio.create_task(controller.acquire(candidate))
+    await asyncio.sleep(0)
+    await asyncio.gather(lease.release(), lease.release())
+    replacement = await asyncio.wait_for(waiter, timeout=0.2)
+    assert controller.snapshot()[0]["active"] == 1
+    await replacement.release()
+    assert controller.snapshot()[0]["active"] == 0
