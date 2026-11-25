@@ -12,6 +12,7 @@ import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from auto_router.owned_stream_response import OwnedStreamingResponse, close_response_body
 from fastapi.templating import Jinja2Templates
 
 logger = logging.getLogger(__name__)
@@ -816,45 +817,49 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                         _dispatch_stream(provider, candidate, router_request, route_plan=gateway_context),
                         timeout=settings.attempt_timeout_seconds,
                     )
-                    state.policy_engine.mark_inflight_end(owner)
-                    latency_ms = int((time.perf_counter() - started) * 1000)
-                    ended_at_ms = int(time.time() * 1000)
-                    state.policy_engine.mark_latency(owner, latency_ms)
-                    state.circuits.record_success(owner)
-                    gateway_metadata = None
-                    if stream_response.provider.startswith("agentgateway"):
-                        gateway_metadata = {
-                            "provider": stream_response.provider,
-                            "profile": gateway_context.profile,
-                            "stage": gateway_context.stage,
-                            "privacy": gateway_context.privacy,
-                            "quota_mode": gateway_context.quota_mode,
-                            "latency_ms": latency_ms,
-                        }
-                    await asyncio.to_thread(
-                        _record_usage,
-                        router_request,
-                        stream_response.provider,
-                        stream_response.model,
-                        stage.purpose.value,
-                        estimate,
-                        stream_response.status_code,
-                        latency_ms,
-                        gateway_metadata=gateway_metadata,
-                        started_at_ms=started_at_ms,
-                        ended_at_ms=ended_at_ms,
-                    )
-                    return StreamingResponse(
-                        stream_response.body,
-                        status_code=stream_response.status_code,
-                        media_type=stream_response.headers.get("content-type", "text/event-stream"),
-                        headers={
-                            "x-auto-router-provider": stream_response.provider,
-                            "x-auto-router-model": stream_response.model,
-                            "x-auto-router-stage": stage.purpose.value,
-                            "x-auto-router-profile": plan.profile_name,
-                        },
-                    )
+                    try:
+                        state.policy_engine.mark_inflight_end(owner)
+                        latency_ms = int((time.perf_counter() - started) * 1000)
+                        ended_at_ms = int(time.time() * 1000)
+                        state.policy_engine.mark_latency(owner, latency_ms)
+                        state.circuits.record_success(owner)
+                        gateway_metadata = None
+                        if stream_response.provider.startswith("agentgateway"):
+                            gateway_metadata = {
+                                "provider": stream_response.provider,
+                                "profile": gateway_context.profile,
+                                "stage": gateway_context.stage,
+                                "privacy": gateway_context.privacy,
+                                "quota_mode": gateway_context.quota_mode,
+                                "latency_ms": latency_ms,
+                            }
+                        await asyncio.to_thread(
+                            _record_usage,
+                            router_request,
+                            stream_response.provider,
+                            stream_response.model,
+                            stage.purpose.value,
+                            estimate,
+                            stream_response.status_code,
+                            latency_ms,
+                            gateway_metadata=gateway_metadata,
+                            started_at_ms=started_at_ms,
+                            ended_at_ms=ended_at_ms,
+                        )
+                        return OwnedStreamingResponse(
+                            stream_response.body,
+                            status_code=stream_response.status_code,
+                            media_type=stream_response.headers.get("content-type", "text/event-stream"),
+                            headers={
+                                "x-auto-router-provider": stream_response.provider,
+                                "x-auto-router-model": stream_response.model,
+                                "x-auto-router-stage": stage.purpose.value,
+                                "x-auto-router-profile": plan.profile_name,
+                            },
+                        )
+                    except BaseException:
+                        await close_response_body(stream_response.body)
+                        raise
                 gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
                 response = await asyncio.wait_for(
                     _dispatch(provider, candidate, router_request, route_plan=gateway_context),
