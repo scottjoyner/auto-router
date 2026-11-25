@@ -25,11 +25,13 @@ async def test_partial_close_releases_after_upstream_close(fail_close):
             yield b"more"
         finally:
             events.append("upstream_closed")
-            if fail_close:raise OSError("synthetic close failure")
+            if fail_close:
+                raise OSError("synthetic close failure")
     wrapped=wrapper()(body(),Lease())
     assert await anext(wrapped)==b"partial"
     if fail_close:
-        with pytest.raises(OSError,match="synthetic close failure"):await wrapped.aclose()
+        with pytest.raises(OSError,match="synthetic close failure"):
+            await wrapped.aclose()
     else:
         await wrapped.aclose()
     assert events==["upstream_closed","released"]
@@ -48,4 +50,5 @@ async def test_never_started_stream_explicit_close_releases_once():
     await body.aclose()
     await body.aclose()
     assert events==["closed","released"]
-    with pytest.raises(StopAsyncIteration):await anext(body)
+    with pytest.raises(StopAsyncIteration):
+        await anext(body)
