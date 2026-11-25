@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+from auto_router.close_aware_stream import CloseAwareStream
 from auto_router.event_outbox import OutboxEvent
 from auto_router.providers import ProviderError, ProviderStreamResponse
 from auto_router.route_events import ensure_event_outbox
@@ -431,7 +432,15 @@ def install_stream_lifecycle(main_module: Any) -> None:
                     elif not finalized:
                         await finalize("cancelled")
 
-        response.body = body()
+        async def close_unstarted() -> None:
+            try:
+                close = getattr(upstream_body, "aclose", None)
+                if callable(close):
+                    await close()
+            finally:
+                await finalize("cancelled")
+
+        response.body = CloseAwareStream(body(), close_unstarted)
         return response
 
     def record_usage(
