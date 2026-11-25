@@ -32,6 +32,7 @@ import auto_router.main as main_module
 from auto_router.access_paths import AccessPathChoice, RuntimeAccessPathSelector
 from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionLease
 from auto_router.assistx_routes import register_assistx_routes
+from auto_router.close_aware_stream import CloseAwareStream
 from auto_router.claim_fence import assert_executor_claim_current
 from auto_router.fleet_routes import router as fleet_router
 from auto_router.main import app, state
@@ -177,20 +178,26 @@ async def _admitted_dispatch(
         await lease.release()
 
 
-async def _release_stream_lease(
+def _release_stream_lease(
     body: AsyncIterator[bytes],
     lease: RuntimeAdmissionLease,
 ) -> AsyncIterator[bytes]:
-    try:
-        async for chunk in body:
-            yield chunk
-    finally:
+    async def close() -> None:
         try:
-            close = getattr(body, "aclose", None)
-            if callable(close):
-                await close()
+            closer = getattr(body, "aclose", None)
+            if callable(closer):
+                await closer()
         finally:
             await lease.release()
+
+    async def iterate() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in body:
+                yield chunk
+        finally:
+            await close()
+
+    return CloseAwareStream(iterate(), close)
 
 
 async def _admitted_dispatch_stream(
