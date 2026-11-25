@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from auto_router import runtime_projection as legacy
 from auto_router.models import ModelConfig, ProviderCandidate, ProviderConfig
+from auto_router.providers import ProviderError
 from auto_router.runtime_projection_v2 import (
     RuntimeProjectionManager,
     signing_message,
@@ -240,8 +241,17 @@ async def test_ed25519_generation_swap_preserves_active_old_lease(monkeypatch):
     assert manager.retired[0].admission is old_admission
     assert manager.retired[0].admission.snapshot()[0]["active"] == 1
 
+    current_provider = state.providers.enabled()[0]
+    current_candidate = ProviderCandidate(
+        provider=current_provider, model=current_provider.models[0]
+    )
+    with pytest.raises(ProviderError, match="retired generation drain"):
+        await state.admission.acquire(current_candidate)
+
     await lease.release()
     assert manager.status()["retired_generations"] == []
+    current_lease = await state.admission.acquire(current_candidate)
+    await current_lease.release()
 
 def test_enriched_ed25519_metadata_survives_consumer_and_tamper_is_rejected(
     monkeypatch,
