@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from types import SimpleNamespace
 from typing import Any
 
+from auto_router.close_aware_stream import CloseAwareStream
 from auto_router.event_outbox import OutboxEvent
 from auto_router.providers import ProviderError, ProviderStreamResponse
 from auto_router.route_events import ensure_event_outbox
@@ -21,6 +23,8 @@ class StreamUsageCollector:
         self.usage: dict[str, int] = {}
         self.bytes_sent = 0
         self.chunks_sent = 0
+        self.terminal_status: str | None = None
+        self.terminal_evidence: str | None = None
 
     def feed(self, chunk: bytes) -> None:
         self.bytes_sent += len(chunk)
@@ -43,7 +47,14 @@ class StreamUsageCollector:
             return
         if line.startswith("data:"):
             line = line[5:].strip()
-        if not line or line == "[DONE]" or not line.startswith("{"):
+        if not line:
+            return
+        if line == "[DONE]":
+            if self.terminal_status != "failed":
+                self.terminal_status = "completed"
+                self.terminal_evidence = "openai_sse_done"
+            return
+        if not line.startswith("{"):
             return
         try:
             payload = json.loads(line)
@@ -51,6 +62,19 @@ class StreamUsageCollector:
             return
         if not isinstance(payload, dict):
             return
+        # OpenAI Responses emits a typed terminal rather than requiring
+        # [DONE]. Only protocol terminal markers may prove stream completion.
+        # A clean TCP EOF or HTTP 200 cannot: providers can truncate a stream.
+        kind = payload.get("type")
+        if kind == "response.completed" and self.terminal_status != "failed":
+            self.terminal_status = "completed"
+            self.terminal_evidence = "responses_completed"
+        elif kind in {"response.failed", "response.incomplete"}:
+            self.terminal_status = "failed"
+            self.terminal_evidence = (
+                "responses_failed" if kind == "response.failed"
+                else "responses_incomplete"
+            )
         candidates = [payload.get("usage")]
         response = payload.get("response")
         if isinstance(response, dict):
@@ -117,19 +141,30 @@ def _honest_estimate(estimate: Any, usage: dict[str, int]) -> Any:
     )
 
 
+def _route_config_identity(value: Any) -> str | None:
+    """A planned config ID, not attestation from the running model process."""
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) else None
+
+
 def _enqueue_lifecycle_event(
     state: Any,
     request: Any,
     *,
     provider: str,
     model: str,
+    selected_candidate: Any,
     status: str,
     usage_status: str,
     collector: StreamUsageCollector,
     latency_ms: int,
     error: BaseException | None,
 ) -> None:
-    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    # The incoming request's metadata is not model-execution evidence:
+    # callers can supply runtime_instance_id, model_instance_id and claim_id.
+    # The route candidate comes from the router's own configuration, though
+    # it is still only planned selection, not a provider-attested process ID.
+    chosen_provider = selected_candidate.provider
+    chosen_model = selected_candidate.model
     ensure_event_outbox(state).enqueue(
         OutboxEvent(
             event_type=f"router.stream.{status}",
@@ -137,16 +172,23 @@ def _enqueue_lifecycle_event(
             payload={
                 "request_id": request.request_id,
                 "task_id": getattr(request, "task_id", None),
-                "claim_id": (
-                    metadata.get("assistx_executor", {}).get("claim_id")
-                    if isinstance(metadata.get("assistx_executor"), dict)
-                    else None
-                ),
+                # TODO: link a claim only after executor-auth supplies an
+                # independently verified, server-bound receipt. A caller's
+                # assistx_executor.claim_id does NOT prove authorization.
+                "authenticated_claim_binding": False,
+                "claim_id": None,  # retained schema field, NEVER caller's claim
                 "provider": provider,
                 "model": model,
                 "status": status,
                 "acceptance_state": (
                     "completed" if status == "completed" else "possibly_accepted"
+                ),
+                # Whitelisted protocol evidence only; no content or secrets.
+                # EOF after HTTP headers alone must never mean model completion.
+                "terminal_evidence": (
+                    "client_cancelled" if status == "cancelled"
+                    else "transport_exception" if status == "failed"
+                    else collector.terminal_evidence or "eof_without_terminal"
                 ),
                 "usage_status": usage_status,
                 "usage": collector.usage,
@@ -154,12 +196,20 @@ def _enqueue_lifecycle_event(
                 "chunks_sent": collector.chunks_sent,
                 "latency_ms": latency_ms,
                 "error_type": type(error).__name__ if error else None,
-                "error_message": str(error)[:1000] if error else None,
-                "runtime_projection_generation": metadata.get(
-                    "runtime_projection_generation"
+                # Raw exception text may contain upstream response bodies,
+                # URLs or API credentials: never publish in shared outbox.
+                "error_message": None,
+                "runtime_projection_generation": None,
+                "runtime_instance_id": _route_config_identity(
+                    getattr(chosen_provider, "runtime_instance_id", None)
                 ),
-                "runtime_instance_id": metadata.get("runtime_instance_id"),
-                "model_instance_id": metadata.get("model_instance_id"),
+                "model_instance_id": _route_config_identity(
+                    getattr(chosen_model, "model_instance_id", None)
+                ),
+                "node_id": _route_config_identity(
+                    getattr(chosen_provider, "node_id", None)
+                ),
+                "instance_identity_source": "configured_route_not_runtime_attestation",
             },
         )
     )
@@ -317,9 +367,10 @@ def install_stream_lifecycle(main_module: Any) -> None:
             record_error: Exception | None
             if status == "cancelled":
                 record_error = StreamCancelledError("client cancelled response stream")
-            elif status == "failed":
+            elif status in {"failed", "incomplete"}:
                 record_error = (
-                    error if isinstance(error, Exception) else RuntimeError(str(error))
+                    error if isinstance(error, Exception)
+                    else RuntimeError("provider_stream_unverified_or_incomplete")
                 )
             else:
                 record_error = None
@@ -344,6 +395,7 @@ def install_stream_lifecycle(main_module: Any) -> None:
                 request,
                 provider=response.provider,
                 model=response.model,
+                selected_candidate=candidate,
                 status=status,
                 usage_status=usage_status,
                 collector=collector,
@@ -358,19 +410,37 @@ def install_stream_lifecycle(main_module: Any) -> None:
                     collector.feed(chunk)
                     yield chunk
                 completed = True
-            except asyncio.CancelledError as exc:
+            except (asyncio.CancelledError, GeneratorExit) as exc:
                 await finalize("cancelled", exc)
                 raise
             except BaseException as exc:
                 await finalize("failed", exc)
                 raise
             finally:
-                if completed:
-                    await finalize("completed")
-                elif not finalized:
-                    await finalize("cancelled")
+                try:
+                    close = getattr(upstream_body, "aclose", None)
+                    if callable(close):
+                        await close()
+                finally:
+                    if completed:
+                        if collector.terminal_status == "completed":
+                            await finalize("completed")
+                        else:
+                            # Iterator EOF without a terminal event is not evidence
+                            # that a shared model completed the requested work.
+                            await finalize("incomplete")
+                    elif not finalized:
+                        await finalize("cancelled")
 
-        response.body = body()
+        async def close_unstarted() -> None:
+            try:
+                close = getattr(upstream_body, "aclose", None)
+                if callable(close):
+                    await close()
+            finally:
+                await finalize("cancelled")
+
+        response.body = CloseAwareStream(body(), close_unstarted)
         return response
 
     def record_usage(
