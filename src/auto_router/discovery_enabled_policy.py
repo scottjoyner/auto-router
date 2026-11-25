@@ -55,7 +55,8 @@ def install_enabled_discovery_policy() -> None:
             )
 
         providers: list[dict[str, Any]] = []
-        node_ids: set[str] = set()
+        # Multiple named runtimes may share a physical node_id. The provider
+        # name, not the hardware name, is the unique serving-lane identity.
         provider_names: set[str] = set()
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
@@ -83,14 +84,9 @@ def install_enabled_discovery_policy() -> None:
                 raise discovery.DiscoveryConfigError(
                     f"duplicate LM Studio provider name {name!r}"
                 )
-            if node_id in node_ids:
-                raise discovery.DiscoveryConfigError(
-                    f"duplicate LM Studio node_id {node_id!r}"
-                )
             discovery._validate_base_url(base_url, provider_name=name)
             configured_models, aliases = discovery._configured_inventory(row)
             provider_names.add(name)
-            node_ids.add(node_id)
             providers.append(
                 {
                     **row,

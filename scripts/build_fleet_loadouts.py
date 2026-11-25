@@ -603,6 +603,18 @@ def _validate_snapshot_for_persistence(
     *,
     allow_empty_snapshot: bool,
 ) -> None:
+    # Discovery is lane-scoped, but the current Neo4j FleetNodeState identity
+    # is *physical node name*. Two lanes on one host would produce identical
+    # observation IDs and conflicting graph MERGEs. Refuse graph publication
+    # until a separately reviewed lane-aware reconciliation is implemented.
+    # This identity check cannot be overridden by --allow-empty-snapshot.
+    names = [str(row.get("name")) for row in node_rows if row.get("name")]
+    duplicates = sorted(name for name in set(names) if names.count(name) > 1)
+    if duplicates:
+        raise UnsafeFleetSnapshotError(
+            "multi-lane discovery needs lane-aware graph reconciliation; "
+            "refusing duplicate physical node identities: " + ", ".join(duplicates)
+        )
     if allow_empty_snapshot:
         return
     if not node_rows:

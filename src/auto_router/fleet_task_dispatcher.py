@@ -177,7 +177,9 @@ def _provider_rows(path: Path = DEFAULT_PROVIDER_CONFIG) -> list[dict[str, Any]]
         raise DiscoveryConfigError(f"provider registry {path} must contain a providers list")
 
     providers: list[dict[str, Any]] = []
-    node_ids: set[str] = set()
+    # Physical hosts can legitimately serve multiple independent inference
+    # providers (separate llama.cpp ports, models, and runtime instances).
+    # Only provider names, not physical node IDs, identify unique lanes.
     provider_names: set[str] = set()
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -193,12 +195,9 @@ def _provider_rows(path: Path = DEFAULT_PROVIDER_CONFIG) -> list[dict[str, Any]]
             )
         if name in provider_names:
             raise DiscoveryConfigError(f"duplicate LM Studio provider name {name!r}")
-        if node_id in node_ids:
-            raise DiscoveryConfigError(f"duplicate LM Studio node_id {node_id!r}")
         _validate_base_url(base_url, provider_name=name)
         configured_models, aliases = _configured_inventory(row)
         provider_names.add(name)
-        node_ids.add(node_id)
         providers.append(
             {
                 **row,
