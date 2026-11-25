@@ -40,7 +40,7 @@ from auto_router.memory_routes import register_memory_routes
 from auto_router.models import ProviderCandidate, ProviderResponse, RouterRequest
 from auto_router.ops_dashboard_routes import register_ops_dashboard_routes
 from auto_router.otel import init_otel
-from auto_router.providers import ProviderStreamResponse, build_provider
+from auto_router.providers import ProviderError, ProviderStreamResponse, build_provider
 from auto_router.route_event_patch import install_route_event_patch
 from auto_router.runtime_projection_v2 import (
     RuntimeProjectionManager,
@@ -152,6 +152,29 @@ async def _select_provider(
     return selected_provider, selected_candidate, choice
 
 
+def _assert_dispatch_generation(candidate: ProviderCandidate, expected=None):
+    """Reject stale plans/queued leases before sending inference."""
+    try:
+        current = _projection_manager().assert_current_fresh()
+    except RuntimeError:
+        raise ProviderError(
+            "runtime projection absent or expired", status_code=503, retryable=True
+        ) from None
+    if expected is not None and current is not expected:
+        raise ProviderError(
+            "runtime projection changed before dispatch", status_code=503, retryable=True
+        )
+    if not any(
+        provider == candidate.provider and candidate.model in provider.models
+        for provider in current.providers.enabled()
+    ):
+        raise ProviderError(
+            "candidate not present in current runtime projection",
+            status_code=503, retryable=True,
+        )
+    return current
+
+
 async def _admitted_dispatch(
     _provider: Any,
     candidate: ProviderCandidate,
@@ -160,13 +183,16 @@ async def _admitted_dispatch(
 ) -> ProviderResponse:
     # No request may acquire capacity from a stale or absent AssistX generation.
     # Existing leases acquired while fresh can still finish and release safely.
-    _projection_manager().assert_current_fresh()
-    lease = await _admission_controller().acquire(candidate, request.priority)
+    generation = _assert_dispatch_generation(candidate)
+    lease = await generation.admission.acquire(candidate, request.priority)
     try:
         # Revalidate after the queue wait so a revoked/expired task cannot consume
         # a model even if it entered admission while its claim was still valid.
+        _assert_dispatch_generation(candidate, generation)
         await assert_executor_claim_current(request, state)
+        _assert_dispatch_generation(candidate, generation)
         provider, selected_candidate, choice = await _select_provider(candidate)
+        _assert_dispatch_generation(candidate, generation)
         _annotate_request_telemetry(request, selected_candidate, choice)
         return await _ORIGINAL_DISPATCH(
             provider,
@@ -206,11 +232,14 @@ async def _admitted_dispatch_stream(
     request: RouterRequest,
     route_plan: Any | None = None,
 ) -> ProviderStreamResponse:
-    _projection_manager().assert_current_fresh()
-    lease = await _admission_controller().acquire(candidate, request.priority)
+    generation = _assert_dispatch_generation(candidate)
+    lease = await generation.admission.acquire(candidate, request.priority)
     try:
+        _assert_dispatch_generation(candidate, generation)
         await assert_executor_claim_current(request, state)
+        _assert_dispatch_generation(candidate, generation)
         provider, selected_candidate, choice = await _select_provider(candidate)
+        _assert_dispatch_generation(candidate, generation)
         _annotate_request_telemetry(request, selected_candidate, choice)
         response = await _ORIGINAL_DISPATCH_STREAM(
             provider,
