@@ -161,4 +161,5 @@ async def test_close_before_first_read_closes_http_resources(provider_kind,monke
     await response.body.aclose()
     assert events[-2:]==["http_context_exited","http_client_closed"]
     assert events.count("http_client_closed")==1
-    with pytest.raises(StopAsyncIteration):await anext(response.body)
+    with pytest.raises(StopAsyncIteration):
+        await anext(response.body)
