@@ -466,3 +466,25 @@ async def test_partial_stream_close_closes_upstream_and_cancels_usage() -> None:
     assert not circuits.failures
     assert not circuits.successes
     assert len(recorded) == 1
+
+
+@pytest.mark.asyncio
+async def test_never_started_stream_close_finalizes_cancelled_accounting():
+    closed=[]
+    class Upstream:
+        def __aiter__(self):return self
+        async def __anext__(self):raise AssertionError("unexpected read")
+        async def aclose(self):closed.append(True)
+    module, estimate, recorded, policy, circuits, quota, idem, outbox = _module(Upstream)
+    request, candidate = _request(), _candidate()
+    owner=module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response=await module._dispatch_stream(None,candidate,request)
+    policy.mark_inflight_end(owner)
+    await response.body.aclose()
+    await response.body.aclose()
+    assert closed==[True]
+    assert policy.active[owner]==0
+    assert len(quota.releases)==1
+    assert len(recorded)==1
+    assert not circuits.successes
