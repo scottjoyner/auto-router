@@ -48,6 +48,7 @@ async def _fake_gateway_status() -> dict[str, object]:
 
 
 def test_health_reports_warning_outbox_pressure_without_degrading(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "_settings", lambda: SimpleNamespace(redis_url=None))
     monkeypatch.setattr(main_module, "build_agentgateway_status", _fake_gateway_status)
     monkeypatch.setattr(
         main_module,
@@ -109,6 +110,7 @@ def _health_state(**overrides) -> SimpleNamespace:
 
 
 def test_health_reports_redis_fallback_instead_of_not_configured(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "_settings", lambda: SimpleNamespace(redis_url="redis://fixture"))
     monkeypatch.setattr(main_module, "build_agentgateway_status", _fake_gateway_status)
     reason = "Redis did not become ready within 120s (4 attempt(s))"
     quota = InMemoryQuotaManager(redis_fallback_reason=reason, redis_fallback_attempts=4)
@@ -119,9 +121,12 @@ def test_health_reports_redis_fallback_instead_of_not_configured(monkeypatch) ->
     assert result["deps"]["redis"]["status"] == "fallback_in_memory"
     assert result["deps"]["redis"]["detail"] == reason
     assert result["quota_backend"] == "InMemoryQuotaManager"
+    assert result["ok"] is False
+    assert result["status"] == "degraded"
 
 
 def test_health_keeps_not_configured_when_no_redis_was_configured(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "_settings", lambda: SimpleNamespace(redis_url=None))
     monkeypatch.setattr(main_module, "build_agentgateway_status", _fake_gateway_status)
     monkeypatch.setattr(main_module, "state", _health_state(quota=InMemoryQuotaManager()))
 
