@@ -2,6 +2,8 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 import auto_router.quota as quota_module
 from auto_router.models import ModelConfig, ProviderConfig
 from auto_router.quota import InMemoryQuotaManager, RedisQuotaManager, build_quota_manager
@@ -98,8 +100,7 @@ def test_redis_loading_transient_recovers_to_redis_backend(monkeypatch, caplog) 
     assert any("LOADING" in record.getMessage() for record in caplog.records)
 
 
-def test_redis_permanent_failure_falls_back_with_warning_and_flag(monkeypatch, caplog) -> None:
-    """Permanent LOADING/outage still uses the safe in-memory fallback, visibly."""
+def test_redis_permanent_failure_refuses_fallback_after_bounded_retries(monkeypatch, caplog) -> None:
     loading_error = RuntimeError("LOADING Redis is loading the dataset in memory")
     from_url = MagicMock(side_effect=loading_error)
     monkeypatch.setattr(quota_module, "redis_lib", _fake_redis_module(from_url))
@@ -111,35 +112,33 @@ def test_redis_permanent_failure_falls_back_with_warning_and_flag(monkeypatch, c
         clock.sleep(delay)
 
     with caplog.at_level(logging.WARNING, logger=quota_module.logger.name):
-        quota = build_quota_manager(
-            "redis://redis:6379/0",
-            startup_retry_seconds=2,
-            sleep=sleep,
-            clock=clock,
-        )
+        with pytest.raises(RuntimeError, match="refusing in-memory fallback") as error:
+            build_quota_manager(
+                "redis://redis:6379/0",
+                startup_retry_seconds=2,
+                sleep=sleep,
+                clock=clock,
+            )
 
-    assert isinstance(quota, InMemoryQuotaManager)
-    assert quota.redis_fallback is True
-    assert "LOADING" in quota.redis_fallback_reason
-    assert quota.redis_fallback_attempts == 4
+    assert isinstance(error.value.__cause__, quota_module.RedisStartupError)
+    assert error.value.__cause__.attempts == 4
     assert sleeps == [0.5, 1.0, 0.5]
     assert from_url.call_count == 4
-    assert any("in-memory fallback" in record.getMessage().lower() for record in caplog.records)
 
 
-def test_unexpected_startup_exception_is_recorded_not_silently_swallowed(monkeypatch, caplog) -> None:
-    """The broad fallback path also logs and records whatever it caught."""
+def test_unexpected_startup_exception_refuses_fallback(monkeypatch) -> None:
     monkeypatch.setattr(quota_module, "redis_lib", _fake_redis_module(MagicMock()))
 
     def boom(*args, **kwargs):
         raise ValueError("unexpected startup failure")
 
     monkeypatch.setattr(quota_module, "RedisQuotaManager", boom)
+    with pytest.raises(RuntimeError, match="refusing in-memory fallback") as error:
+        build_quota_manager("redis://redis:6379/0")
+    assert isinstance(error.value.__cause__, ValueError)
 
-    with caplog.at_level(logging.WARNING, logger=quota_module.logger.name):
-        quota = build_quota_manager("redis://redis:6379/0")
 
-    assert isinstance(quota, InMemoryQuotaManager)
-    assert quota.redis_fallback is True
-    assert "unexpected startup failure" in quota.redis_fallback_reason
-    assert any("in-memory fallback" in record.getMessage().lower() for record in caplog.records)
+def test_configured_redis_requires_client(monkeypatch) -> None:
+    monkeypatch.setattr(quota_module, "redis_lib", None)
+    with pytest.raises(RuntimeError, match="redis client is not installed"):
+        build_quota_manager("redis://redis:6379/0")
