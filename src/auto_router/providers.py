@@ -4,7 +4,8 @@ import email.utils
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -480,7 +481,6 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
         from auto_router.gateway import (
             build_gateway_headers,
             attach_gateway_metadata,
-            strip_gateway_metadata,
             generate_request_id,
         )
         
