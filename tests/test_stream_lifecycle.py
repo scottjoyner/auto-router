@@ -440,3 +440,29 @@ async def test_stream_failure_does_not_export_raw_sensitive_exception() -> None:
     assert payload["error_message"] is None
     assert "sk_PRIVATE_SECRET" not in str(payload)
     assert payload["terminal_evidence"] == "transport_exception"
+
+
+@pytest.mark.asyncio
+async def test_partial_stream_close_closes_upstream_and_cancels_usage() -> None:
+    closed = []
+    async def upstream():
+        try:
+            yield b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+        finally:
+            closed.append(True)
+
+    module, estimate, recorded, policy, circuits, quota, idem, outbox = _module(upstream)
+    request, candidate = _request(), _candidate()
+    owner = module._owner(candidate)
+    policy.mark_inflight_start(owner)
+    response = await module._dispatch_stream(None, candidate, request)
+    policy.mark_inflight_end(owner)
+    await anext(response.body)
+    await response.body.aclose()
+    assert closed == [True]
+    assert policy.active[owner] == 0
+    assert len(quota.releases) == 1
+    assert not circuits.failures
+    assert not circuits.successes
+    assert len(recorded) == 1
