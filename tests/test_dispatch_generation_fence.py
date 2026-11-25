@@ -1,6 +1,5 @@
 """Exercise exact strict dispatch functions without opening network or app state."""
 import ast
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
