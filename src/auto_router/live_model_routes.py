@@ -355,26 +355,29 @@ async def merge_discovered_lmstudio_providers(state: Any, provider_name: str | N
     if registry is None or not hasattr(registry, "providers"):
         return 0
     providers = list(registry.providers)
-    index_by_name = {provider.name.strip().lower(): idx for idx, provider in enumerate(providers)}
+    known_names = {provider.name.strip().lower() for provider in providers}
+    # Discovery is observation, not permission to rewrite configured routing
+    # authority (including disabled status, endpoint, identity or priority).
+    # Known providers keep their configured access paths. An explicit disabled
+    # node or path must not reappear under a new discovery-generated name.
+    disabled_nodes = {p.node_id.strip().lower() for p in providers
+                      if not p.enabled and p.node_id and p.node_id.strip()}
+    disabled_paths = {url.strip().rstrip("/") for p in providers if not p.enabled
+                      for url in [p.base_url, *p.access_urls] if url.strip()}
     changed = 0
     for provider in discovered:
         key = provider.name.strip().lower()
-        if key in index_by_name:
-            idx = index_by_name[key]
-            current = providers[idx]
-            providers[idx] = current.model_copy(
-                update={
-                    "enabled": bool(current.enabled or provider.enabled),
-                    "base_url": provider.base_url or current.base_url,
-                    "node_id": provider.node_id or current.node_id,
-                    "priority": min(getattr(current, "priority", 100), getattr(provider, "priority", 100)),
-                }
-            )
-        else:
-            providers.append(provider)
-            index_by_name[key] = len(providers) - 1
+        node = (provider.node_id or "").strip().lower()
+        paths = {url.strip().rstrip("/") for url in [provider.base_url, *provider.access_urls]
+                 if url.strip()}
+        if (key in known_names or (node and node in disabled_nodes)
+                or paths.intersection(disabled_paths)):
+            continue
+        providers.append(provider)
+        known_names.add(key)
         changed += 1
-    registry.providers = providers
+    if changed:
+        registry.providers = providers
     return changed
 
 
