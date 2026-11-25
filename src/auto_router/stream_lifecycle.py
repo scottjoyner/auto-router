@@ -409,22 +409,27 @@ def install_stream_lifecycle(main_module: Any) -> None:
                     collector.feed(chunk)
                     yield chunk
                 completed = True
-            except asyncio.CancelledError as exc:
+            except (asyncio.CancelledError, GeneratorExit) as exc:
                 await finalize("cancelled", exc)
                 raise
             except BaseException as exc:
                 await finalize("failed", exc)
                 raise
             finally:
-                if completed:
-                    if collector.terminal_status == "completed":
-                        await finalize("completed")
-                    else:
-                        # Iterator EOF without a terminal event is not evidence
-                        # that a shared model completed the requested work.
-                        await finalize("incomplete")
-                elif not finalized:
-                    await finalize("cancelled")
+                try:
+                    close = getattr(upstream_body, "aclose", None)
+                    if callable(close):
+                        await close()
+                finally:
+                    if completed:
+                        if collector.terminal_status == "completed":
+                            await finalize("completed")
+                        else:
+                            # Iterator EOF without a terminal event is not evidence
+                            # that a shared model completed the requested work.
+                            await finalize("incomplete")
+                    elif not finalized:
+                        await finalize("cancelled")
 
         response.body = body()
         return response
