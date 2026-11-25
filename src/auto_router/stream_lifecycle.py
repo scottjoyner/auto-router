@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+from auto_router.close_aware_stream import CloseAwareStream
 from auto_router.event_outbox import OutboxEvent
 from auto_router.providers import ProviderError, ProviderStreamResponse
 from auto_router.route_events import ensure_event_outbox
@@ -409,24 +410,37 @@ def install_stream_lifecycle(main_module: Any) -> None:
                     collector.feed(chunk)
                     yield chunk
                 completed = True
-            except asyncio.CancelledError as exc:
+            except (asyncio.CancelledError, GeneratorExit) as exc:
                 await finalize("cancelled", exc)
                 raise
             except BaseException as exc:
                 await finalize("failed", exc)
                 raise
             finally:
-                if completed:
-                    if collector.terminal_status == "completed":
-                        await finalize("completed")
-                    else:
-                        # Iterator EOF without a terminal event is not evidence
-                        # that a shared model completed the requested work.
-                        await finalize("incomplete")
-                elif not finalized:
-                    await finalize("cancelled")
+                try:
+                    close = getattr(upstream_body, "aclose", None)
+                    if callable(close):
+                        await close()
+                finally:
+                    if completed:
+                        if collector.terminal_status == "completed":
+                            await finalize("completed")
+                        else:
+                            # Iterator EOF without a terminal event is not evidence
+                            # that a shared model completed the requested work.
+                            await finalize("incomplete")
+                    elif not finalized:
+                        await finalize("cancelled")
 
-        response.body = body()
+        async def close_unstarted() -> None:
+            try:
+                close = getattr(upstream_body, "aclose", None)
+                if callable(close):
+                    await close()
+            finally:
+                await finalize("cancelled")
+
+        response.body = CloseAwareStream(body(), close_unstarted)
         return response
 
     def record_usage(

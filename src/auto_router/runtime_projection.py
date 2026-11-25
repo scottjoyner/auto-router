@@ -420,6 +420,7 @@ class RuntimeProjectionManager:
                     raise ValueError(
                         "runtime projection generation must advance exactly by one"
                     )
+                admission.inherit_retired_capacity(self.current.admission)
                 self.retired.append(self.current)
 
             # Existing leases retain their exact old gate object. New requests see

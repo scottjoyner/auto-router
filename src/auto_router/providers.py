@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+from auto_router.close_aware_stream import CloseAwareStream
 from auto_router.models import ProviderConfig, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.provider_credential_file import ProviderCredentialHold, read_provider_token_file
 
@@ -200,6 +201,12 @@ class OpenAICompatibleProvider:
                 retry_after_seconds=parse_retry_after(response.headers),
             )
 
+        async def close_unstarted() -> None:
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            finally:
+                await client.aclose()
+
         async def body_stream() -> AsyncIterator[bytes]:
             # A client can close this generator mid-stream on revocation.
             # Explicitly close the nested raw iterator before the HTTP
@@ -222,7 +229,7 @@ class OpenAICompatibleProvider:
                         await client.aclose()
 
         headers = {key.lower(): value for key, value in response.headers.items()}
-        return ProviderStreamResponse(provider=self.name, model=provider_model, status_code=response.status_code, headers=headers, body=body_stream())
+        return ProviderStreamResponse(provider=self.name, model=provider_model, status_code=response.status_code, headers=headers, body=CloseAwareStream(body_stream(), close_unstarted))
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -670,6 +677,12 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
                 retryable=retryable,
             )
         
+        async def close_unstarted() -> None:
+            try:
+                await stream_cm.__aexit__(None, None, None)
+            finally:
+                await client.aclose()
+
         async def body_stream() -> AsyncIterator[bytes]:
             # A client can close this generator mid-stream on revocation.
             # Explicitly close the nested raw iterator before the HTTP
@@ -697,7 +710,7 @@ class AgentGatewayProviderAdapter(OpenAICompatibleProvider):
             model=provider_model,
             status_code=response.status_code,
             headers=headers_dict,
-            body=body_stream(),
+            body=CloseAwareStream(body_stream(), close_unstarted),
         )
 
     async def responses(
