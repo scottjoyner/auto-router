@@ -41,13 +41,15 @@ class _QueuedWaiter:
 class RuntimeAdmissionLease:
     def __init__(self, gate: _RuntimeGate) -> None:
         self._gate = gate
-        self._released = False
+        self._release_task: asyncio.Task[None] | None = None
 
     async def release(self) -> None:
-        if self._released:
-            return
-        self._released = True
-        await self._gate.release()
+        # One release operation per lease. Shield it so cancelling a caller
+        # while the gate lock is contended cannot strand the occupied slot.
+        # Other callers await the same task rather than decrementing twice.
+        if self._release_task is None:
+            self._release_task = asyncio.create_task(self._gate.release())
+        await asyncio.shield(self._release_task)
 
     async def __aenter__(self) -> RuntimeAdmissionLease:
         return self
