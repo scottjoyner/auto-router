@@ -413,7 +413,7 @@ async def health() -> dict[str, Any]:
     else:
         redis_ok = "not_configured"
     # Configured quota must remain Redis-backed and reachable.
-    if _settings().redis_url:
+    if get_settings().redis_url:
         overall_ok = overall_ok and state.quota_backend == "RedisQuotaManager" and redis_ok == "ok"
     redis_dep: dict[str, Any] = {"status": redis_ok}
     if redis_detail:
