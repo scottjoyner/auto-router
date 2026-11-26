@@ -46,7 +46,7 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
         raise ExecutorClaimFenceError("executor claim identity is incomplete")
 
     base_url = os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL", "").strip().rstrip("/")
-    service_token = os.getenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", "").strip()
+    service_token = os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN", "").strip()
     if not base_url or not service_token:
         raise ExecutorClaimFenceError("AssistX executor claim-status service is not configured")
     timeout = max(0.2, float(os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_TIMEOUT_SECONDS", "2")))
