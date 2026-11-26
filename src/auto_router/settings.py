@@ -19,6 +19,18 @@ def validate_database_placement(
     """
     root = os.path.realpath(expected_root)
     prefix = "sqlite:///"
+    if required and not test_context:
+        # All SQLite stores must resolve the same file. Some strip the prefix,
+        # while others parse a URI; relative and decorated URLs can diverge.
+        absolute_prefix = "sqlite:////"
+        if (
+            not configured_url.startswith(absolute_prefix)
+            or any(ch in configured_url for ch in ("?", "#", ";", "\x00", "\n", "\r"))
+        ):
+            raise ValueError(
+                "Persistent database requires a canonical absolute SQLite URL; "
+                "refusing container writable layer or ambiguous database placement"
+            )
     if not configured_url.startswith(prefix):
         return {
             "configured_url": configured_url,

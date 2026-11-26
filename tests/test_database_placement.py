@@ -77,3 +77,35 @@ def test_guard_rejects_symlink_escape_and_root_itself(tmp_path):
     for path in (root / "escape" / "router.sqlite3", root):
         with pytest.raises(ValueError, match="container writable layer"):
             validate_database_placement("sqlite:///" + str(path), expected_root=str(root), required=True)
+
+
+def test_production_rejects_unsupported_database_url(tmp_path):
+    with pytest.raises(ValueError, match="canonical absolute SQLite"):
+        validate_database_placement("postgresql://example.invalid/db", expected_root=str(tmp_path), required=True)
+
+
+def test_production_rejects_relative_even_if_under_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="canonical absolute SQLite"):
+        validate_database_placement("sqlite:///router.sqlite3", expected_root=str(tmp_path), required=True)
+
+
+@pytest.mark.parametrize("suffix", ["?mode=ro", "#fragment", ";params"])
+def test_production_rejects_ambiguous_url_components(tmp_path, suffix):
+    with pytest.raises(ValueError, match="canonical absolute SQLite"):
+        validate_database_placement("sqlite:///" + str(tmp_path / "router.sqlite3") + suffix, expected_root=str(tmp_path), required=True)
+
+
+def test_canonical_absolute_path_agrees_across_all_stores(tmp_path):
+    from auto_router.ledger import UsageLedger
+    from auto_router.event_outbox import EventOutbox
+    from auto_router.memory_store import MemoryStore
+    from auto_router.model_registry import ModelRegistryStore
+    from auto_router.request_idempotency import _database_path
+    from auto_router.service_store import ServiceStatusStore
+    from auto_router.signal_registry import ContextSignalStore
+    target=tmp_path / "router.sqlite3"
+    url="sqlite:///"+str(target)
+    expected=validate_database_placement(url,expected_root=str(tmp_path),required=True)["resolved_path"]
+    for path in (UsageLedger._path_from_url(None,url), EventOutbox._path_from_url(None,url), MemoryStore._path_from_url(url), ModelRegistryStore._path_from_url(None,url), _database_path(url), ServiceStatusStore._path_from_url(None,url), ContextSignalStore._path_from_url(None,url)):
+        assert str(path.resolve())==expected
