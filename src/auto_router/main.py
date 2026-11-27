@@ -36,7 +36,7 @@ from auto_router.model_registry import ModelRegistryStore
 from auto_router.provider_circuit_diagnostics import annotate_health_with_open_model_circuits
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
-from auto_router.policy import PolicyEngine
+from auto_router.policy import PolicyEngine, mobile_artifact_matches, mobile_artifact_request
 from auto_router.admission import RuntimeAdmissionError, RuntimeAdmissionQueueFull
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
@@ -1097,6 +1097,8 @@ def _candidate_allowed(request: RouterRequest, candidate: ProviderCandidate, con
     if context_provider and context_provider.is_blocked:
         return False
     lane = _lane_for_provider(candidate.provider, context_provider)
+    if mobile_artifact_request(request):
+        return lane == "local" and mobile_artifact_matches(request, candidate.model)
     if request.local_only or request.priority == Priority.local_only or request.allow_cloud is False or _request_privacy_forces_local(request.metadata, request.model):
         return lane == "local"
     return True
