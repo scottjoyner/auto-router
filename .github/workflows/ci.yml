@@ -308,6 +308,28 @@ jobs:
           assert not missing, f"unguarded mounted admin routes: {missing}"
           print(f"strict_live_admin_routes_explicitly_authenticated={len(admin)}")
           PY
+      - name: Verify agent job GET is authorized on actual packaged strict-live app
+        run: |
+          set -euo pipefail
+          for suffix in "" "/artifacts"; do
+            status="$(curl --noproxy '*' -sS -o /dev/null --max-time 5 -w '%{http_code}' \
+              "http://127.0.0.1:8088/jobs/agent/synthetic-nonexistent-job${suffix}")"
+            test "$status" = "401"
+          done
+          docker compose -f docker-compose.yml -f docker-compose.integration.yml exec -T llm-router python - <<'PY'
+          from fastapi.routing import APIRoute
+          from auto_router.secure_live import app
+          from auto_router.security import require_admin
+          targets = {"/jobs/agent/{job_id}", "/jobs/agent/{job_id}/artifacts"}
+          records = [r for r in app.router.routes
+                     if isinstance(r, APIRoute) and "GET" in r.methods
+                     and r.path in targets]
+          assert {r.path for r in records} == targets
+          assert len(records) == len(targets)
+          for route in records:
+              assert any(dep.call is require_admin for dep in route.dependant.dependencies), route.path
+          print("packaged_agent_job_read_authorization=2/2")
+          PY
       - name: Capture diagnostics on failure
         if: failure()
         run: |
