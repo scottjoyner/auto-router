@@ -360,3 +360,35 @@ async def test_strict_owner_wrong_principal_still_denied_before_global_hold(
     )
     assert sent[0]["status"] == 401
     assert not forwarded
+
+
+@pytest.mark.asyncio
+async def test_signed_task_lineage_reaches_route_and_execution_events(signing_key):
+    from auto_router.main import _router_request
+    from auto_router.route_events import enqueue_route_decision_event, enqueue_route_execution_event
+    from auto_router.event_outbox import EventOutbox
+    sent, captured = await _invoke(ExecutorInferenceAuthMiddleware, _token(signing_key), {
+        "model": "auto/code", "max_tokens": 32, "task_id": "untrusted-top-task",
+        "agent_run_id": "untrusted-top-run", "metadata": {
+            "task_id": "untrusted-metadata-task", "agent": "untrusted-agent",
+            "agent_run_id": "untrusted-run", "claim_id": "untrusted-claim",
+            "assistx_executor": {"task_id": "untrusted-nested-task"},
+        },
+    })
+    assert sent[0]["status"] == 204
+    assert captured["task_id"] == "task-1"
+    assert captured["metadata"]["task_id"] == "task-1"
+    assert captured["metadata"]["agent"] == "hermes-test"
+    assert "assistx_service" not in captured["metadata"]
+    request = _router_request("chat_completions", captured)
+    assert request.task_id == "task-1" and request.agent_run_id is None
+    assert request.metadata["assistx_executor"]["claim_id"] == "claim-1"
+    state = SimpleNamespace(event_outbox=EventOutbox("sqlite:///:memory:"))
+    candidate = SimpleNamespace(provider=SimpleNamespace(name="synthetic"), model=SimpleNamespace(alias="synthetic",provider_model="synthetic"), score=1, reason="test")
+    enqueue_route_decision_event(state, request, "test", "draft", candidate, [candidate])
+    enqueue_route_execution_event(state, request, "synthetic", "synthetic", "draft", SimpleNamespace(input_tokens=1,total_tokens=2,dimensions={}), 200, 1, usage={"completion_tokens":1})
+    events = state.event_outbox.pending()
+    assert len(events) == 2
+    assert {e["payload"]["task_id"] for e in events} == {"task-1"}
+    assert all(e["payload"]["agent_run_id"] is None for e in events)
+    assert all("untrusted" not in json.dumps(e["payload"]) and "token_jti" not in e["payload"] for e in events)

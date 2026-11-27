@@ -37,7 +37,7 @@ from auto_router.provider_circuit_diagnostics import annotate_health_with_open_m
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
-from auto_router.admission import RuntimeAdmissionError
+from auto_router.admission import RuntimeAdmissionError, RuntimeAdmissionQueueFull
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
@@ -439,6 +439,8 @@ async def health() -> dict[str, Any]:
         "model_registry_error_providers": model_registry_summary.get("error_providers", []) if hasattr(state, "model_registry") else [],
         "running_local_nodes": state.context.running_local_node_names(),
         "agent_workers_configured": len(state.agents.agent_workers),
+        "runtime_admission_rejections": getattr(state, "runtime_admission_rejections", 0),
+        "runtime_admission_queue_rejections": getattr(state, "runtime_admission_queue_rejections", 0),
         "open_circuits": len(open_circuits),
         "time": int(time.time()),
         "gateway": gateway_status,
@@ -771,6 +773,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     attempts = 0
     timed_out = False
     errors: list[str] = []
+    admission_queue_rejections = 0
     for stage in plan.stages:
         if not stage.candidates and stage.optional:
             continue
@@ -899,6 +902,9 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 state.policy_engine.mark_inflight_end(owner)
                 await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
                 state.runtime_admission_rejections = getattr(state, "runtime_admission_rejections", 0) + 1
+                if isinstance(exc, RuntimeAdmissionQueueFull):
+                    admission_queue_rejections += 1
+                    state.runtime_admission_queue_rejections = getattr(state, "runtime_admission_queue_rejections", 0) + 1
                 rejection = f"runtime admission unavailable for {owner}"
                 stage_rejections.append(rejection)
                 errors.append(rejection)
@@ -951,6 +957,8 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
             status_code=504,
             detail={"error": "request deadline exceeded; too many dead/hung nodes", "details": errors},
         )
+    if admission_queue_rejections and admission_queue_rejections == attempts:
+        raise HTTPException(status_code=429, detail={"error": "runtime admission capacity unavailable"}, headers={"Retry-After": "2"})
     raise HTTPException(status_code=503, detail={"error": "all providers failed", "details": errors})
 
 

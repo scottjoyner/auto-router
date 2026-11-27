@@ -310,8 +310,19 @@ class ExecutorInferenceAuthMiddleware:
             metadata = payload.get("metadata")
             if not isinstance(metadata, dict):
                 metadata = {}
+            # Event attribution is derived from the verified token rather than
+            # caller-supplied legacy task and agent fields.
+            metadata = {k: v for k, v in metadata.items() if k not in {
+                "assistx_service", "assistx_executor", "task_id", "claim_id",
+                "agent", "executor", "agent_run_id",
+            }}
+            for key in ("task_id", "claim_id", "agent_run_id", "agent", "executor", "assistx_service", "assistx_executor"):
+                payload.pop(key, None)
+            payload["task_id"] = claims["task_id"]
             payload["metadata"] = {
                 **metadata,
+                "task_id": claims["task_id"],
+                "agent": claims["agent_id"],
                 "assistx_executor": {
                     "task_id": claims["task_id"],
                     "claim_id": claims["claim_id"],
