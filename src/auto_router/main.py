@@ -408,6 +408,17 @@ async def health() -> dict[str, Any]:
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
     overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
+    # The strict-offline entrypoint cannot dispatch without a fresh signed
+    # runtime generation. Context freshness is a separate contract.
+    manager = getattr(state, "runtime_projection_manager", None)
+    runtime_projection = {"required": manager is not None, "fresh": None}
+    if manager is not None:
+        try:
+            current = manager.current
+            runtime_projection["fresh"] = bool(current is not None and current.is_fresh())
+        except Exception:
+            runtime_projection["fresh"] = False
+        overall_ok = overall_ok and runtime_projection["fresh"] is True
     redis_ok = "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
@@ -427,6 +438,8 @@ async def health() -> dict[str, Any]:
         "context_revision": state.context.revision,
         "context_source": state.context.source,
         "context_projection_status": context_projection["status"],
+        "runtime_projection_required": runtime_projection["required"],
+        "runtime_projection_fresh": runtime_projection["fresh"],
         "context_projection_degraded": context_projection["degraded"],
         "context_projection_error": context_projection["error"],
         "quota_backend": state.quota_backend,
