@@ -13,6 +13,10 @@ class RuntimeAdmissionError(ProviderError):
     """Local pre-dispatch capacity rejection, not an upstream provider failure."""
 
 
+class RuntimeAdmissionQueueFull(RuntimeAdmissionError):
+    """Local runtime queue is saturated before provider dispatch."""
+
+
 _PRIORITY_RANK: dict[Priority, int] = {
     Priority.critical: 0,
     Priority.repo_critical: 1,
@@ -97,7 +101,7 @@ class _RuntimeGate:
 
             if self.config.queue_limit <= 0 or self.queued >= self.config.queue_limit:
                 self.rejected_total += 1
-                raise RuntimeAdmissionError(
+                raise RuntimeAdmissionQueueFull(
                     f"runtime admission queue full for {runtime_id}",
                     status_code=429,
                     retryable=True,
