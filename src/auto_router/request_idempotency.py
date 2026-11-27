@@ -236,7 +236,7 @@ class RequestIdempotencyLedger:
             if current == "completed" and state != "completed":
                 conn.rollback()
                 return
-            if current == "possibly_accepted" and state in {"failed", "cancelled"}:
+            if current == "possibly_accepted" and state not in {"possibly_accepted", "completed"}:
                 conn.rollback()
                 return
             conn.execute(
