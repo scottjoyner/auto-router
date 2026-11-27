@@ -9,6 +9,10 @@ from auto_router.models import Priority, ProviderCandidate, ProviderConfig
 from auto_router.providers import ProviderError
 
 
+class RuntimeAdmissionQueueFull(ProviderError):
+    """Local admission rejected before any provider network dispatch."""
+
+
 _PRIORITY_RANK: dict[Priority, int] = {
     Priority.critical: 0,
     Priority.repo_critical: 1,
@@ -93,7 +97,7 @@ class _RuntimeGate:
 
             if self.config.queue_limit <= 0 or self.queued >= self.config.queue_limit:
                 self.rejected_total += 1
-                raise ProviderError(
+                raise RuntimeAdmissionQueueFull(
                     f"runtime admission queue full for {runtime_id}",
                     status_code=429,
                     retryable=True,
