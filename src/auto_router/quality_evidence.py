@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any, Iterable
@@ -31,8 +32,19 @@ def outcome_quality(payload: dict[str, Any]) -> tuple[float, list[str]]:
     reasons: list[str] = []
     explicit = metadata.get("quality_score")
     if explicit is not None:
-        score = max(0.0, min(1.0, float(explicit)))
-        reasons.append("explicit evaluator score")
+        try:
+            value = float(explicit)
+        except (TypeError, ValueError):
+            value = float("nan")
+        # min()/max() do not tame NaN: max(0.0, min(1.0, nan)) == 1.0.
+        # A non-finite or non-numeric evaluator score must never be admitted
+        # as a perfect quality observation for model ranking / qualification.
+        if not math.isfinite(value):
+            score = 0.0
+            reasons.append("invalid evaluator score (non-finite)")
+        else:
+            score = max(0.0, min(1.0, value))
+            reasons.append("explicit evaluator score")
     else:
         score = 1.0 if payload.get("success") else 0.15
         reasons.append("execution success proxy")
