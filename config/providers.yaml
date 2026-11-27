@@ -168,3 +168,28 @@ providers:
         provider_model: local/default
         capabilities: [chat, streaming, code, json, local_only]
         context_window: 32768
+
+  # Live-verified 2026-11-27: RyzenAI NPU on xwing (~30 tok/s). Short-task only.
+  # Low-priority auxiliary tier: no reasoning/large_context/code capability and no
+  # full_agent role, so reasoning/coding profiles never default to this runtime.
+  - name: npu-xwing-qwen-0.5b
+    type: openai_compatible
+    node_id: xwing
+    runtime_instance_id: xwing-npu-qwen2.5-0.5b
+    runtime_kind: openai_compatible
+    enabled: true
+    base_url: ${XWING_NPU_BASE_URL:-http://127.0.0.1:1236/v1}
+    priority: 250
+    quota_class: local
+    parallel_slots: 1
+    queue_limit: 0
+    queue_timeout_seconds: 0
+    models:
+      - alias: local/xwing-npu-fast
+        provider_model: xwing-npu-qwen2.5-0.5b
+        capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, classification, compression, memory_constrained, low_concurrency]
+        context_window: 32768
+        max_concurrency: 1
+        recommended_use: [compression, classification, extraction, quick_iteration]
+        worker_mode: auxiliary
+        routing_roles: [auxiliary_llm, classification, compression, extraction]

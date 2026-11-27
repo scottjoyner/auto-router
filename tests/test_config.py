@@ -41,6 +41,60 @@ def test_macbook_air_provider_registry_includes_live_tailnet_models() -> None:
     assert "refinedtoolcallv5-3b" in model_ids
 
 
+def test_xwing_npu_provider_is_low_priority_short_task_tier() -> None:
+    from auto_router.offline_guard import validate_offline_provider_config
+
+    config_path = Path(__file__).resolve().parents[1] / "config" / "providers.yaml"
+
+    assert validate_offline_provider_config(config_path, env={}) == []
+
+    registry = load_provider_registry(config_path)
+    provider = next(
+        provider for provider in registry.providers if provider.name == "npu-xwing-qwen-0.5b"
+    )
+
+    assert provider.type == "openai_compatible"
+    assert provider.node_id == "xwing"
+    assert provider.enabled is True
+    assert provider.base_url.endswith("127.0.0.1:1236/v1")
+    assert str(provider.quota_class) == "local"
+    assert provider.priority >= 200  # cheap tier: never a default reasoning pick
+    assert provider.parallel_slots == 1
+    assert provider.queue_limit == 0
+    assert [model.provider_model for model in provider.models] == ["xwing-npu-qwen2.5-0.5b"]
+
+    model = provider.models[0]
+    for capability in (
+        "chat",
+        "low_latency",
+        "quick_iteration",
+        "classification",
+        "memory_constrained",
+    ):
+        assert capability in model.capabilities
+    for capability in ("reasoning", "large_context", "code", "hermes_worker"):
+        assert capability not in model.capabilities
+    assert "auxiliary_llm" in model.routing_roles
+    assert "full_agent" not in model.routing_roles
+
+
+def test_xwing_npu_is_excluded_from_reasoning_stage() -> None:
+    from auto_router.models import PolicyStage, RouterRequest, StagePurpose
+    from auto_router.policy import PolicyEngine
+
+    config_root = Path(__file__).resolve().parents[1] / "config"
+    providers = load_provider_registry(config_root / "providers.yaml")
+    policies = load_policy_registry(config_root / "policies.yaml")
+    engine = PolicyEngine(providers, policies, default_profile="interactive_balanced")
+
+    stage = engine._build_stage(
+        PolicyStage(purpose=StagePurpose.refine, required_capabilities={"chat", "reasoning"}),
+        RouterRequest(request_id="reasoning-1", route="chat_completions"),
+    )
+
+    assert all(candidate.provider.name != "npu-xwing-qwen-0.5b" for candidate in stage.candidates)
+
+
 def test_load_policy_registry(tmp_path: Path) -> None:
     config = tmp_path / "policies.yaml"
     config.write_text(
