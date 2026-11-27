@@ -86,17 +86,30 @@ def grade_tool_call_probe(observation: dict[str, Any]) -> dict[str, Any]:
 def build_tool_use_probe_evidence(
     observations: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build the signed-projection evidence block for the five canaries."""
+    """Build the signed-projection evidence block for the five canaries.
+
+    A probe_id may appear only once.  A later row with the same id must never
+    overwrite an earlier verdict: doing so let a passing duplicate launder a
+    failing canary.  Any repeated required id is recorded as a failure instead.
+    """
     results = [grade_tool_call_probe(row) for row in observations]
-    by_id = {row["probe_id"]: row for row in results if row["probe_id"]}
+    by_id: dict[str, dict[str, Any]] = {}
+    duplicate_ids: set[str] = set()
+    for row in results:
+        probe_id = row["probe_id"]
+        if not probe_id:
+            continue
+        if probe_id in by_id:
+            duplicate_ids.add(probe_id)
+        by_id[probe_id] = row
     missing = [probe for probe in REQUIRED_TOOL_CALL_PROBES if probe not in by_id]
     failed = [
         probe for probe in REQUIRED_TOOL_CALL_PROBES
-        if probe in by_id and not by_id[probe]["passed"]
+        if (probe in by_id and not by_id[probe]["passed"]) or probe in duplicate_ids
     ]
     passed = [
         probe for probe in REQUIRED_TOOL_CALL_PROBES
-        if probe in by_id and by_id[probe]["passed"]
+        if probe in by_id and probe not in duplicate_ids and by_id[probe]["passed"]
     ]
     return {
         "schema_version": TOOL_CALL_PROBE_SCHEMA_VERSION,
