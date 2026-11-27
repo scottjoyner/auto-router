@@ -175,3 +175,22 @@ async def test_missing_dedicated_claim_status_credential_does_not_use_legacy_tok
             "task_id":"task-1", "claim_id":"claim-1", "agent_id":"hermes-test", "projection_generation":9
         }), _state())
     assert _Client.observed == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [("projection_generation", "9"), ("projection_generation", 9.5), ("projection_generation", "invalid"), ("lease_expires_at_ts", "9999999999999"), ("lease_expires_at_ts", 9999999999999.5), ("lease_expires_at_ts", []), ("lease_expires_at_ts", True)])
+async def test_malformed_active_authority_reply_fails_typed(field,value):
+    _Client.response = _Response(200, _active_payload(**{field:value}))
+    req = _request(assistx_executor={"task_id":"task-1","claim_id":"claim-1","agent_id":"hermes-test","projection_generation":9})
+    with pytest.raises(claim_fence.ExecutorClaimFenceError):
+        await assert_executor_claim_current(req, _state())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["9", 9.5, "invalid", True])
+async def test_malformed_request_generation_fails_typed_without_network(value):
+    req = _request(assistx_executor={"task_id":"task-1","claim_id":"claim-1","agent_id":"hermes-test","projection_generation":value})
+    _Client.response = _Response(200, _active_payload())
+    with pytest.raises(claim_fence.ExecutorClaimFenceError):
+        await assert_executor_claim_current(req, _state())
+    assert _Client.observed == {}
