@@ -48,6 +48,7 @@ from auto_router.runtime_projection_v2 import (
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.strict_assistx_routes import install_strict_assistx_route_guard
+from auto_router.stream_lifecycle import _transition
 
 _RETIRED_INHERITED_PREFIX = "/jobs/agent"
 
@@ -180,6 +181,7 @@ async def _admitted_dispatch(
         await assert_executor_claim_current(request, state)
         provider, selected_candidate, choice = await _select_provider(candidate)
         _annotate_request_telemetry(request, selected_candidate, choice)
+        _transition(state, request, "upstream_started")
         return await _ORIGINAL_DISPATCH(
             provider,
             selected_candidate,
@@ -213,6 +215,7 @@ async def _admitted_dispatch_stream(
         await assert_executor_claim_current(request, state)
         provider, selected_candidate, choice = await _select_provider(candidate)
         _annotate_request_telemetry(request, selected_candidate, choice)
+        _transition(state, request, "upstream_started")
         response = await _ORIGINAL_DISPATCH_STREAM(
             provider,
             selected_candidate,
