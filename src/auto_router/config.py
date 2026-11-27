@@ -106,6 +106,30 @@ def _graph_object_identifier(item: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _projection_bool(properties: dict[str, Any], key: str, default: bool) -> bool:
+    """Read a boolean from an external graph projection, failing closed.
+
+    Projections arrive from YAML/JSON where a field can be a real bool, a
+    canonical ``"true"``/``"false"`` string, or malformed data. Python's
+    ``bool("false")`` is True, which silently marked an explicitly stopped
+    node as running. Only real bools and canonical strings are accepted;
+    any other present value fails closed. A genuinely absent field keeps
+    the caller's default.
+    """
+    if key not in properties:
+        return bool(default)
+    value = properties[key]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+    return False
+
+
 def _provider_scoped_model_id(provider: str, provider_model: str, fallback: str = "") -> str:
     provider_name = str(provider or "").strip().lower()
     model_name = str(provider_model or "").strip().lower()
@@ -157,7 +181,7 @@ def _graph_node_context(item: dict[str, Any]) -> ContextNode | None:
         lane=lane,
         local=bool(properties.get("local", lane == ExecutionLane.local)),
         can_use_free_api=bool(properties.get("can_use_free_api", lane == ExecutionLane.free_api)),
-        running=bool(properties.get("running", True)),
+        running=_projection_bool(properties, "running", lane == ExecutionLane.local),
         capabilities={str(item) for item in capabilities if item},
         detail=str(properties.get("detail") or properties.get("description") or ""),
     )
