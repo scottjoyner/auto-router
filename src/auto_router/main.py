@@ -37,6 +37,7 @@ from auto_router.provider_circuit_diagnostics import annotate_health_with_open_m
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
+from auto_router.admission import RuntimeAdmissionError
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
@@ -893,6 +894,14 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 payload = _normalize_response_payload(response, stage.purpose.value, plan.profile_name)
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
+            except RuntimeAdmissionError as exc:
+                # Local admission refused capacity before any upstream dispatch.
+                state.policy_engine.mark_inflight_end(owner)
+                await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
+                state.runtime_admission_rejections = getattr(state, "runtime_admission_rejections", 0) + 1
+                rejection = f"runtime admission unavailable for {owner}"
+                stage_rejections.append(rejection)
+                errors.append(rejection)
             except ProviderError as exc:
                 state.policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
