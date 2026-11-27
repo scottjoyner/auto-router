@@ -70,7 +70,16 @@ def dry_run_backlog_selection(
     context: Any | None = None,
     dry_run: bool = True,
 ) -> list[BacklogDecision]:
-    tasks = request.tasks[: request.max_tasks] if request.max_tasks else request.tasks
+    # An explicit non-positive limit means "select none", not "no limit".
+    # A falsy ``0`` (or a negative value) must never silently expand to the
+    # full task list -- that would defeat a caller's capacity/safety ceiling.
+    limit = request.max_tasks
+    if limit is None:
+        tasks = request.tasks
+    elif limit <= 0:
+        tasks = []
+    else:
+        tasks = request.tasks[:limit]
     decisions: list[BacklogDecision] = []
     for task in tasks:
         decision = _decide_task(task, policy_engine=policy_engine, quota=quota)
