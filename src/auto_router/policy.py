@@ -40,6 +40,26 @@ from auto_router.models import (
 )
 
 
+def mobile_artifact_request(request: RouterRequest) -> bool:
+    metadata = request.metadata or {}
+    return any(key in metadata for key in ("assistx_mobile_model_handle", "assistx_artifact_fingerprint"))
+
+
+def mobile_artifact_matches(request: RouterRequest, model: ModelConfig) -> bool:
+    """Mobile metadata only narrows eligible models; it never grants authority."""
+    if not mobile_artifact_request(request):
+        return True
+    metadata = request.metadata or {}
+    handle = metadata.get("assistx_mobile_model_handle")
+    fingerprint = metadata.get("assistx_artifact_fingerprint")
+    if not isinstance(handle, str) or not re.fullmatch(r"model:v1:[0-9a-f]{32}", handle):
+        return False
+    if not isinstance(fingerprint, str) or not fingerprint.strip():
+        return False
+    actual = model.artifact_fingerprint
+    return isinstance(actual, str) and actual.strip().lower() == fingerprint.strip().lower()
+
+
 class PolicyEngine:
     def __init__(
         self,
@@ -123,6 +143,15 @@ class PolicyEngine:
         return self.default_profile
 
     def plan(self, request: RouterRequest) -> ExecutionPlan:
+        if mobile_artifact_request(request):
+            stage = self._build_stage(PolicyStage(
+                purpose=StagePurpose.final,
+                required_capabilities={"chat", "local_only"} | request.required_capabilities,
+                allow_local_fallback=False,
+            ), request)
+            if stage.candidates:
+                self.mark_planned_start(self._owner_str(stage.candidates[0]))
+            return ExecutionPlan(profile_name="mobile_exact_artifact", stages=[stage])
         exact = self._exact_model_plan(request)
         if exact is not None:
             return exact
@@ -188,6 +217,8 @@ class PolicyEngine:
                 policy_stage.required_capabilities, request
             )
             for model in provider.models:
+                if not mobile_artifact_matches(request, model):
+                    continue
                 if not self._model_matches(model, required):
                     continue
                 candidates.append(
@@ -466,7 +497,7 @@ class PolicyEngine:
             return False
         if self._provider_power_blocked(canonical_provider, stage_purpose):
             return False
-        if self._request_requires_local_execution(request):
+        if mobile_artifact_request(request) or self._request_requires_local_execution(request):
             return lane == ExecutionLane.local
         return True
 
