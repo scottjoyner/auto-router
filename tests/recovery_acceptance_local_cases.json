@@ -1,0 +1,9 @@
+{
+  "{\"D1\":\"PRESERVE\",\"D2\":\"REJECT\"}": "SCHEMA_MISMATCH",
+  "{\"D1\":\"PRESERVE\",\"D2\":\"REJECT\",\"D3\":\"\"}": "SCHEMA_MISMATCH",
+  "{\"D1\":\"PRESERVE\",\"D2\":\"REJECT\",\"D4\":\"\"}": "SCHEMA_MISMATCH",
+  "INVALID": "INVALID_JSON",
+  "ERROR": "INVALID_JSON",
+  "UNEXPECTED": "INVALID_JSON",
+  "{ \"D1\": \" preserve \" }": "SEMANTIC_MISMATCH"
+}
