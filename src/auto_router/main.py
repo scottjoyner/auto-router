@@ -38,6 +38,7 @@ from auto_router.signal_registry import ContextSignalStore, provider_health_sign
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine, mobile_artifact_matches, mobile_artifact_request
 from auto_router.admission import RuntimeAdmissionError, RuntimeAdmissionQueueFull
+from auto_router.claim_fence import ExecutorClaimFenceError, ExecutorClaimStatusCoolingDown, ExecutorClaimStatusUnavailable
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
@@ -407,7 +408,9 @@ async def health() -> dict[str, Any]:
     # A live telemetry trickle sits at 'warning' (draining, below the critical
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
-    overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
+    claim_failure_at = getattr(state, "claim_status_last_failure", None)
+    recent_claim_failure = claim_failure_at is not None and time.monotonic() - claim_failure_at < 60
+    overall_ok = not open_circuits and outbox_pressure["level"] != "critical" and not recent_claim_failure
     redis_ok = "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
@@ -442,6 +445,9 @@ async def health() -> dict[str, Any]:
         "runtime_admission_rejections": getattr(state, "runtime_admission_rejections", 0),
         "runtime_admission_queue_rejections": getattr(state, "runtime_admission_queue_rejections", 0),
         "open_circuits": len(open_circuits),
+        "executor_claim_fence_rejections": getattr(state, "claim_fence_rejections", 0),
+        "executor_claim_status_recent_failure": recent_claim_failure,
+        "executor_claim_status_checks_suppressed": getattr(state, "claim_status_checks_suppressed", 0),
         "time": int(time.time()),
         "gateway": gateway_status,
         "assistx_outbox_dispatch": build_outbox_dispatch_status(state),
@@ -897,6 +903,21 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 payload = _normalize_response_payload(response, stage.purpose.value, plan.profile_name)
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
+            except ExecutorClaimFenceError as exc:
+                # Authority rejection precedes provider dispatch; another model cannot repair it.
+                state.policy_engine.mark_inflight_end(owner)
+                await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
+                state.claim_fence_rejections = getattr(state, "claim_fence_rejections", 0) + 1
+                unavailable = isinstance(exc, ExecutorClaimStatusUnavailable)
+                cooling_down = isinstance(exc, ExecutorClaimStatusCoolingDown)
+                if unavailable and not cooling_down:
+                    state.claim_status_last_failure = time.monotonic()
+                if not cooling_down:
+                    logger.warning("Executor claim rejected before provider dispatch; authority unavailable=%s", unavailable)
+                headers = {"Retry-After": str(exc.retry_after)} if cooling_down else ({"Retry-After": "5"} if unavailable else None)
+                raise HTTPException(status_code=503, detail={
+                    "error": "executor_claim_status_unavailable" if unavailable else "executor_claim_unavailable",
+                }, headers=headers) from None
             except RuntimeAdmissionError as exc:
                 # Local admission refused capacity before any upstream dispatch.
                 state.policy_engine.mark_inflight_end(owner)
