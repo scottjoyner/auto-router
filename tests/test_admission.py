@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from auto_router.admission import RuntimeAdmissionController
+from auto_router.admission import RuntimeAdmissionController, RuntimeAdmissionQueueFull
 from auto_router.models import ModelConfig, Priority, ProviderCandidate, ProviderConfig
 from auto_router.providers import ProviderError
 
@@ -130,7 +130,7 @@ async def test_bounded_queue_rejects_overflow() -> None:
     queued_task = asyncio.create_task(controller.acquire(candidate))
     await asyncio.sleep(0)
 
-    with pytest.raises(ProviderError, match="queue full") as exc:
+    with pytest.raises(RuntimeAdmissionQueueFull, match="queue full") as exc:
         await controller.acquire(candidate)
 
     assert exc.value.status_code == 429
@@ -173,3 +173,30 @@ async def test_lease_context_releases_after_exception() -> None:
             raise RuntimeError("synthetic failure")
 
     assert controller.snapshot()[0]["active"] == 0
+
+
+@pytest.mark.asyncio
+async def test_distinct_provider_aliases_share_physical_runtime_capacity() -> None:
+    first = _candidate(queue_limit=0)
+    second_provider = first.provider.model_copy(update={"name": "other-provider-alias"})
+    second_model = first.model.model_copy(update={"alias": "other-model-alias"})
+    second = ProviderCandidate(provider=second_provider, model=second_model)
+    controller = RuntimeAdmissionController([first.provider, second.provider])
+
+    async with await controller.acquire(first):
+        with pytest.raises(RuntimeAdmissionQueueFull) as exc:
+            await controller.acquire(second)
+        assert exc.value.status_code == 429
+        assert len(controller.snapshot()) == 1
+        assert controller.snapshot()[0]["active"] == 1
+
+    async with await controller.acquire(second):
+        assert controller.snapshot()[0]["active"] == 1
+    assert controller.snapshot()[0]["active"] == 0
+
+
+def test_conflicting_capacity_for_shared_runtime_fails_closed() -> None:
+    first = _candidate()
+    second = first.provider.model_copy(update={"name": "other-provider-alias", "parallel_slots": 2})
+    with pytest.raises(RuntimeError, match="conflicting admission configuration"):
+        RuntimeAdmissionController([first.provider, second])
