@@ -7,6 +7,8 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+from auto_router.admission import RuntimeAdmissionError
+from auto_router.claim_fence import ExecutorClaimFenceError
 from auto_router.event_outbox import OutboxEvent
 from auto_router.providers import ProviderError, ProviderStreamResponse
 from auto_router.route_events import ensure_event_outbox
@@ -214,7 +216,7 @@ def _enqueue_lifecycle_event(
     )
 
 
-def install_stream_lifecycle(main_module: Any) -> None:
+def install_stream_lifecycle(main_module: Any, *, upstream_start_in_dispatch: bool = False) -> None:
     if getattr(main_module, "_strict_stream_lifecycle_installed", False):
         return
 
@@ -224,7 +226,8 @@ def install_stream_lifecycle(main_module: Any) -> None:
     original_record_usage = main_module._record_usage
 
     async def dispatch(provider: Any, candidate: Any, request: Any, route_plan: Any = None):
-        _transition(state, request, "upstream_started")
+        if not upstream_start_in_dispatch:
+            _transition(state, request, "upstream_started")
         try:
             return await original_dispatch(
                 provider,
@@ -232,6 +235,9 @@ def install_stream_lifecycle(main_module: Any) -> None:
                 request,
                 route_plan=route_plan,
             )
+        except (RuntimeAdmissionError, ExecutorClaimFenceError):
+            # A typed local refusal cannot erase any earlier upstream uncertainty.
+            raise
         except ProviderError as exc:
             if exc.status_code is not None:
                 _transition(
@@ -272,7 +278,8 @@ def install_stream_lifecycle(main_module: Any) -> None:
         request: Any,
         route_plan: Any = None,
     ) -> ProviderStreamResponse:
-        _transition(state, request, "upstream_started")
+        if not upstream_start_in_dispatch:
+            _transition(state, request, "upstream_started")
         try:
             response = await original_dispatch_stream(
                 provider,
@@ -280,6 +287,9 @@ def install_stream_lifecycle(main_module: Any) -> None:
                 request,
                 route_plan=route_plan,
             )
+        except (RuntimeAdmissionError, ExecutorClaimFenceError):
+            # A typed local refusal cannot erase any earlier upstream uncertainty.
+            raise
         except ProviderError as exc:
             if exc.status_code is not None:
                 _transition(
