@@ -236,3 +236,59 @@ def test_project_live_models_merges_registry_snapshots_into_context(tmp_path: Pa
     assert projected.models_for_provider("cerebras")
     assert len(projected.models_for_provider("cerebras")) == 2
     assert projected.providers[0].models and len(projected.providers[0].models) == 2
+
+
+def test_project_live_models_refreshes_lookup_after_repeated_projection(tmp_path: Path) -> None:
+    from auto_router.config import (
+        AgentWorkerRegistry,
+        ProviderRegistry,
+        _project_live_models,
+        load_context_snapshot,
+    )
+    from auto_router.live_models import LiveModelSnapshot
+    from auto_router.models import ProviderConfig
+
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="cerebras",
+                type="openai_compatible",
+                base_url="https://api.cerebras.ai/v1",
+                quota_class="fast_free",
+            )
+        ]
+    )
+    context = load_context_snapshot(tmp_path / "context.yaml", providers, AgentWorkerRegistry())
+    # Prime the lookup indexes before projection, as request scoring does in the
+    # mounted runtime (hydrate_live_models_from_registry reuses the same context).
+    assert context.model_for("first-live-model") is None
+
+    context = _project_live_models(
+        context,
+        providers,
+        [
+            LiveModelSnapshot(
+                provider="cerebras",
+                ok=True,
+                fetched_at=100,
+                expires_at=200,
+                models=[{"id": "first-live-model"}],
+            )
+        ],
+    )
+    assert context.model_for("first-live-model") is not None
+
+    context = _project_live_models(
+        context,
+        providers,
+        [
+            LiveModelSnapshot(
+                provider="cerebras",
+                ok=True,
+                fetched_at=100,
+                expires_at=200,
+                models=[{"id": "second-live-model"}],
+            )
+        ],
+    )
+    assert context.model_for("second-live-model") is not None

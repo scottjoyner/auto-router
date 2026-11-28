@@ -155,10 +155,16 @@ class ContextSnapshot(BaseModel):
 
     # Per-instance caches so request scoring (model_for / signals_for) is O(1)
     # instead of O(M*N^2). A fresh ContextSnapshot is built on every refresh, so
-    # these are naturally invalidated -- no manual eviction needed.
+    # these are naturally invalidated -- callers that mutate a snapshot in place
+    # must explicitly invalidate them instead.
     _all_models_cache: Any = PrivateAttr(default=None)
     _model_index_cache: Any = PrivateAttr(default=None)
     _signal_index_cache: Any = PrivateAttr(default=None)
+
+    def invalidate_caches(self) -> None:
+        self._all_models_cache = None
+        self._model_index_cache = None
+        self._signal_index_cache = None
 
     def projection_status(self) -> str:
         status = str(self.metadata.get("projection_status") or self.metadata.get("projection_state") or "").strip().lower()
