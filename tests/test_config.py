@@ -62,7 +62,10 @@ def test_xwing_npu_provider_is_low_priority_short_task_tier() -> None:
     assert provider.type == "openai_compatible"
     assert provider.node_id == "xwing"
     assert provider.enabled is True
-    assert provider.base_url.endswith("127.0.0.1:1236/v1")
+    # The NPU binds on the Docker host, not inside the router container.
+    assert provider.base_url == "http://host.docker.internal:1236/v1"
+    assert provider.access_urls == ["http://host.docker.internal:1236/v1"]
+    assert provider.runtime_version == "ryzenai-1.4.0"
     assert str(provider.quota_class) == "local"
     assert provider.priority >= 200  # cheap tier: never a default reasoning pick
     assert provider.parallel_slots == 1
@@ -70,6 +73,10 @@ def test_xwing_npu_provider_is_low_priority_short_task_tier() -> None:
     assert [model.provider_model for model in provider.models] == ["xwing-npu-qwen2.5-0.5b"]
 
     model = provider.models[0]
+    # Identity fields are required by signed runtime projection validation.
+    assert model.model_instance_id == "xwing-npu-qwen2.5-0.5b-int4"
+    assert model.artifact_fingerprint == "sha256:xwing-npu-qwen2.5-0.5b-int4"
+    assert model.quantization == "int4"
     for capability in (
         "chat",
         "low_latency",
@@ -82,6 +89,19 @@ def test_xwing_npu_provider_is_low_priority_short_task_tier() -> None:
         assert capability not in model.capabilities
     assert "auxiliary_llm" in model.routing_roles
     assert "full_agent" not in model.routing_roles
+
+
+def test_xwing_npu_base_url_can_be_overridden(monkeypatch) -> None:
+    config_path = Path(__file__).resolve().parents[1] / "config" / "providers.yaml"
+    monkeypatch.setenv("XWING_NPU_BASE_URL", "http://xwing.tailcb8954.ts.net:1236/v1")
+
+    registry = load_provider_registry(config_path)
+    provider = next(
+        provider for provider in registry.providers if provider.name == "npu-xwing-qwen-0.5b"
+    )
+
+    assert provider.base_url == "http://xwing.tailcb8954.ts.net:1236/v1"
+    assert provider.access_urls == ["http://xwing.tailcb8954.ts.net:1236/v1"]
 
 
 def test_xwing_npu_is_excluded_from_reasoning_stage() -> None:

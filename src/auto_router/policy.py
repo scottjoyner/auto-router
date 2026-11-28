@@ -269,18 +269,37 @@ class PolicyEngine:
                     + self._lb_planned.get(self._owner_str(c), 0),
                     # Least-recently-used wins so `auto` spreads across the fleet
                     # instead of parking on the highest-priority node. Latency and
-                    # priority are weak secondary tiebreakers.
+                    # priority are weak secondary tiebreakers. Lower score wins, so
+                    # this must be ascending (an earlier `-c.score` inverted it).
                     self._lb_last_used.get(self._owner_str(c), 0.0),
                     self._latency_term(self._owner_str(c)),
-                    -c.score,
+                    c.score,
                 )
             )
-            # Rotate the tier by the round-robin counter so each request starts at a
-            # different node -- guarantees even fleet utilization instead of stranding
-            # on one machine when inflight/planned tie (parallel plan batches).
+            # Rotate by the round-robin counter, but only inside runs of equal
+            # *effective* priority: both the configured provider priority and the
+            # score must match. The score already folds in priority plus real
+            # preferences (node capabilities, latency, health, signals), so a score
+            # gap is a meaningful ordering that round-robin must not override.
+            # Rotating the whole tier could put an auxiliary-tier node (e.g. the
+            # RyzenAI NPU) first on a normal request even though a better-priority
+            # peer is available; rotating only true ties keeps load balanced
+            # without demoting preferred providers.
             if len(g) > 1:
-                rot = rr % len(g)
-                g = g[rot:] + g[:rot]
+                rotated: list[ProviderCandidate] = []
+                start = 0
+                while start < len(g):
+                    key = (g[start].provider.priority, g[start].score)
+                    end = start + 1
+                    while end < len(g) and (g[end].provider.priority, g[end].score) == key:
+                        end += 1
+                    run = g[start:end]
+                    if len(run) > 1:
+                        rot = rr % len(run)
+                        run = run[rot:] + run[:rot]
+                    rotated.extend(run)
+                    start = end
+                g = rotated
             balanced.extend(g)
         return balanced
 

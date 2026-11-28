@@ -286,13 +286,21 @@ providers:
   # Live-verified 2026-11-27: RyzenAI NPU on xwing (~30 tok/s). Short-task only.
   # Low-priority auxiliary tier: no reasoning/large_context/code capability and no
   # full_agent role, so reasoning/coding profiles never default to this runtime.
+  #
+  # The NPU server binds on the xwing host, not inside the router container, so the
+  # default uses host.docker.internal. Override XWING_NPU_BASE_URL when the router
+  # runs outside Docker or the NPU is reached over the tailnet. The runtime/model
+  # identity fields below make this provider valid for signed AssistX projections.
   - name: npu-xwing-qwen-0.5b
     type: openai_compatible
     node_id: xwing
     runtime_instance_id: xwing-npu-qwen2.5-0.5b
     runtime_kind: openai_compatible
+    runtime_version: ryzenai-1.4.0
     enabled: true
-    base_url: ${XWING_NPU_BASE_URL:-http://127.0.0.1:1236/v1}
+    base_url: ${XWING_NPU_BASE_URL:-http://host.docker.internal:1236/v1}
+    access_urls:
+      - ${XWING_NPU_BASE_URL:-http://host.docker.internal:1236/v1}
     priority: 250
     quota_class: local
     parallel_slots: 1
@@ -301,6 +309,9 @@ providers:
     models:
       - alias: local/xwing-npu-fast
         provider_model: xwing-npu-qwen2.5-0.5b
+        model_instance_id: xwing-npu-qwen2.5-0.5b-int4
+        artifact_fingerprint: sha256:xwing-npu-qwen2.5-0.5b-int4
+        quantization: int4
         capabilities: [chat, streaming, json, low_latency, local_only, quick_iteration, classification, compression, memory_constrained, low_concurrency]
         context_window: 32768
         max_concurrency: 1
