@@ -296,8 +296,11 @@ python tests/test_provider_registry_drift.py --as-of 2026-11-28
 pytest -q tests/test_provider_registry_drift.py --as-of 2026-11-28
 ```
 
-Both paths share `AUTO_ROUTER_WAIVER_AS_OF`, so `--as-of` works under pytest as
-well as direct execution. Run the gate at the current date before waivers go
+The direct-script path assigns `AS_OF` from `--as-of` in its `__main__` block;
+the pytest path cannot run that block, so conftest maps `--as-of` into
+`AUTO_ROUTER_WAIVER_AS_OF`, which `as_of()` reads first. Both paths therefore
+honour the flag, through different variables (environment overrides `AS_OF`
+when both are present). Run the gate at the current date before waivers go
 stale — an overdue `review_by` fails deliberately until the drift is fixed or
 the waiver is re-reviewed with a real owner and justification.
 
