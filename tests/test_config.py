@@ -35,9 +35,12 @@ def test_macbook_air_provider_registry_includes_live_tailnet_models() -> None:
     provider = next(provider for provider in registry.providers if provider.name == "lmstudio-scotts-macbook-air")
 
     assert provider.node_id == "scotts-macbook-air"
+    assert provider.enabled is True
     assert provider.base_url.endswith("scotts-macbook-air.tailcb8954.ts.net:1234/v1")
     model_ids = {model.provider_model for model in provider.models}
-    assert "qwen3.5-0.8b-claude-4.6-opus-reasoning-distilled" in model_ids
+    # The 2026-08-17 fleet refresh replaced the Opus-distilled 0.8B build with
+    # the MLX build on this host; the Opus build now lives on OptiPlex/Deathstar.
+    assert "qwen3.5-0.8b-mlx" in model_ids
     assert "refinedtoolcallv5-3b" in model_ids
 
 
