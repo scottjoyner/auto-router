@@ -33,5 +33,11 @@ entries:
     reason: >-
       Model moved to xwing; destroyer-k2 now serves k2-1b. Needs a decision on
       which host owns the alias, not a rename.
-    owner: unassigned
-    review_by: 2026-11-04
+    # Re-reviewed 2026-11-28 against the recorded snapshot (2026-10-17):
+    # destroyer-k2 still serves only k2-1b, and the registry now lists k2-1b
+    # for that provider. The 36B model id is gone from the registry, but the
+    # local/destroyer-36b alias still names the 1B checkpoint, so the alias
+    # ownership decision is tracked here rather than closed. The gate clock is
+    # no longer frozen at 2026-10-04, so this is a real deadline.
+    owner: scott
+    review_by: 2026-12-28

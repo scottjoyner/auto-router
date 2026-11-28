@@ -75,26 +75,33 @@ drift = _load_drift_module()
 
 # The waiver deadline check used to freeze "today" at 2026-10-04 inside the
 # test itself, so an overdue review_by never failed no matter when the gate
-# ran. Keep that date as the default so CI stays reproducible, but make the
-# clock injectable with --as-of: an operator (or an audit) can now evaluate
-# waivers at the real date and see overdue deadlines fail.
-DEFAULT_AS_OF = datetime.date(2026, 10, 4)
-AS_OF = DEFAULT_AS_OF
+# ran. A fixed past default is a silent suppression of every deadline, so the
+# default is now the real clock. Reproducible audits inject a date with
+# --as-of (pytest or direct script) or AUTO_ROUTER_WAIVER_AS_OF (bounded env
+# fallback); both must be strict ISO dates.
+AS_OF = None  # set by --as-of in __main__; None means "use today"
+
+
+def default_as_of() -> datetime.date:
+    """The default clock: today. Never a hardcoded date in the past."""
+    return datetime.date.today()
 
 
 def as_of() -> datetime.date:
     """The date at which waiver deadlines are judged.
 
     The direct-script path assigns ``AS_OF`` in ``__main__``. Under pytest that
-    block never runs, so read the same clock from AUTO_ROUTER_WAIVER_AS_OF (set
-    by ``tests/conftest.py`` from ``--as-of``). Without the env override the
-    frozen CI date is kept, so CI does not start failing on waivers that have
-    not yet been deliberately re-reviewed.
+    block never runs, so both paths read AUTO_ROUTER_WAIVER_AS_OF (set by
+    ``tests/conftest.py`` from ``--as-of``). With neither override the real
+    current date is used: a frozen past date would silently suppress overdue
+    review_by deadlines, which is the bug this gate exists to catch.
     """
     override = os.environ.get("AUTO_ROUTER_WAIVER_AS_OF", "").strip()
     if override:
         return datetime.date.fromisoformat(override)
-    return AS_OF
+    if AS_OF is not None:
+        return AS_OF
+    return default_as_of()
 
 
 def _parse_args(argv: list[str] | None = None):
@@ -102,10 +109,9 @@ def _parse_args(argv: list[str] | None = None):
     parser.add_argument(
         "--as-of",
         type=datetime.date.fromisoformat,
-        default=DEFAULT_AS_OF,
+        default=None,
         metavar="YYYY-MM-DD",
-        help="date used to judge waiver review_by deadlines "
-        f"(default: {DEFAULT_AS_OF.isoformat()}, the frozen CI clock)",
+        help="date used to judge waiver review_by deadlines (default: today)",
     )
     return parser.parse_known_args(argv)
 
@@ -307,28 +313,45 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         self.assertTrue(deadlines, "no review_by dates to check")
         deadline = min(deadlines)
         day = datetime.timedelta(days=1)
-        with mock.patch(__name__ + ".AS_OF", deadline - day):
-            self._assert_waivers_current()
-        with mock.patch(__name__ + ".AS_OF", deadline):  # inclusive due date
-            self._assert_waivers_current()
-        with mock.patch(__name__ + ".AS_OF", deadline + day):
-            with self.assertRaises(AssertionError):
+        # The env clock takes precedence over AS_OF. Isolate it so these
+        # patches are the only source of the date, including under --as-of.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
+            with mock.patch(__name__ + ".AS_OF", deadline - day):
                 self._assert_waivers_current()
+            with mock.patch(__name__ + ".AS_OF", deadline):  # inclusive due date
+                self._assert_waivers_current()
+            with mock.patch(__name__ + ".AS_OF", deadline + day):
+                with self.assertRaises(AssertionError):
+                    self._assert_waivers_current()
 
     def test_as_of_cli_is_injectable(self):
-        """--as-of drives the clock; omitting it keeps the frozen CI date."""
+        """--as-of drives the clock; omitting it leaves the default as today."""
         args, remaining = _parse_args(["--as-of", "2026-12-01"])
         self.assertEqual(args.as_of, datetime.date(2026, 12, 1))
         self.assertEqual(remaining, [])
-        self.assertEqual(_parse_args([])[0].as_of, DEFAULT_AS_OF)
+        self.assertIsNone(_parse_args([])[0].as_of)
 
     def test_as_of_env_override_is_reachable_without_main_block(self):
         """The pytest path can set the clock without __main__ running."""
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
-            self.assertEqual(as_of(), DEFAULT_AS_OF)
+            with mock.patch(__name__ + ".AS_OF", None):
+                self.assertEqual(as_of(), datetime.date.today())
             os.environ["AUTO_ROUTER_WAIVER_AS_OF"] = "2026-12-01"
             self.assertEqual(as_of(), datetime.date(2026, 12, 1))
+
+    def test_default_clock_is_not_a_fixed_past_date(self):
+        """The un-injected clock follows today, not the old frozen 2026-10-04.
+
+        A hardcoded past default made every overdue review_by look current.
+        Keep this regression so that silent suppression cannot come back.
+        """
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
+            with mock.patch(__name__ + ".AS_OF", None):
+                self.assertEqual(as_of(), datetime.date.today())
+                self.assertGreater(as_of(), datetime.date(2026, 10, 4))
 
     def test_accepted_drift_does_not_hide_unknown_drift(self):
         """Every waiver must correspond to real drift, or it rots into fiction.
@@ -420,5 +443,6 @@ class ProviderRegistryDriftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     args, remaining = _parse_args()
-    AS_OF = args.as_of
+    if args.as_of is not None:
+        AS_OF = args.as_of
     unittest.main(argv=[sys.argv[0], *remaining])
