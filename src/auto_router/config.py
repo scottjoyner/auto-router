@@ -528,6 +528,10 @@ def _project_live_models(
     snapshot.models = sorted(live_model_map.values(), key=lambda item: (item.priority, item.provider or "", item.name.lower()))
     for provider in snapshot.providers:
         provider.models = [model for model in snapshot.models if model.provider == provider.provider]
+    # model_for() builds the lookup indexes while matching live records above, so
+    # the in-place model/provider rewrites leave those indexes stale unless they
+    # are dropped here (e.g. newly discovered live models stay unresolvable).
+    snapshot.invalidate_caches()
     return snapshot
 
 

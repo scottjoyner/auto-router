@@ -14,5 +14,4 @@ pytest -q \
   --ignore=tests/test_backlog_routes.py \
   --ignore=tests/test_live_model_routes.py \
   --ignore=tests/test_live_models.py \
-  --deselect=tests/test_config.py::test_project_live_models_merges_registry_snapshots_into_context \
   "$@"
