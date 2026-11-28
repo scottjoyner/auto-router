@@ -307,13 +307,19 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         self.assertTrue(deadlines, "no review_by dates to check")
         deadline = min(deadlines)
         day = datetime.timedelta(days=1)
-        with mock.patch(__name__ + ".AS_OF", deadline - day):
-            self._assert_waivers_current()
-        with mock.patch(__name__ + ".AS_OF", deadline):  # inclusive due date
-            self._assert_waivers_current()
-        with mock.patch(__name__ + ".AS_OF", deadline + day):
-            with self.assertRaises(AssertionError):
+        # as_of() prefers AUTO_ROUTER_WAIVER_AS_OF over the module clock. An
+        # ambient --as-of (mapped into that env var by conftest) would shadow the
+        # AS_OF patches below and make this unit test depend on how pytest was
+        # invoked. Isolate it, mirroring test_as_of_env_override_is_reachable.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
+            with mock.patch(__name__ + ".AS_OF", deadline - day):
                 self._assert_waivers_current()
+            with mock.patch(__name__ + ".AS_OF", deadline):  # inclusive due date
+                self._assert_waivers_current()
+            with mock.patch(__name__ + ".AS_OF", deadline + day):
+                with self.assertRaises(AssertionError):
+                    self._assert_waivers_current()
 
     def test_as_of_cli_is_injectable(self):
         """--as-of drives the clock; omitting it keeps the frozen CI date."""
@@ -329,6 +335,39 @@ class ProviderRegistryDriftTests(unittest.TestCase):
             self.assertEqual(as_of(), DEFAULT_AS_OF)
             os.environ["AUTO_ROUTER_WAIVER_AS_OF"] = "2026-12-01"
             self.assertEqual(as_of(), datetime.date(2026, 12, 1))
+
+    def test_conftest_maps_as_of_option_to_env(self):
+        """pytest's --as-of must reach as_of() through the env var.
+
+        Under pytest the script's __main__ block never runs, so conftest's
+        pytest_configure is the only bridge from the CLI flag to the clock.
+        Pin that mapping here; the receiving side alone does not prove it.
+        """
+        spec = importlib.util.spec_from_file_location(
+            "_router_nits_conftest_probe", ROOT / "tests" / "conftest.py"
+        )
+        assert spec is not None and spec.loader is not None
+        conftest = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(conftest)
+
+        class StubConfig:
+            def __init__(self, value):
+                self.value = value
+                self.marker_lines = []
+
+            def getoption(self, name):
+                assert name == "--as-of"
+                return self.value
+
+            def addinivalue_line(self, name, line):
+                self.marker_lines.append((name, line))
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
+            conftest.pytest_configure(StubConfig(None))
+            self.assertNotIn("AUTO_ROUTER_WAIVER_AS_OF", os.environ)
+            conftest.pytest_configure(StubConfig("2026-12-01"))
+            self.assertEqual(os.environ["AUTO_ROUTER_WAIVER_AS_OF"], "2026-12-01")
 
     def test_accepted_drift_does_not_hide_unknown_drift(self):
         """Every waiver must correspond to real drift, or it rots into fiction.
