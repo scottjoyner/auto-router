@@ -9,6 +9,14 @@ from auto_router.models import Priority, ProviderCandidate, ProviderConfig
 from auto_router.providers import ProviderError
 
 
+class RuntimeAdmissionError(ProviderError):
+    """Local pre-dispatch capacity rejection, not an upstream provider failure."""
+
+
+class RuntimeAdmissionQueueFull(RuntimeAdmissionError):
+    """Local runtime queue is saturated before provider dispatch."""
+
+
 _PRIORITY_RANK: dict[Priority, int] = {
     Priority.critical: 0,
     Priority.repo_critical: 1,
@@ -79,7 +87,7 @@ class _RuntimeGate:
         runtime_id = self.config.runtime_instance_id
         if self.config.parallel_slots <= 0:
             self.rejected_total += 1
-            raise ProviderError(
+            raise RuntimeAdmissionError(
                 f"runtime admission unavailable for {runtime_id}: capacity is zero or unknown",
                 status_code=503,
                 retryable=True,
@@ -93,7 +101,7 @@ class _RuntimeGate:
 
             if self.config.queue_limit <= 0 or self.queued >= self.config.queue_limit:
                 self.rejected_total += 1
-                raise ProviderError(
+                raise RuntimeAdmissionQueueFull(
                     f"runtime admission queue full for {runtime_id}",
                     status_code=429,
                     retryable=True,
@@ -120,7 +128,7 @@ class _RuntimeGate:
                 self._remove_waiter(waiter)
                 waiter.future.cancel()
                 self.timed_out_total += 1
-            raise ProviderError(
+            raise RuntimeAdmissionError(
                 f"runtime admission timed out for {runtime_id}",
                 status_code=503,
                 retryable=True,
@@ -231,7 +239,7 @@ class RuntimeAdmissionController:
         runtime_key = self.runtime_key(candidate)
         gate = self._gates.get(runtime_key)
         if gate is None:
-            raise ProviderError(
+            raise RuntimeAdmissionError(
                 f"runtime admission unavailable for {runtime_key}: no admission record",
                 status_code=503,
                 retryable=True,

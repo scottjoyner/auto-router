@@ -94,3 +94,21 @@ def test_router_request_marks_sophia_model_local_only() -> None:
 
     assert request.local_only is True
     assert request.allow_cloud is False
+
+
+def test_recent_claim_authority_failure_degrades_health_without_open_circuit(monkeypatch):
+    test_health_reports_warning_outbox_pressure_without_degrading(monkeypatch)
+    state = main_module.state
+    state.claim_status_last_failure = main_module.time.monotonic()
+    state.claim_fence_rejections = 3
+    state.claim_status_checks_suppressed = 2
+    result = asyncio.run(main_module.health())
+    assert result['status'] == 'degraded'
+    assert result['open_circuits'] == 0
+    assert result['executor_claim_status_recent_failure'] is True
+    assert result['executor_claim_fence_rejections'] == 3
+    assert result['executor_claim_status_checks_suppressed'] == 2
+    state.claim_status_last_failure -= 61
+    result = asyncio.run(main_module.health())
+    assert result['status'] == 'ok'
+    assert result['executor_claim_status_recent_failure'] is False

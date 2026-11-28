@@ -11,6 +11,7 @@ class CircuitState:
     failures: int = 0
     opened_until: int | None = None
     last_error: str | None = None
+    retry_not_before: int | None = None
 
     @property
     def open(self) -> bool:
@@ -35,10 +36,15 @@ class CircuitBreakerManager:
                 state.failures = 0
                 state.opened_until = None
                 state.last_error = None
+                state.retry_not_before = None
             return True
 
     def record_success(self, owner: str) -> None:
         with self.lock:
+            state = self.states.get(owner)
+            if state is not None and state.retry_not_before is not None and int(time.time()) < state.retry_not_before:
+                # An already-dispatched request may finish during a rate-limit window.
+                return
             self.states[owner] = CircuitState(owner=owner)
 
     def record_failure(self, owner: str, error: str, retry_after: int | None = None) -> None:
@@ -46,8 +52,12 @@ class CircuitBreakerManager:
             state = self.states.setdefault(owner, CircuitState(owner=owner))
             state.failures += 1
             state.last_error = error
-            if state.failures >= self.failure_threshold:
-                state.opened_until = int(time.time()) + (retry_after or self.cooldown_seconds)
+            now = int(time.time())
+            if type(retry_after) is int and retry_after > 0:
+                state.retry_not_before = max(state.retry_not_before or 0, now + retry_after)
+                state.opened_until = max(state.opened_until or 0, state.retry_not_before)
+            elif state.failures >= self.failure_threshold:
+                state.opened_until = max(state.opened_until or 0, now + self.cooldown_seconds)
 
     def snapshot(self) -> list[dict]:
         with self.lock:

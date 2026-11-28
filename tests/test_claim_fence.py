@@ -74,7 +74,7 @@ def configured(monkeypatch):
         "http://assistx.test",
     )
     monkeypatch.setenv(
-        "AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN",
+        "AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN",
         "router-claim-secret",
     )
     monkeypatch.setattr(claim_fence.httpx, "AsyncClient", _Client)
@@ -137,7 +137,7 @@ async def test_revoked_or_replaced_claim_fails_closed():
 @pytest.mark.asyncio
 async def test_internal_assistx_service_metadata_cannot_bypass_claim_lookup(monkeypatch):
     monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL", raising=False)
-    monkeypatch.delenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN", raising=False)
     with pytest.raises(ExecutorClaimFenceError, match="untrusted service identity"):
         await assert_executor_claim_current(
             _request(assistx_service={"authenticated": True}), _state()
@@ -164,3 +164,33 @@ async def test_forged_service_metadata_denied_even_with_executor_claim():
 async def test_missing_executor_lineage_fails_closed():
     with pytest.raises(ExecutorClaimFenceError, match="lineage is missing"):
         await assert_executor_claim_current(_request(), _state())
+
+
+@pytest.mark.asyncio
+async def test_missing_dedicated_claim_status_credential_does_not_use_legacy_token(monkeypatch):
+    monkeypatch.delenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN", raising=False)
+    monkeypatch.setenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", "synthetic-legacy-token")
+    with pytest.raises(ExecutorClaimFenceError, match="not configured"):
+        await assert_executor_claim_current(_request(assistx_executor={
+            "task_id":"task-1", "claim_id":"claim-1", "agent_id":"hermes-test", "projection_generation":9
+        }), _state())
+    assert _Client.observed == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [("projection_generation", "9"), ("projection_generation", 9.5), ("projection_generation", "invalid"), ("lease_expires_at_ts", "9999999999999"), ("lease_expires_at_ts", 9999999999999.5), ("lease_expires_at_ts", []), ("lease_expires_at_ts", True)])
+async def test_malformed_active_authority_reply_fails_typed(field,value):
+    _Client.response = _Response(200, _active_payload(**{field:value}))
+    req = _request(assistx_executor={"task_id":"task-1","claim_id":"claim-1","agent_id":"hermes-test","projection_generation":9})
+    with pytest.raises(claim_fence.ExecutorClaimFenceError):
+        await assert_executor_claim_current(req, _state())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["9", 9.5, "invalid", True])
+async def test_malformed_request_generation_fails_typed_without_network(value):
+    req = _request(assistx_executor={"task_id":"task-1","claim_id":"claim-1","agent_id":"hermes-test","projection_generation":value})
+    _Client.response = _Response(200, _active_payload())
+    with pytest.raises(claim_fence.ExecutorClaimFenceError):
+        await assert_executor_claim_current(req, _state())
+    assert _Client.observed == {}

@@ -115,7 +115,7 @@ router_module = main_live_module.main_module
 # module; patch that implementation explicitly rather than relying on private names
 # being re-exported by the wrapper module.
 install_request_idempotency(app, state, router_module)
-install_stream_lifecycle(router_module)
+install_stream_lifecycle(router_module, upstream_start_in_dispatch=True)
 install_executor_inference_auth(app, state)
 # Fail closed during import if an effective /admin route lacks a compiled
 # operator auth dependency or is shadowed by an unsupported raw ASGI mount.

@@ -12,14 +12,25 @@ def validate_database_placement(
     required: bool,
     test_context: bool = False,
 ) -> dict[str, Any]:
-    """Resolve and validate the SQLite path used by the router.
+    """Resolve SQLite paths exactly as the ledger and event outbox do.
 
-    The deployment contract treats ``sqlite:///data/...`` as the absolute
-    ``/data/...`` persistent mount. Dot-relative paths are resolved from the
-    process workdir so the historical ``/app/data`` mistake is visible.
+    Three slashes introduce a relative path; four slashes introduce an
+    absolute path. Resolve symlinks before checking the persistent root.
     """
-    root = os.path.abspath(expected_root)
+    root = os.path.realpath(expected_root)
     prefix = "sqlite:///"
+    if required and not test_context:
+        # All SQLite stores must resolve the same file. Some strip the prefix,
+        # while others parse a URI; relative and decorated URLs can diverge.
+        absolute_prefix = "sqlite:////"
+        if (
+            not configured_url.startswith(absolute_prefix)
+            or any(ch in configured_url for ch in ("?", "#", ";", "\x00", "\n", "\r"))
+        ):
+            raise ValueError(
+                "Persistent database requires a canonical absolute SQLite URL; "
+                "refusing container writable layer or ambiguous database placement"
+            )
     if not configured_url.startswith(prefix):
         return {
             "configured_url": configured_url,
@@ -32,17 +43,11 @@ def validate_database_placement(
     raw_path = configured_url[len(prefix):]
     if raw_path == ":memory:":
         resolved_path = ":memory:"
-    elif raw_path.startswith("/"):
-        resolved_path = os.path.abspath(raw_path)
-    elif raw_path.startswith(("./", "../")):
-        resolved_path = os.path.abspath(raw_path)
     else:
-        # This is the deployment contract used by Compose: sqlite:///data/x
-        # means /data/x, while sqlite:///./data/x remains workdir-relative.
-        resolved_path = os.path.abspath(os.path.join(os.sep, raw_path))
+        resolved_path = os.path.realpath(raw_path)
 
     persistent = resolved_path != ":memory:" and (
-        resolved_path == root or resolved_path.startswith(root + os.sep)
+        resolved_path != root and os.path.commonpath((root, resolved_path)) == root
     )
     result = {
         "configured_url": configured_url,

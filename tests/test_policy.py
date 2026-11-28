@@ -509,3 +509,35 @@ def test_portfolio_management_requests_prefer_xwing() -> None:
     beelink_score = engine._score(beelink, model, stage, request)
 
     assert xwing_score < beelink_score
+
+
+def test_mobile_selected_artifact_is_never_substituted_or_sent_to_cloud():
+    providers = ProviderRegistry(providers=[
+        ProviderConfig(name=name, type="lmstudio" if lane == "local" else "openai_compatible", base_url="http://localhost:1234/v1", quota_class=lane, models=[ModelConfig(alias="same-alias", provider_model=name, artifact_fingerprint=fp, capabilities={"chat", "local_only"})])
+        for name, lane, fp in [("replica-a", "local", "sha256:chosen"), ("replica-b", "local", "sha256:chosen"), ("other", "local", "sha256:other"), ("cloud", "fast_free", "sha256:chosen")]
+    ])
+    policies = PolicyRegistry(profiles={"local_only": PolicyProfile(stages=[PolicyStage(purpose=StagePurpose.final, required_capabilities={"chat"})])})
+    engine = PolicyEngine(providers, policies, "local_only")
+    metadata = {"assistx_mobile_model_handle": "model:v1:" + "a" * 32, "assistx_artifact_fingerprint": "sha256:chosen"}
+    request = RouterRequest(request_id="mobile", route="chat_completions", model="auto/local", metadata=metadata)
+    plan = engine.plan(request)
+    assert plan.profile_name == "mobile_exact_artifact"
+    assert len(plan.stages) == 1 and not plan.stages[0].allow_local_fallback
+    assert {c.provider.name for c in plan.stages[0].candidates} == {"replica-a", "replica-b"}
+    for invalid in ({**metadata, "assistx_artifact_fingerprint": "sha256:missing"}, {"assistx_mobile_model_handle": metadata["assistx_mobile_model_handle"]}, {**metadata, "assistx_mobile_model_handle": "bad"}):
+        assert not engine.plan(request.model_copy(update={"metadata": invalid})).stages[0].candidates
+    regular = engine.plan(request.model_copy(update={"metadata": {}}))
+    assert "other" in {c.provider.name for c in regular.stages[0].candidates}
+
+
+def test_mobile_artifact_guard_at_dispatch():
+    from auto_router.main import _candidate_allowed
+    from auto_router.context import ContextSnapshot
+    from auto_router.models import ProviderCandidate
+    metadata = {"assistx_mobile_model_handle": "model:v1:" + "a" * 32, "assistx_artifact_fingerprint": "sha256:chosen"}
+    req = RouterRequest(request_id="mobile", route="chat_completions", model="same-alias", metadata=metadata)
+    for lane, fp, expected in [("local", "sha256:chosen", True), ("local", "sha256:other", False), ("fast_free", "sha256:chosen", False)]:
+        model = ModelConfig(alias="same-alias", provider_model="same-alias", artifact_fingerprint=fp, capabilities={"chat", "local_only"})
+        provider = ProviderConfig(name="synthetic", type="lmstudio" if lane == "local" else "openai_compatible", base_url="http://localhost:1234/v1", quota_class=lane, models=[model])
+        candidate = ProviderCandidate(provider=provider, model=model)
+        assert _candidate_allowed(req, candidate, ContextSnapshot()) is expected
