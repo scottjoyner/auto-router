@@ -35,13 +35,20 @@ from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
 from auto_router.model_registry import ModelRegistryStore
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
-from auto_router.policy import PolicyEngine
+from auto_router.policy import PolicyEngine, privacy_forces_local
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
 from auto_router.memory_client import MemoryClient
 from auto_router.memory_store import MemoryStore
-from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
+from auto_router.ops_dashboard_routes import (
+    build_privacy_warning_summary,
+    build_swarm_state_summary,
+    _context_route_signal_summary,
+    _fleet_dispatcher_stats,
+    _fleet_loadout_report,
+    _workflow_contract_summary,
+)
 from auto_router.quota import build_quota_manager
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.security import require_admin
@@ -471,6 +478,11 @@ async def dashboard_summary(request: Request) -> Any:
     event_outbox = getattr(state, "event_outbox", None)
     outbox_summary = event_outbox.summary() if event_outbox is not None else {}
     outbox_dispatch_summary = build_outbox_dispatch_status(state)
+    recent_outbox_events = (
+        event_outbox.recent(limit=50)
+        if event_outbox is not None and hasattr(event_outbox, "recent")
+        else []
+    )
     return templates.TemplateResponse(
         request=request,
         name="fragments/dashboard_summary.html",
@@ -498,6 +510,7 @@ async def dashboard_summary(request: Request) -> Any:
             "outbox_summary": outbox_summary,
             "outbox_dispatch_summary": outbox_dispatch_summary,
             "outbox_pressure_summary": build_outbox_pressure_status(state),
+            "privacy_warning": build_privacy_warning_summary(recent_outbox_events, state.context),
             "fleet_dispatcher_stats": fleet_dispatcher_stats,
             "fleet_loadout_report": _fleet_loadout_report(),
             "workflow_contract_summary": workflow_contract_summary,
@@ -929,37 +942,7 @@ async def _dispatch_stream(provider: Any, candidate: ProviderCandidate, request:
 
 
 def _request_privacy_forces_local(metadata: dict[str, Any], model: str | None = None) -> bool:
-    model_text = model or ""
-    if model_text.startswith("auto/private") or model_text.startswith("auto/local") or model_text.startswith("auto/sophia"):
-        return True
-    privacy = str(metadata.get("privacy") or metadata.get("data_class") or "").strip().lower()
-    if privacy in {"private", "personal", "internal", "secret", "sensitive", "local_only"}:
-        return True
-    if bool(metadata.get("sensitive")) or bool(metadata.get("private_data")):
-        return True
-    markers = metadata.get("markers") or metadata.get("tags") or []
-    if isinstance(markers, str):
-        markers = [markers]
-    if isinstance(markers, list):
-        normalized = {str(item).strip().lower() for item in markers if str(item).strip()}
-        return bool(
-            normalized
-            & {
-                "private",
-                "personal",
-                "internal",
-                "local_only",
-                "private_data",
-                "internal_docs",
-                "personal_docs",
-                "voice_auth",
-                "enrollment_sample",
-                "signal",
-                "credentials",
-                "secret",
-            }
-        )
-    return False
+    return privacy_forces_local(metadata, model)
 
 
 def _router_request(route: str, body: dict[str, Any]) -> RouterRequest:

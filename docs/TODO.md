@@ -11,6 +11,7 @@
 - Added service launchpad cards and node/provider service links in the dashboard.
 - Added opt-in local/private service scanner with external probing disabled by default.
 - Added durable SQLite service scan history and startup hydration.
+- Locked down local-only enforcement and unknown-privacy cloud-route dashboard warning.
 
 ## P0 - Stabilize the current repo
 
@@ -30,9 +31,9 @@
 
 ### P0.3 Lock down local-only safety
 
-- [ ] Add tests for `metadata.local_only=true`, `priority=local_only`, and `allow_cloud=false`.
-- [ ] Add sensitive marker detection for `voice_auth`, `enrollment_sample`, `private_data`, and `secrets`.
-- [ ] Add dashboard warning when a cloud provider is selected for a request with unknown privacy.
+- [x] Add tests for `metadata.local_only=true`, `priority=local_only`, and `allow_cloud=false`.
+- [x] Add sensitive marker detection for `voice_auth`, `enrollment_sample`, `private_data`, and `secrets`.
+- [x] Add dashboard warning when a cloud provider is selected for a request with unknown privacy.
 
 ## P1 - Router switching mechanism
 

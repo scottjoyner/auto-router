@@ -5,6 +5,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from auto_router.config import PolicyRegistry, ProviderRegistry
 from auto_router.settings import get_settings
@@ -36,6 +37,65 @@ from auto_router.models import (
     RouterRequest,
     StagePurpose,
 )
+
+
+# Privacy markers that pin a request to local execution. Both the policy engine
+# and the request-construction path in main use this single source of truth so
+# cloud routing is denied consistently on every enforcement layer.
+SENSITIVE_LOCAL_MARKERS = frozenset(
+    {
+        "private",
+        "personal",
+        "internal",
+        "local_only",
+        "private_data",
+        "internal_docs",
+        "personal_docs",
+        "voice_auth",
+        "enrollment_sample",
+        "signal",
+        "credentials",
+        "secret",
+        "secrets",
+    }
+)
+SENSITIVE_LOCAL_METADATA_KEYS = ("voice_auth", "enrollment_sample", "private_data", "secrets")
+
+
+def request_privacy_class(metadata: dict[str, Any]) -> str:
+    """Return the declared privacy class, or ``unknown`` when none was declared."""
+    value = str(metadata.get("privacy") or metadata.get("data_class") or "").strip().lower()
+    return value or "unknown"
+
+
+def privacy_forces_local(metadata: dict[str, Any], model: str | None = None) -> bool:
+    """Return True when privacy markers forbid cloud/public routing for a request."""
+    model_text = model or ""
+    if model_text.startswith(("auto/private", "auto/local", "auto/sophia")):
+        return True
+    privacy = request_privacy_class(metadata)
+    if privacy in {
+        "private",
+        "personal",
+        "internal",
+        "secret",
+        "secrets",
+        "sensitive",
+        "local_only",
+    }:
+        return True
+    sensitive_flag = bool(metadata.get("sensitive")) or any(
+        bool(metadata.get(key)) for key in SENSITIVE_LOCAL_METADATA_KEYS
+    )
+    if sensitive_flag:
+        return True
+    markers = metadata.get("markers") or metadata.get("tags") or []
+    if isinstance(markers, str):
+        markers = [markers]
+    if isinstance(markers, list):
+        normalized = {str(item).strip().lower() for item in markers if str(item).strip()}
+        return bool(normalized & SENSITIVE_LOCAL_MARKERS)
+    return False
 
 
 class PolicyEngine:
@@ -380,38 +440,10 @@ class PolicyEngine:
         local-only markers stay on local providers. Public APIs should receive
         only public or already-redacted payloads.
         """
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        model = request.model or ""
         if request.local_only or request.priority == Priority.local_only or request.allow_cloud is False:
             return True
-        if model.startswith("auto/private") or model.startswith("auto/local") or model.startswith("auto/sophia"):
-            return True
-        privacy = str(metadata.get("privacy") or metadata.get("data_class") or "").strip().lower()
-        if privacy in {"private", "personal", "internal", "secret", "sensitive", "local_only"}:
-            return True
-        if bool(metadata.get("sensitive")) or bool(metadata.get("private_data")):
-            return True
-        markers = metadata.get("markers") or metadata.get("tags") or []
-        if isinstance(markers, str):
-            markers = [markers]
-        if isinstance(markers, list):
-            normalized = {str(item).strip().lower() for item in markers if str(item).strip()}
-            if normalized & {
-                "private",
-                "personal",
-                "internal",
-                "local_only",
-                "private_data",
-                "internal_docs",
-                "personal_docs",
-                "voice_auth",
-                "enrollment_sample",
-                "signal",
-                "credentials",
-                "secret",
-            }:
-                return True
-        return False
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        return privacy_forces_local(metadata, request.model)
 
     def _repo_hint(self, request: RouterRequest) -> str:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}

@@ -246,3 +246,38 @@ def test_route_decision_event_records_selection_and_rejections():
     assert payload["agent_run_id"] is None
     assert payload["node_id"] == "cerebras"
     assert payload["rejections"] == ["quota unavailable for groq/llama"]
+    assert payload["privacy"] == "unknown"
+
+
+def test_route_decision_event_records_declared_privacy() -> None:
+    from auto_router.route_events import enqueue_route_decision_event
+
+    state = SimpleNamespace(
+        event_outbox=EventOutbox("sqlite:///:memory:"),
+        context=SimpleNamespace(revision="ctx-3", source="assistx"),
+    )
+    request = RouterRequest(
+        request_id="req-privacy",
+        route="chat_completions",
+        model="auto/fast",
+        metadata={"privacy": "private"},
+    )
+    candidate = SimpleNamespace(
+        provider=SimpleNamespace(name="lmstudio"),
+        model=SimpleNamespace(alias="local/chat", provider_model="local-chat"),
+        score=1.0,
+        reason="matched final",
+    )
+
+    enqueue_route_decision_event(
+        state,
+        request=request,
+        profile_name="local_only",
+        stage="final",
+        chosen_candidate=candidate,
+        candidates=[candidate],
+    )
+
+    payload = state.event_outbox.pending()[0]["payload"]
+    assert payload["privacy"] == "private"
+    assert payload["local_only"] is False

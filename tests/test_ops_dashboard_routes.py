@@ -281,7 +281,59 @@ def test_build_ops_summary_collects_runtime_state(monkeypatch) -> None:
     assert summary["workflow_contract_summary"]["completed_tasks"] == 0
     assert summary["workflow_contract_alert"]["level"] == "critical"
     assert summary["workflow_contract_alert"]["active"] is True
+    assert summary["privacy_warning"]["active"] is False
     get_settings.cache_clear()
+
+
+def test_privacy_warning_flags_unknown_privacy_cloud_selection() -> None:
+    from auto_router.ops_dashboard_routes import build_privacy_warning_summary
+
+    context = ContextSnapshot(
+        providers=[
+            ContextProvider(
+                provider="cerebras", lane=ExecutionLane.free_api, local=False, can_use_free_api=True
+            ),
+            ContextProvider(
+                provider="lmstudio-r2d2",
+                lane=ExecutionLane.local,
+                local=True,
+                can_use_free_api=False,
+            ),
+        ]
+    )
+
+    def decision(provider: str, privacy: str, **extra):
+        return {
+            "event_type": "router.route_decision",
+            "payload": {
+                "request_id": "req-1",
+                "privacy": privacy,
+                "stage": "final",
+                "chosen": {"provider": provider, "provider_id": provider},
+                **extra,
+            },
+        }
+
+    events = [
+        decision("cerebras", "unknown"),
+        decision("cerebras", "private"),
+        decision("lmstudio-r2d2", "unknown"),
+        decision("cerebras", "unknown", local_only=True),
+        {"event_type": "probe", "payload": {"privacy": "unknown"}},
+    ]
+
+    warning = build_privacy_warning_summary(events, context)
+
+    assert warning["active"] is True
+    assert warning["level"] == "warning"
+    assert warning["count"] == 1
+    assert warning["examples"][0]["provider"] == "cerebras"
+    assert "without a declared privacy class" in warning["headline"]
+
+    clean = build_privacy_warning_summary(events[1:], context)
+    assert clean["active"] is False
+    assert clean["level"] == "ok"
+    assert clean["count"] == 0
 
 
 def test_workflow_contract_marks_handoff_confirmed_after_two_snapshots() -> None:
@@ -422,9 +474,21 @@ def test_dashboard_summary_renders_local_and_api_model_sections() -> None:
         swarm_recent_probes=[{"provider": "cerebras", "fetched_at": 100, "age_seconds": 7, "latency_ms": 42, "model_count": 3, "drift": False, "ok": True}],
         swarm_runtime_throughput={"by_provider": {"cerebras": {"samples": 2, "avg_tokens_per_second": 12.5, "avg_value_per_second": 8.75, "avg_queue_wait_ms": 8, "avg_latency_ms": 42}}, "by_model": {"gpt-oss-120b": {"samples": 1, "avg_tokens_per_second": 12.5, "avg_value_per_second": 8.75, "avg_queue_wait_ms": 8, "avg_latency_ms": 42}}},
         recent_usage=[],
+        privacy_warning={
+            "active": True,
+            "level": "warning",
+            "headline": "Cloud route selected without a declared privacy class",
+            "detail": (
+                "1 recent request(s) reached a cloud provider without an explicit privacy class."
+            ),
+            "count": 1,
+            "examples": [{"provider": "cerebras", "stage": "final"}],
+        },
         )
 
     assert "Swarm memory map" in html
+    assert "Cloud route selected without a declared privacy class" in html
+    assert "cerebras" in html
     assert "R2D2" in html
     assert "mixed" in html
     assert "Machine → model memory and endpoint health" in html

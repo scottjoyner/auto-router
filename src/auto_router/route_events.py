@@ -5,6 +5,7 @@ from typing import Any
 
 from auto_router.event_outbox import EventOutbox, OutboxEvent
 from auto_router.models import RouterRequest
+from auto_router.policy import request_privacy_class
 from auto_router.settings import get_settings
 from auto_router.signal_registry import route_decision_signals, signal_snapshot
 
@@ -276,6 +277,7 @@ def enqueue_route_decision_event(
         "selected_access_url": request_metadata.get("selected_access_url"),
         "stage": stage,
         "priority": request.priority.value,
+        "privacy": request_privacy_class(request_metadata),
         "local_only": request.local_only,
         "allow_cloud": request.allow_cloud,
         "chosen": chosen_payload,

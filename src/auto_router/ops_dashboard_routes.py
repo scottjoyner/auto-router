@@ -76,6 +76,14 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
     live_model_freshness = _live_model_freshness_summary(live_models, provider_health_summary)
     memory_summary = state.memory_store.summary() if hasattr(state, "memory_store") else {}
     memory_runtime = state.memory_client.metrics() if hasattr(state, "memory_client") else {}
+    recent_outbox_events = (
+        state.event_outbox.recent(limit=50)
+        if hasattr(state, "event_outbox") and hasattr(state.event_outbox, "recent")
+        else []
+    )
+    privacy_warning = build_privacy_warning_summary(
+        recent_outbox_events, getattr(state, "context", None)
+    )
     return {
         "outbox_summary": outbox_summary,
         "outbox_dispatch_summary": outbox_dispatch_summary,
@@ -116,6 +124,71 @@ def build_ops_summary(state: Any, gateway_status: dict[str, Any] | None = None) 
         "fleet_loadout_report": _fleet_loadout_report(),
         "workflow_contract_summary": workflow_contract_summary,
         "workflow_contract_alert": workflow_contract_alert,
+        "privacy_warning": privacy_warning,
+    }
+
+
+UNKNOWN_PRIVACY_CLASSES = {"", "unknown", "unspecified", "none"}
+
+
+def _cloud_provider_names(context: Any | None) -> set[str]:
+    providers = getattr(context, "providers", None) or []
+    return {
+        str(getattr(provider, "provider", getattr(provider, "name", "")) or "").strip().lower()
+        for provider in providers
+        if str(getattr(provider, "lane", "") or "").strip().lower() not in {"local", "blocked"}
+    }
+
+
+def build_privacy_warning_summary(
+    recent_events: list[dict[str, Any]],
+    context: Any | None = None,
+) -> dict[str, Any]:
+    """Flag route decisions that sent unknown-privacy requests to cloud lanes.
+
+    Route decisions carry an explicit ``privacy`` class; a missing/unknown class
+    means the caller did not declare one. The dashboard surfaces the warning so
+    operators can spot payloads that reached an external provider by default.
+    """
+    cloud_providers = _cloud_provider_names(context)
+    flagged: list[dict[str, str]] = []
+    for event in recent_events or []:
+        if event.get("event_type") != "router.route_decision":
+            continue
+        payload = event.get("payload") or {}
+        privacy = str(payload.get("privacy") or "unknown").strip().lower()
+        if privacy not in UNKNOWN_PRIVACY_CLASSES:
+            continue
+        if payload.get("local_only") or payload.get("allow_cloud") is False:
+            continue
+        chosen = payload.get("chosen") or {}
+        provider = str(chosen.get("provider_id") or chosen.get("provider") or "").strip().lower()
+        if provider and provider in cloud_providers:
+            flagged.append(
+                {
+                    "request_id": str(payload.get("request_id") or ""),
+                    "provider": provider,
+                    "stage": str(payload.get("stage") or ""),
+                }
+            )
+    active = bool(flagged)
+    return {
+        "active": active,
+        "level": "warning" if active else "ok",
+        "headline": (
+            "Cloud route selected without a declared privacy class"
+            if active
+            else "No unknown-privacy cloud routes observed"
+        ),
+        "detail": (
+            f"{len(flagged)} recent request(s) reached a cloud provider "
+            "without an explicit privacy class; mark private payloads "
+            "local-only before sending them to the router."
+            if active
+            else "Recent route decisions either declared a privacy class or stayed on local lanes."
+        ),
+        "count": len(flagged),
+        "examples": flagged[:5],
     }
 
 
