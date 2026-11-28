@@ -283,6 +283,24 @@ curl http://127.0.0.1:8088/v1/models | jq
 
 A deployment is not admitted merely because `/v1/models` succeeds. Each physical model instance also needs a completion canary, fresh health/capacity observation, explicit container reachability evidence, and benchmark evidence before AssistX routes real work.
 
+### Accepted-drift waivers and the audit clock
+
+`config/provider_registry_accepted_drift.yaml` entries must carry a reason, an
+owner and a future `review_by` date. Rolling a date forward without a real
+review is the same as having no date. The waiver gate judges deadlines against
+a reproducible frozen date by default, so CI results stay comparable; an
+operator or audit can judge the same gate at a chosen date with either:
+
+```bash
+python tests/test_provider_registry_drift.py --as-of 2026-11-28
+pytest -q tests/test_provider_registry_drift.py --as-of 2026-11-28
+```
+
+Both paths share `AUTO_ROUTER_WAIVER_AS_OF`, so `--as-of` works under pytest as
+well as direct execution. Run the gate at the current date before waivers go
+stale — an overdue `review_by` fails deliberately until the drift is fixed or
+the waiver is re-reviewed with a real owner and justification.
+
 ## Remaining integration work
 
 1. Ingest approved multi-path runtime observations directly from the AssistX context projection rather than only the reconciliation provider file.
