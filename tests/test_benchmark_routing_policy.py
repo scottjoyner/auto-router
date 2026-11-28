@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from auto_router.benchmark_routing_policy import benchmark_order, normalize_task_family
+from auto_router.config import PolicyRegistry, ProviderRegistry
 from auto_router.models import (
     ExecutionStage,
     ModelConfig,
+    PolicyProfile,
     ProviderCandidate,
     ProviderConfig,
     RouterRequest,
     StagePurpose,
 )
+from auto_router.policy import PolicyEngine
 
 
 def _candidate(
@@ -202,3 +205,66 @@ def test_mismatched_provider_model_code_permissions_are_deny_only() -> None:
         _request("auto/code", "coding"),
     )
     assert result.candidates == []
+
+
+def test_provider_roles_cannot_widen_model_role_restriction() -> None:
+    narrow = _candidate(
+        "narrow", "narrow-model", roles={"auxiliary_llm"}, family="coding",
+        utility=0.99, code=True,
+    )
+    # A broad provider role must not grant a coding role the model denies.
+    narrow.provider.routing_roles = {"full_agent", "code_agent"}
+    approved = _candidate(
+        "approved", "code-model", roles={"full_agent", "code_agent"},
+        family="coding", utility=0.1, code=True,
+    )
+
+    ordered = benchmark_order(
+        ExecutionStage(purpose=StagePurpose.final, candidates=[narrow, approved]),
+        _request("auto/code", "coding"),
+    )
+
+    assert [item.provider.node_id for item in ordered.candidates] == ["approved"]
+
+
+def test_malformed_benchmark_numbers_use_validation_fallback() -> None:
+    valid = _candidate(
+        "valid", "valid-model", roles={"full_agent", "summarization"},
+        family="summarization", utility=0.5,
+    )
+    invalid = _candidate(
+        "invalid", "invalid-model", roles={"full_agent", "summarization"},
+        family="summarization", utility=None,
+    )
+    invalid.model.task_family_scores["summarization"] = {
+        "utility_score": "not-a-number",
+        "quality_score": "broken",
+        "quality_confidence": float("nan"),
+        "quality_floor_passed": True,
+        "tokens_per_second": 12.0,
+    }
+
+    ordered = benchmark_order(
+        ExecutionStage(purpose=StagePurpose.final, candidates=[invalid, valid]),
+        _request("auto/summarize"),
+    )
+
+    assert [item.provider.node_id for item in ordered.candidates] == ["valid", "invalid"]
+    assert "validation fallback applied" in invalid.reason
+
+
+def test_explicit_metadata_profile_wins_over_benchmark_family_profile() -> None:
+    profiles = {
+        "default": PolicyProfile(),
+        "summarization_local": PolicyProfile(),
+        "operator_profile": PolicyProfile(),
+    }
+    engine = PolicyEngine(
+        ProviderRegistry(),
+        PolicyRegistry(profiles=profiles),
+        "default",
+    )
+    request = _request("auto/summarize")
+    request.metadata["profile"] = "operator_profile"
+
+    assert engine.classify_profile(request) == "operator_profile"

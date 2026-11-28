@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .models import ExecutionStage, RouterRequest
@@ -83,7 +84,10 @@ def _role_allowed(candidate: Any, family: str) -> bool:
         model.allow_code_execution and provider.allow_code_execution
     ):
         return False
-    roles = set(model.routing_roles) | set(provider.routing_roles)
+    # Model-level roles are authoritative: provider-level roles are a legacy
+    # fallback only when the model declares none. Unioning them would let a
+    # broad provider role widen a narrow model restriction.
+    roles = set(model.routing_roles) or set(provider.routing_roles)
     if not roles:
         return True
     required = _FAMILY_ROLES.get(family)
@@ -99,6 +103,18 @@ def _quality_allowed(candidate: Any, family: str) -> bool:
     return evidence.get("quality_floor_passed") is True
 
 
+def _evidence_float(evidence: dict[str, Any], key: str, default: float = 0.0) -> float | None:
+    """Return a finite float for benchmark evidence, or ``None`` if invalid."""
+    value = evidence.get(key)
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def _benchmark_key(
     candidate: Any,
     family: str,
@@ -107,9 +123,13 @@ def _benchmark_key(
     evidence = candidate.model.task_family_scores.get(family)
     if not isinstance(evidence, dict):
         return (1, 0.0, 0.0, original_index)
-    utility = float(evidence.get("utility_score") or 0.0)
-    confidence = float(evidence.get("quality_confidence") or 0.0)
-    quality = float(evidence.get("quality_score") or 0.0)
+    utility = _evidence_float(evidence, "utility_score")
+    confidence = _evidence_float(evidence, "quality_confidence")
+    quality = _evidence_float(evidence, "quality_score")
+    if utility is None or confidence is None or quality is None:
+        # Malformed evidence gets the unmeasured fallback instead of raising a
+        # 500; never let invalid numbers outrank validated evidence.
+        return (1, 0.0, 0.0, original_index)
     # Qualified evidence ranks before unmeasured eligible candidates. Original
     # order remains the final tiebreaker so live load balancing is preserved.
     return (0, -utility, -quality * max(confidence, 0.25), original_index)
@@ -145,12 +165,18 @@ def benchmark_order(
     for candidate in candidates:
         evidence = candidate.model.task_family_scores.get(family)
         if isinstance(evidence, dict):
-            candidate.reason = (
-                f"{candidate.reason}; {family} benchmark utility="
-                f"{float(evidence.get('utility_score') or 0.0):.3f}, "
-                f"quality={float(evidence.get('quality_score') or 0.0):.3f}, "
-                f"tps={evidence.get('tokens_per_second')}"
-            )
+            utility = _evidence_float(evidence, "utility_score")
+            quality = _evidence_float(evidence, "quality_score")
+            if utility is None or quality is None:
+                candidate.reason = (
+                    f"{candidate.reason}; {family} benchmark evidence invalid; "
+                    "validation fallback applied"
+                )
+            else:
+                candidate.reason = (
+                    f"{candidate.reason}; {family} benchmark utility={utility:.3f}, "
+                    f"quality={quality:.3f}, tps={evidence.get('tokens_per_second')}"
+                )
         else:
             candidate.reason = (
                 f"{candidate.reason}; no {family} benchmark evidence"
@@ -170,6 +196,13 @@ def install_benchmark_routing_policy() -> None:
     original_build_stage = PolicyEngine._build_stage
 
     def classify_profile(self: Any, request: RouterRequest) -> str:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        explicit = metadata.get("profile")
+        if isinstance(explicit, str) and explicit in self.policies.profiles:
+            # Original classification already handles explicit metadata profiles
+            # and any safety overrides that take precedence over them. Benchmark
+            # inference must not supersede an operator-selected profile.
+            return original_classify(self, request)
         family = normalize_task_family(request)
         profile = _PROFILE_BY_FAMILY.get(family)
         if profile and profile in self.policies.profiles:

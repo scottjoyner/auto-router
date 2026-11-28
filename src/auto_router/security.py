@@ -10,8 +10,8 @@ rejected with 401 so operators cannot accidentally expose them.
 
 from __future__ import annotations
 
+import hmac
 import os
-import secrets
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -53,7 +53,7 @@ def _admin_credential_is_separate(admin_token: str) -> bool:
         "AUTO_ROUTER_ROUTE_DECISION_TOKEN",
     ):
         other = os.getenv(name, "")
-        if other and secrets.compare_digest(admin_token, other):
+        if other and hmac.compare_digest(admin_token, other):
             return False
     return True
 
@@ -90,7 +90,7 @@ async def require_admin(
     if basic is not None and basic.password and basic.username == "admin":
         provided.append(basic.password.strip())
 
-    if any(secrets.compare_digest(candidate, token) for candidate in provided):
+    if any(hmac.compare_digest(candidate, token) for candidate in provided):
         return
 
     raise _unauthorized()
@@ -113,5 +113,5 @@ async def require_route_decision_token(
     prefix = "Bearer "
     raw = authorization or ""
     supplied = raw[len(prefix) :].strip() if raw.startswith(prefix) else ""
-    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+    if not expected or not supplied or not hmac.compare_digest(supplied, expected):
         raise _unauthorized("Route decision token required")

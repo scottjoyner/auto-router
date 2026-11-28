@@ -5,6 +5,8 @@ import pytest
 from auto_router.offline_guard import (
     enforce_strict_offline_provider_config,
     host_is_offline_allowed,
+    parse_bool,
+    strict_offline_enabled,
     validate_offline_provider_config,
 )
 
@@ -122,6 +124,52 @@ providers:
     )
 
     assert validate_offline_provider_config(path, env={}) == []
+
+
+def test_string_false_enabled_value_is_disabled(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+providers:
+  - name: local
+    type: lmstudio
+    enabled: true
+    base_url: http://localhost:1234/v1
+    quota_class: local
+  - name: string-disabled-cloud
+    type: openai_compatible
+    enabled: "false"
+    base_url: https://example.com/v1
+    quota_class: brokered_free
+""",
+    )
+
+    assert validate_offline_provider_config(path, env={}) == []
+
+    only_disabled = _write(
+        tmp_path,
+        """
+providers:
+  - name: string-disabled-cloud
+    type: openai_compatible
+    enabled: "false"
+    base_url: https://example.com/v1
+    quota_class: brokered_free
+""",
+    )
+    assert any(
+        "at least one enabled local provider" in error
+        for error in validate_offline_provider_config(only_disabled, env={})
+    )
+
+
+def test_bool_parser_handles_yaml_and_env_values() -> None:
+    assert parse_bool(True) is True
+    assert parse_bool("YES") is True
+    assert parse_bool("off") is False
+    assert parse_bool("unexpected", default=True) is True
+    assert strict_offline_enabled({"AUTO_ROUTER_STRICT_OFFLINE": "false"}) is False
+    assert strict_offline_enabled({"AUTO_ROUTER_STRICT_OFFLINE": "true"}) is True
 
 
 def test_guard_can_only_be_disabled_explicitly(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ import yaml
 
 _ENV_PATTERN = re.compile(r"\$\{([^}:]+)(?::-([^}]*))?\}")
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
 _ALLOWED_PROVIDER_TYPES = {
     "lmstudio",
     "llama_cpp",
@@ -23,9 +24,33 @@ _ALLOWED_PROVIDER_TYPES = {
 _TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
+def parse_bool(value: Any, default: bool = False) -> bool:
+    """Parse YAML/env booleans without treating ``"false"`` as truthy.
+
+    Unknown values fall back to ``default`` so strict-offline checks fail closed
+    instead of enabling an ambiguous provider.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return default
+    text = str(value).strip().lower()
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    return default
+
+
 def strict_offline_enabled(env: Mapping[str, str] | None = None) -> bool:
     source = env if env is not None else os.environ
-    return str(source.get("AUTO_ROUTER_STRICT_OFFLINE", "true")).strip().lower() in _TRUE_VALUES
+    return parse_bool(source.get("AUTO_ROUTER_STRICT_OFFLINE", "true"), default=False)
 
 
 def _expand_env(value: Any, env: Mapping[str, str]) -> Any:
@@ -110,7 +135,7 @@ def validate_offline_provider_config(
         if not isinstance(provider, dict):
             errors.append(f"providers[{index}] must be an object")
             continue
-        if not bool(provider.get("enabled", True)):
+        if not parse_bool(provider.get("enabled", True), default=False):
             continue
 
         name = str(provider.get("id") or provider.get("name") or f"providers[{index}]")
@@ -121,7 +146,7 @@ def validate_offline_provider_config(
             errors.append(f"{name}: provider type '{provider_type}' is not allowed offline")
         if quota_class != "local":
             errors.append(f"{name}: quota_class must be 'local', got '{quota_class}'")
-        if bool(provider.get("gateway_managed", False)):
+        if parse_bool(provider.get("gateway_managed", False), default=False):
             errors.append(f"{name}: gateway_managed providers are forbidden in strict offline mode")
 
         errors.extend(_validate_access_url(name, "base_url", provider.get("base_url"), source))
@@ -158,7 +183,10 @@ def validate_offline_provider_config(
                 f"{name}: runtime_instance_id is required when parallel_slots is positive"
             )
 
-    if not any(isinstance(item, dict) and bool(item.get("enabled", True)) for item in providers):
+    if not any(
+        isinstance(item, dict) and parse_bool(item.get("enabled", True), default=False)
+        for item in providers
+    ):
         errors.append("strict offline mode requires at least one enabled local provider")
     return errors
 

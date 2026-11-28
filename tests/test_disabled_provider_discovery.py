@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -134,3 +135,59 @@ def test_registry_with_only_disabled_nodes_does_not_resurrect_cache(
     monkeypatch.setattr(discovery, "DEFAULT_REPORT_PATH", report)
 
     assert discovery.probe_all_nodes(provider_config=config) == []
+
+
+def test_missing_registry_drops_disabled_cached_report_nodes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    missing_registry = tmp_path / "missing.yaml"
+    report = tmp_path / "report.json"
+    report.write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"name": "drained-node", "online": True, "enabled": False},
+                    {"name": "blocked-node", "online": True, "blocked": True},
+                    {"name": "cached-node", "online": True, "all_models": ["old"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discovery, "DEFAULT_REPORT_PATH", report)
+    monkeypatch.setattr(discovery, "DEFAULT_STATS_PATH", tmp_path / "missing-stats.json")
+
+    nodes = discovery.probe_all_nodes(provider_config=missing_registry)
+
+    assert [node.name for node in nodes] == ["cached-node"]
+    assert all(node.online is False for node in nodes)
+    assert all(node.inventory_authoritative is False for node in nodes)
+    assert any("not enabled" in warning for warning in nodes[0].warnings)
+
+
+def test_missing_registry_drops_disabled_cached_stats_nodes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    missing_registry = tmp_path / "missing.yaml"
+    stats = tmp_path / "stats.json"
+    stats.write_text(
+        json.dumps(
+            {
+                "slots": [
+                    {"node": "drained-node", "model": "old", "enabled": "false"},
+                    {"node": "cached-node", "model": "old"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discovery, "DEFAULT_REPORT_PATH", tmp_path / "missing-report.json")
+    monkeypatch.setattr(discovery, "DEFAULT_STATS_PATH", stats)
+
+    nodes = discovery.probe_all_nodes(provider_config=missing_registry)
+
+    assert [node.name for node in nodes] == ["cached-node"]
+    assert all(node.online is False for node in nodes)
+    assert any("not enabled" in warning for warning in nodes[0].warnings)

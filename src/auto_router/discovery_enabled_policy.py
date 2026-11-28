@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from .offline_guard import parse_bool
+
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
 _INSTALLED = False
 
@@ -24,6 +26,15 @@ def _is_enabled(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() not in _FALSE_VALUES
+
+
+def _cache_row_enabled(row: Any) -> bool:
+    """Cached rows may carry a disabled/blocked marker from an earlier registry."""
+    if not isinstance(row, dict):
+        return False
+    return _is_enabled(row.get("enabled", True)) and not parse_bool(
+        row.get("blocked", False), default=False
+    )
 
 
 def install_enabled_discovery_policy() -> None:
@@ -145,17 +156,37 @@ def install_enabled_discovery_policy() -> None:
                         )
             return sorted(nodes, key=lambda node: node.name.lower())
 
-        report_nodes = discovery._from_report(
-            discovery._load_json(discovery.DEFAULT_REPORT_PATH)
-        )
+        # No registry means no active configuration proves a node is enabled.
+        # Cached report/stats rows are diagnostic-only: drop rows explicitly
+        # marked disabled/blocked and never promote any cached node to online.
+        report = discovery._load_json(discovery.DEFAULT_REPORT_PATH)
+        report_rows = report.get("nodes") if isinstance(report, dict) else None
+        if isinstance(report_rows, list):
+            report = {
+                **report,
+                "nodes": [row for row in report_rows if _cache_row_enabled(row)],
+            }
+        report_nodes = discovery._from_report(report)
+        for node in report_nodes:
+            node.online = False
+            node.inventory_authoritative = False
+            node.warnings.append("provider registry missing; cached node is not enabled")
         if report_nodes:
             return sorted(report_nodes, key=lambda node: node.name.lower())
-        return sorted(
-            discovery._from_stats(
-                discovery._load_json(discovery.DEFAULT_STATS_PATH)
-            ),
-            key=lambda node: node.name.lower(),
-        )
+
+        stats = discovery._load_json(discovery.DEFAULT_STATS_PATH)
+        stats_rows = stats.get("slots") if isinstance(stats, dict) else None
+        if isinstance(stats_rows, list):
+            stats = {
+                **stats,
+                "slots": [row for row in stats_rows if _cache_row_enabled(row)],
+            }
+        stats_nodes = discovery._from_stats(stats)
+        for node in stats_nodes:
+            node.online = False
+            node.inventory_authoritative = False
+            node.warnings.append("provider registry missing; cached node is not enabled")
+        return sorted(stats_nodes, key=lambda node: node.name.lower())
 
     discovery.probe_all_nodes = active_probe_all_nodes
     _INSTALLED = True

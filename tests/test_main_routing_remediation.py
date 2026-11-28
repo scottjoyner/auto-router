@@ -196,3 +196,44 @@ def test_all_stage_reservations_released_on_early_completion(
 
     assert observed["reserved"] == 2
     assert not any(engine._lb_planned.values())
+
+
+def test_cancelled_dispatch_releases_inflight_and_quota(monkeypatch) -> None:
+    events: list[str] = []
+
+    class RecordingQuota(FakeQuota):
+        def release(self, provider, model, estimate) -> None:  # noqa: ANN001
+            events.append("release")
+
+    circuits = FakeCircuits()
+    monkeypatch.setattr(
+        main_module,
+        "state",
+        SimpleNamespace(circuits=circuits, quota=RecordingQuota(), context=SimpleNamespace()),
+    )
+    monkeypatch.setattr(main_module, "_candidate_allowed", lambda *args: True)
+    monkeypatch.setattr(main_module, "enqueue_route_decision_event", lambda *args, **kwargs: "")
+
+    async def cancel(*args, **kwargs) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main_module, "_dispatch", cancel)
+
+    candidate = _candidate()
+    plan = ExecutionPlan(
+        profile_name="interactive_balanced",
+        stages=[ExecutionStage(purpose=StagePurpose.final, candidates=[candidate])],
+    )
+    policy_engine = SimpleNamespace(
+        mark_inflight_start=lambda owner: events.append("start"),
+        mark_inflight_end=lambda owner: events.append("end"),
+    )
+    request = RouterRequest(request_id="cancelled-1", route="chat_completions")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            main_module._execute_plan(request, plan, policy_engine, lambda index: None)
+        )
+
+    assert events == ["start", "end", "release"]
+    assert circuits.failures == []

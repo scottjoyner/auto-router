@@ -854,6 +854,10 @@ async def _execute_plan(
             started_at_ms = int(time.time() * 1000)
             started = time.perf_counter()
             try:
+                # CancelledError derives from BaseException, so the ProviderError
+                # and generic Exception handlers below cannot release this
+                # reservation. A disconnected client or shutdown must not leak
+                # in-flight capacity or quota.
                 if router_request.stream and router_request.route in {"chat_completions", "responses", "completions"}:
                     gateway_context = _gateway_route_context(plan.profile_name, stage.purpose.value, router_request)
                     stream_response = await asyncio.wait_for(
@@ -927,6 +931,12 @@ async def _execute_plan(
                 payload = _normalize_response_payload(response, stage.purpose.value, plan.profile_name)
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
+            except asyncio.CancelledError:
+                policy_engine.mark_inflight_end(owner)
+                await asyncio.to_thread(
+                    state.quota.release, candidate.provider, candidate.model, estimate
+                )
+                raise
             except ProviderError as exc:
                 policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)

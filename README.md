@@ -66,7 +66,16 @@ Before application state is built, the router validates every enabled provider a
 
 Allowed hosts include loopback, RFC1918 LAN addresses, Tailscale CGNAT addresses, approved `.ts.net`/`.lan`/`.local`/`.internal` names, and local Docker service names.
 
-Public inference providers—including Groq, Cerebras, OpenRouter, Grok, OpenAI, Anthropic, and hosted gateways—are not part of this deployment.
+Public inference providers—including Groq, Cerebras, OpenRouter, Grok, OpenAI, Anthropic, and hosted gateways—are not part of this deployment. The committed `config/context.yaml` follows the same rule: it contains only local nodes and providers, with no hosted inference lanes.
+
+### NPU lane environment
+
+The RyzenAI NPU provider on `xwing` is a local, low-priority auxiliary tier. Its endpoint is reached from the host, not from inside the router container:
+
+- `XWING_NPU_BASE_URL` — OpenAI-compatible RyzenAI NPU endpoint on the Docker host. Compose defaults it to `http://host.docker.internal:1236/v1`; override it when the router runs outside Docker or reaches the NPU over the tailnet. This value is used for both `base_url` and `access_urls` in `config/providers.yaml`.
+- `FASTFLOWLM_X1_NPU_BASE_URL` — separate FastFlowLM/Lemonade NPU lane on `x1`; defaults to `http://100.64.43.123:52625/v1`.
+
+Hosts must still be private/loopback/Tailscale addresses: strict-offline validation rejects public URLs even when supplied through these variables.
 
 ## What the router owns
 
@@ -234,7 +243,7 @@ Or:
 docker compose up -d --build
 ```
 
-The default Compose deployment is strict-offline, has autoload/unload and the in-process fleet dispatcher disabled, and does not mount Hermes or worktree execution state into the router.
+The default Compose deployment is strict-offline, has autoload/unload disabled, enables the in-process fleet dispatcher for bounded local dispatch (`AUTO_ROUTER_FLEET_DISPATCHER_ENABLED=true`), and does not mount Hermes or worktree execution state into the router. The reconciliation and integration overlays explicitly disable the dispatcher. The image runs as the unprivileged `router` user (UID/GID 1000); bind-mounted `./data` and `./artifacts` must be writable by that UID.
 
 ## Side-by-side migration start
 
