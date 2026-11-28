@@ -47,7 +47,7 @@ def pytest_addoption(parser):
         metavar="YYYY-MM-DD",
         help=(
             "date used to judge accepted-drift waiver review_by deadlines "
-            "(default: the test module's frozen CI clock)"
+            "(default: 2026-10-04, the test module's frozen CI clock)"
         ),
     )
 
@@ -68,8 +68,6 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     """Skip live-deployment assertions unless the operator opts in."""
-    import os
-
     if os.environ.get("AUTO_ROUTER_RUN_LIVE_TESTS") == "1":
         return
     skip = pytest.mark.skip(
