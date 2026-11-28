@@ -93,12 +93,17 @@ class Settings(BaseSettings):
     # Persisted per-node latency EMA so the router remembers which nodes are snappy
     # across restarts (instead of re-learning from a cold start every boot). The
     # path is derived from the database location so it lands in the same (mounted,
-    # durable) directory as router.sqlite3 in both docker and local runs.
+    # durable) directory as router.sqlite3 in both docker and local runs. This is a
+    # learned, as-of-last-write estimate (throttled by this interval), not a live or
+    # canonical health measurement; AssistX/Neo4j stay the authority for health and
+    # capacity.
     latency_persist_interval_seconds: int = 30
-    # Weight applied to the latency term in fleet load-balancing. 1.0 = default
-    # (latency-aware: slow nodes are deprioritized). 0.0 = ignore latency entirely
-    # and spread `auto` traffic evenly across all healthy nodes by in-flight load.
-    # Set ROUTER_LATENCY_TERM_WEIGHT=0 to force full fleet utilization.
+    # Weight applied to the latency term in fleet load-balancing. The shipped
+    # default is 0.0: latency bias is OFF and `auto` traffic spreads evenly across
+    # healthy nodes by in-flight load. Set to 1.0 to enable latency-aware ranking
+    # (each ~2s of learned latency adds 1.0 to a node's effective cost, so slow
+    # nodes are deprioritized). The env var is AUTO_ROUTER_LATENCY_TERM_WEIGHT;
+    # the AUTO_ROUTER_ prefix comes from Settings.model_config.env_prefix.
     latency_term_weight: float = 0.0
 
     @property
