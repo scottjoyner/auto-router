@@ -503,13 +503,42 @@ def _live_model_context(
     )
 
 
+def _model_superseded_by_live(model: ContextModel, live_ids: dict[str, set[str]]) -> bool:
+    """A configured/bootstrap model is stale once its provider reports a live
+    inventory that no longer contains it."""
+    provider = str(model.provider or "").strip().lower()
+    if provider not in live_ids:
+        return False
+    reported = live_ids[provider]
+    names = {str(model.provider_model or "").strip().lower(), model.name.strip().lower()}
+    return bool(names) and not (names & reported)
+
+
 def _project_live_models(
     snapshot: ContextSnapshot,
     providers: ProviderRegistry,
     live_snapshots: list[LiveModelSnapshot],
 ) -> ContextSnapshot:
     provider_map = {provider.id or provider.name: provider for provider in providers.providers}
-    live_model_map = {model.model_id: model for model in snapshot.models}
+    live_ids: dict[str, set[str]] = {}
+    for live_snapshot in live_snapshots:
+        if not live_snapshot.ok:
+            continue
+        provider_config = provider_map.get(live_snapshot.provider)
+        if provider_config is None:
+            continue
+        key = (provider_config.id or provider_config.name).strip().lower()
+        ids = {
+            str(record.get("id") or record.get("name") or record.get("model") or "").strip().lower()
+            for record in live_snapshot.models
+        }
+        ids.discard("")
+        live_ids.setdefault(key, set()).update(ids)
+    live_model_map = {
+        model.model_id: model
+        for model in snapshot.models
+        if not _model_superseded_by_live(model, live_ids)
+    }
     for live_snapshot in live_snapshots:
         provider_config = provider_map.get(live_snapshot.provider)
         if provider_config is None:
@@ -526,6 +555,10 @@ def _project_live_models(
                 live_model_map.pop(matched.model_id, None)
             live_model_map[live_model.model_id] = merged
     snapshot.models = sorted(live_model_map.values(), key=lambda item: (item.priority, item.provider or "", item.name.lower()))
+    # model_for()/all_models() are cached; the projection just replaced the
+    # model set, so both caches must be rebuilt on the next lookup.
+    snapshot._all_models_cache = None
+    snapshot._model_index_cache = None
     for provider in snapshot.providers:
         provider.models = [model for model in snapshot.models if model.provider == provider.provider]
     return snapshot

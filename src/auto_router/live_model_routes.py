@@ -104,24 +104,29 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
     signature actually changes -- a stable fleet otherwise just updates the
     in-memory cache, avoiding a blocking DB write every poll cycle."""
 
+    any_changed = False
+
     async def _refresh_one(item: ProviderConfig) -> dict[str, Any]:
+        nonlocal any_changed
         started = time.perf_counter()
         snapshot = await state.live_models.refresh_provider(item, fetch_provider_models)
         latency_ms = int((time.perf_counter() - started) * 1000)
         provider = snapshot.provider
         ok = bool(snapshot.ok)
         prior_ok = _LIVE_OK_STATE.get(provider)
-        signature = (
-            state.model_registry._snapshot_signature(snapshot.models)
-            if hasattr(state, "model_registry")
-            else None
-        )
+        # A registry implementation (e.g. a read-only stub) need not expose the
+        # private signature helper; degrading to "no signature" must not break
+        # the refresh path.
+        signer = getattr(getattr(state, "model_registry", None), "_snapshot_signature", None)
+        signature = signer(snapshot.models) if callable(signer) else None
         prior_sig = _LIVE_SIG_STATE.get(provider)
         changed = (
             prior_ok is None
             or prior_ok != ok
             or (ok and prior_sig is not None and prior_sig != signature)
         )
+        if changed:
+            any_changed = True
         _LIVE_OK_STATE[provider] = ok
         _LIVE_SIG_STATE[provider] = signature
         registry_error: str | None = None
@@ -146,7 +151,7 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
                 "drift": False,
                 "signature": signature,
                 "previous_signature": prior_sig,
-                "error": snapshot.error,
+                "error": snapshot.error or registry_error,
                 "models": snapshot.models,
             }
         if hasattr(state, "signal_registry"):
@@ -162,15 +167,10 @@ async def refresh_provider_models(state: Any, providers: list[ProviderConfig]) -
         return record
 
     records = await asyncio.gather(*(_refresh_one(item) for item in providers))
-    changed = False
-    for rec in records:
-        provider = rec.get("provider")
-        now_ok = bool(rec.get("ok", True))
-        prior = _LIVE_OK_STATE.get(provider)
-        if rec.get("drift") or prior is None or prior != now_ok:
-            changed = True
-        _LIVE_OK_STATE[provider] = now_ok
-    if changed:
+    # The per-provider state was already advanced by _refresh_one, so recomputing
+    # "changed" from it here would always be False. Use the flags captured before
+    # that update (including registry-detected drift) instead.
+    if any_changed or any(record.get("drift") for record in records):
         try:
             hydrate_live_models_from_registry(state)
         except Exception:

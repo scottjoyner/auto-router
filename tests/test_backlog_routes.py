@@ -54,6 +54,10 @@ class _FakePolicyState:
 
 
 def test_backlog_burn_down_uses_real_dispatch_path(monkeypatch, tmp_path) -> None:
+    from auto_router.settings import get_settings
+
+    monkeypatch.setenv("AUTO_ROUTER_ASSISTX_TASKS_URL", "http://assistx/tasks")
+    get_settings.cache_clear()
     state = _FakePolicyState(EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}"))
     app = FastAPI()
     register_backlog_routes(app, state)

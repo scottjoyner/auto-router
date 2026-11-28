@@ -28,7 +28,9 @@ providers:
     assert "chat" in registry.providers[0].models[0].capabilities
 
 
-def test_macbook_air_provider_registry_includes_live_tailnet_models() -> None:
+def test_macbook_air_provider_registry_includes_live_tailnet_models(
+    live_provider_inventory: None,
+) -> None:
     config_path = Path(__file__).resolve().parents[1] / "config" / "providers.yaml"
 
     registry = load_provider_registry(config_path)

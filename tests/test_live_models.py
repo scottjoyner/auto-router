@@ -176,7 +176,7 @@ def test_discovered_lmstudio_providers_include_context_services(monkeypatch) -> 
     state = SimpleNamespace(providers=providers, context=context)
     monkeypatch.setattr("auto_router.live_model_routes.discover_tailnet_lmstudio_services", lambda: [])
 
-    discovered = discovered_lmstudio_providers(state)
+    discovered = asyncio.run(discovered_lmstudio_providers(state))
 
     assert len(discovered) == 1
     assert discovered[0].name == "lmstudio-r2d2"
