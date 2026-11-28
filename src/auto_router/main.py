@@ -43,7 +43,7 @@ from auto_router.live_model_routes import merge_discovered_lmstudio_providers, r
 from auto_router.memory_client import MemoryClient
 from auto_router.memory_store import MemoryStore
 from auto_router.ops_dashboard_routes import build_swarm_state_summary, _context_route_signal_summary, _fleet_dispatcher_stats, _fleet_loadout_report, _workflow_contract_summary
-from auto_router.quota import build_quota_manager
+from auto_router.quota import build_quota_manager, quota_backend_is_ready
 from auto_router.route_events import enqueue_route_decision_event
 from auto_router.security import require_admin
 from auto_router.settings import get_settings
@@ -406,13 +406,18 @@ async def health() -> dict[str, Any]:
     # A live telemetry trickle sits at 'warning' (draining, below the critical
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
-    overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
-    redis_ok = "not_configured"
+    redis_url = get_settings().redis_url
+    redis_ok = "not_connected" if redis_url else "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
             redis_ok = "ok" if await asyncio.to_thread(state.quota.client.ping) else "down"
         except Exception:
             redis_ok = "down"
+    overall_ok = (
+        not open_circuits
+        and outbox_pressure["level"] != "critical"
+        and quota_backend_is_ready(redis_url, state.quota_backend, redis_ok)
+    )
     
     return {
         "ok": overall_ok,
@@ -534,22 +539,22 @@ async def dashboard_summary(request: Request) -> Any:
     )
 
 
-@app.get("/admin/quota")
+@app.get("/admin/quota", dependencies=[Depends(require_admin)])
 async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [snapshot.model_dump() for snapshot in state.quota.snapshots(state.providers.enabled())]}
 
 
-@app.get("/admin/providers/health")
+@app.get("/admin/providers/health", dependencies=[Depends(require_admin)])
 async def admin_provider_health(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": await _provider_health_reports()}
 
 
-@app.get("/admin/context")
+@app.get("/admin/context", dependencies=[Depends(require_admin)])
 async def admin_context(_: None = Depends(require_admin)) -> dict[str, Any]:
     return state.context.model_dump()
 
 
-@app.get("/admin/context/graph")
+@app.get("/admin/context/graph", dependencies=[Depends(require_admin)])
 async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {
         "revision": state.context.revision,
@@ -559,19 +564,56 @@ async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any
     }
 
 
-@app.get("/admin/providers")
+# Operator inventory must never serialize raw ProviderConfig. The provider
+# schema contains headers, api_key_env/file and access/base URLs (including
+# possible userinfo and query credentials). Treat additions to those schemas
+# as secret by default rather than relying on a growing denylist.
+_ADMIN_PROVIDER_FIELDS = frozenset({
+    "id", "name", "type", "node_id", "runtime_instance_id", "runtime_kind",
+    "enabled", "parallel_slots", "queue_limit", "priority", "quota_class",
+    "routing_roles", "worker_mode", "allow_agent_runtime",
+    "allow_code_execution", "models",
+})
+_ADMIN_MODEL_FIELDS = frozenset({
+    "alias", "provider_model", "capabilities", "context_window",
+    "quantization", "worker_mode",
+})
+
+
+def _redacted_admin_provider(provider: Any) -> dict[str, Any]:
+    raw = provider.model_dump()
+    if not isinstance(raw, dict):
+        raise ValueError("unexpected provider inventory data")
+    redacted = {key: value for key, value in raw.items()
+                if key in _ADMIN_PROVIDER_FIELDS and key != "models"}
+    models = raw.get("models", [])
+    if not isinstance(models, list):
+        raise ValueError("unexpected provider model inventory")
+    redacted["models"] = [
+        {key: value for key, value in model.items()
+         if key in _ADMIN_MODEL_FIELDS} if isinstance(model, dict)
+        else model if isinstance(model, str)
+        else {} for model in models
+    ]
+    return redacted
+
+
+@app.get("/admin/providers", dependencies=[Depends(require_admin)])
 async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
-    return {"providers": [provider.model_dump() for provider in state.providers.providers]}
+    return {"providers": [
+        _redacted_admin_provider(provider)
+        for provider in state.providers.providers
+    ]}
 
 
-@app.get("/admin/placement")
+@app.get("/admin/placement", dependencies=[Depends(require_admin)])
 async def admin_placement(_: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import compute_plan
 
     return compute_plan(state)
 
 
-@app.post("/admin/load")
+@app.post("/admin/load", dependencies=[Depends(require_admin)])
 async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
 
@@ -579,36 +621,36 @@ async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)
     return await reconcile_once(state, apply=do_apply)
 
 
-@app.get("/admin/agent-workers")
+@app.get("/admin/agent-workers", dependencies=[Depends(require_admin)])
 async def admin_agent_workers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
 
 
-@app.get("/admin/usage")
+@app.get("/admin/usage", dependencies=[Depends(require_admin)])
 async def admin_usage(limit: int = 50, _: None = Depends(require_admin)) -> dict[str, Any]:
     return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
 
 
-@app.get("/admin/circuits")
+@app.get("/admin/circuits", dependencies=[Depends(require_admin)])
 async def admin_circuits(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
 
 
-@app.post("/admin/circuits/reset")
+@app.post("/admin/circuits/reset", dependencies=[Depends(require_admin)])
 async def admin_circuits_reset(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear all circuit breakers (recover from tripped providers immediately)."""
     cleared = state.circuits.reset()
     return {"cleared": cleared}
 
 
-@app.post("/admin/circuits/reset/{owner:path}")
+@app.post("/admin/circuits/reset/{owner:path}", dependencies=[Depends(require_admin)])
 async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear a single circuit breaker by owner (provider/model)."""
     cleared = state.circuits.reset(owner)
     return {"owner": owner, "cleared": cleared}
 
 
-@app.get("/admin/agent-jobs")
+@app.get("/admin/agent-jobs", dependencies=[Depends(require_admin)])
 async def admin_agent_jobs(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"jobs": [record_as_dict(record) for record in state.agent_jobs.list_records()]}
 

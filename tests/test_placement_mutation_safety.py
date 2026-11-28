@@ -90,17 +90,25 @@ def test_mutating_admin_routes_require_auth_dependency():
         assert require_admin in auth_dependencies, path
 
 
-def test_mutating_admin_routes_deny_unauthenticated_http():
-    # In-process ASGI only: no request reaches a live router or fleet endpoint.
+def test_mutating_admin_routes_deny_unauthenticated_http(monkeypatch: pytest.MonkeyPatch):
+    # Offline ASGI fixture: no Redis URL configured and no live fleet requests.
+    # Keep lifespan enabled so the real unauthenticated routes are exercised.
     from fastapi.testclient import TestClient
 
     from auto_router.main import app
+    from auto_router.settings import get_settings
 
-    with TestClient(app) as client:
-        for path in ("/admin/load", "/admin/circuits/reset",
-                     "/admin/circuits/reset/unit-test"):
-            response = client.post(path)
-            assert response.status_code == 401, path
+    try:
+        with monkeypatch.context() as env:
+            env.setenv("AUTO_ROUTER_REDIS_URL", "")
+            get_settings.cache_clear()
+            with TestClient(app) as client:
+                for path in ("/admin/load", "/admin/circuits/reset",
+                             "/admin/circuits/reset/unit-test"):
+                    response = client.post(path)
+                    assert response.status_code == 401, path
+    finally:
+        get_settings.cache_clear()
 
 def test_all_readonly_admin_routes_require_auth_and_deny_anonymous_http():
     from fastapi.testclient import TestClient

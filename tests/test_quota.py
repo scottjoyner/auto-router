@@ -1,3 +1,6 @@
+import pytest
+
+import auto_router.quota as quota_mod
 from auto_router.models import ModelConfig, ProviderConfig
 from auto_router.quota import InMemoryQuotaManager, build_quota_manager
 
@@ -44,3 +47,47 @@ def test_build_quota_manager_falls_back_to_memory_without_redis() -> None:
     quota = build_quota_manager(None)
 
     assert isinstance(quota, InMemoryQuotaManager)
+
+def test_redis_configured_without_client_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(quota_mod, "redis_lib", None)
+    with pytest.raises(RuntimeError, match="Redis quota backend required"):
+        build_quota_manager("redis://localhost:6379/0")
+
+
+def test_redis_connection_error_does_not_fallback_to_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UnavailableRedis:
+        def __init__(self, redis_url: str) -> None:
+            raise ConnectionError("synthetic Redis outage")
+
+    monkeypatch.setattr(quota_mod, "redis_lib", object())
+    monkeypatch.setattr(quota_mod, "RedisQuotaManager", UnavailableRedis)
+    with pytest.raises(RuntimeError, match="refusing in-memory fallback"):
+        build_quota_manager("redis://localhost:6379/0")
+
+
+def test_redis_configured_uses_connected_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ConnectedRedis:
+        def __init__(self, redis_url: str) -> None:
+            self.redis_url = redis_url
+
+    monkeypatch.setattr(quota_mod, "redis_lib", object())
+    monkeypatch.setattr(quota_mod, "RedisQuotaManager", ConnectedRedis)
+    quota = build_quota_manager("redis://localhost:6379/0")
+    assert isinstance(quota, ConnectedRedis)
+    assert quota.redis_url == "redis://localhost:6379/0"
+
+
+@pytest.mark.parametrize(
+    ("redis_url", "backend", "status", "expected"),
+    [
+        ("", "InMemoryQuotaManager", "not_configured", True),
+        ("redis://localhost:6379/0", "InMemoryQuotaManager", "not_connected", False),
+        ("redis://localhost:6379/0", "InMemoryQuotaManager", "ok", False),
+        ("redis://localhost:6379/0", "RedisQuotaManager", "down", False),
+        ("redis://localhost:6379/0", "RedisQuotaManager", "ok", True),
+    ],
+)
+def test_quota_backend_health_fails_closed(
+    redis_url: str, backend: str, status: str, expected: bool
+) -> None:
+    assert quota_mod.quota_backend_is_ready(redis_url, backend, status) is expected
