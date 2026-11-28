@@ -32,11 +32,15 @@ carries model ids that must still be present in the registry.
 
 from __future__ import annotations
 
+import argparse
+import datetime
 import importlib.util
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "config" / "providers.yaml"
@@ -68,6 +72,42 @@ def _load_drift_module():
 
 
 drift = _load_drift_module()
+
+# The waiver deadline check used to freeze "today" at 2026-10-04 inside the
+# test itself, so an overdue review_by never failed no matter when the gate
+# ran. Keep that date as the default so CI stays reproducible, but make the
+# clock injectable with --as-of: an operator (or an audit) can now evaluate
+# waivers at the real date and see overdue deadlines fail.
+DEFAULT_AS_OF = datetime.date(2026, 10, 4)
+AS_OF = DEFAULT_AS_OF
+
+
+def as_of() -> datetime.date:
+    """The date at which waiver deadlines are judged.
+
+    The direct-script path assigns ``AS_OF`` in ``__main__``. Under pytest that
+    block never runs, so read the same clock from AUTO_ROUTER_WAIVER_AS_OF (set
+    by ``tests/conftest.py`` from ``--as-of``). Without the env override the
+    frozen CI date is kept, so CI does not start failing on waivers that have
+    not yet been deliberately re-reviewed.
+    """
+    override = os.environ.get("AUTO_ROUTER_WAIVER_AS_OF", "").strip()
+    if override:
+        return datetime.date.fromisoformat(override)
+    return AS_OF
+
+
+def _parse_args(argv: list[str] | None = None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--as-of",
+        type=datetime.date.fromisoformat,
+        default=DEFAULT_AS_OF,
+        metavar="YYYY-MM-DD",
+        help="date used to judge waiver review_by deadlines "
+        f"(default: {DEFAULT_AS_OF.isoformat()}, the frozen CI clock)",
+    )
+    return parser.parse_known_args(argv)
 
 
 def _load_snapshot() -> dict:
@@ -209,13 +249,8 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         if unreachable:
             print(f"note: {len(unreachable)} provider(s) unreachable, not asserted about: {unreachable}")
 
-    def test_accepted_drift_entries_are_justified_and_dated(self):
-        """A waiver must say why, who owns it, and when to revisit it.
-
-        Without this the waiver file becomes a place to silence findings: an
-        entry with an empty reason, no owner, or no review date is not a
-        decision, it is a suppression.
-        """
+    def _assert_waivers_current(self):
+        """Check waiver shape and deadlines against the injected clock."""
         if not ACCEPTED.is_file():
             self.skipTest("no accepted-drift file; every drift must be fixed instead")
 
@@ -225,9 +260,7 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         entries = document.get("entries", []) or []
         self.assertTrue(entries, "accepted-drift file exists but lists nothing")
 
-        import datetime as _dt
-
-        today = _dt.date(2026, 10, 4)
+        today = as_of()
         for entry in entries:
             with self.subTest(provider=entry.get("provider"), model=entry.get("model")):
                 self.assertTrue(str(entry.get("reason", "")).strip(), "a waiver needs a reason")
@@ -239,15 +272,63 @@ class ProviderRegistryDriftTests(unittest.TestCase):
                         "churn: true claims the host loads and unloads this model, "
                         "so the reason must say so",
                     )
-                review_by = str(entry.get("review_by", "")).strip()
-                self.assertTrue(review_by, "a waiver needs a review_by date")
-                parsed = _dt.date.fromisoformat(review_by)
-                self.assertGreaterEqual(
-                    parsed,
-                    today,
-                    f"review_by {review_by} is in the past - this waiver is overdue, "
-                    "fix the registry or re-review it deliberately",
-                )
+        # Deadlines are checked outside subTest so a failure is a plain
+        # AssertionError that callers (including the injection test) can catch.
+        for entry in entries:
+            review_by = str(entry.get("review_by", "")).strip()
+            self.assertTrue(review_by, "a waiver needs a review_by date")
+            parsed = datetime.date.fromisoformat(review_by)
+            self.assertGreaterEqual(
+                parsed,
+                today,
+                f"review_by {review_by} is in the past - this waiver is overdue, "
+                "fix the registry or re-review it deliberately",
+            )
+
+    def test_accepted_drift_entries_are_justified_and_dated(self):
+        """A waiver must say why, who owns it, and when to revisit it.
+
+        Without this the waiver file becomes a place to silence findings: an
+        entry with an empty reason, no owner, or no review date is not a
+        decision, it is a suppression.
+        """
+        self._assert_waivers_current()
+
+    def test_as_of_honors_review_by_deadlines(self):
+        """A waiver is current until review_by, and overdue the day after."""
+        import yaml
+
+        document = yaml.safe_load(ACCEPTED.read_text(encoding="utf-8")) or {}
+        deadlines = [
+            datetime.date.fromisoformat(str(entry["review_by"]))
+            for entry in document.get("entries", []) or []
+            if isinstance(entry, dict) and entry.get("review_by")
+        ]
+        self.assertTrue(deadlines, "no review_by dates to check")
+        deadline = min(deadlines)
+        day = datetime.timedelta(days=1)
+        with mock.patch(__name__ + ".AS_OF", deadline - day):
+            self._assert_waivers_current()
+        with mock.patch(__name__ + ".AS_OF", deadline):  # inclusive due date
+            self._assert_waivers_current()
+        with mock.patch(__name__ + ".AS_OF", deadline + day):
+            with self.assertRaises(AssertionError):
+                self._assert_waivers_current()
+
+    def test_as_of_cli_is_injectable(self):
+        """--as-of drives the clock; omitting it keeps the frozen CI date."""
+        args, remaining = _parse_args(["--as-of", "2026-12-01"])
+        self.assertEqual(args.as_of, datetime.date(2026, 12, 1))
+        self.assertEqual(remaining, [])
+        self.assertEqual(_parse_args([])[0].as_of, DEFAULT_AS_OF)
+
+    def test_as_of_env_override_is_reachable_without_main_block(self):
+        """The pytest path can set the clock without __main__ running."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
+            self.assertEqual(as_of(), DEFAULT_AS_OF)
+            os.environ["AUTO_ROUTER_WAIVER_AS_OF"] = "2026-12-01"
+            self.assertEqual(as_of(), datetime.date(2026, 12, 1))
 
     def test_accepted_drift_does_not_hide_unknown_drift(self):
         """Every waiver must correspond to real drift, or it rots into fiction.
@@ -338,4 +419,6 @@ class ProviderRegistryDriftTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    args, remaining = _parse_args()
+    AS_OF = args.as_of
+    unittest.main(argv=[sys.argv[0], *remaining])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 
 import pytest
 
@@ -38,11 +39,31 @@ LIVE_TREE_TESTS = frozenset({
 })
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--as-of",
+        action="store",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "date used to judge accepted-drift waiver review_by deadlines "
+            "(default: the test module's frozen CI clock)"
+        ),
+    )
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "asyncio: run async test functions with asyncio")
     config.addinivalue_line(
         "markers", "live_tree: asserts something about this host's live fleet, not the code"
     )
+    # The waiver test module judges deadlines through as_of(), which reads
+    # AUTO_ROUTER_WAIVER_AS_OF. Registering --as-of here makes the audit clock
+    # reachable from pytest/CI; the module's frozen default is unchanged when
+    # the flag is omitted, so CI stays reproducible until waivers are re-reviewed.
+    value = config.getoption("--as-of")
+    if value:
+        os.environ["AUTO_ROUTER_WAIVER_AS_OF"] = value
 
 
 def pytest_collection_modifyitems(config, items):
