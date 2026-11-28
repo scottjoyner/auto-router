@@ -1,16 +1,24 @@
 services:
   llm-router:
     build: .
+    # Optional: CI supplies the environment inline through
+    # docker-compose.integration.yml and has no .env, while a developer checkout
+    # usually has one. Required-mode made the job fail on a missing local file
+    # that it never intended to use - an error that was previously masked by an
+    # earlier interpolation failure.
+    env_file:
+      - path: .env
+        required: false
     container_name: ${AUTO_ROUTER_CONTAINER_NAME:-auto-router}
     ports:
-      - "${AUTO_ROUTER_BIND:-0.0.0.0}:${AUTO_ROUTER_HOST_PORT:-8088}:8088"
+      - "${AUTO_ROUTER_BIND:-127.0.0.1}:${AUTO_ROUTER_HOST_PORT:-8088}:8088"
     environment:
       AUTO_ROUTER_HOST: 0.0.0.0
       AUTO_ROUTER_PORT: 8088
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
-      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://host.docker.internal:8000/api/router/context-projection}
+      AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://assistx-api:8000/api/router/context-projection}
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3
       AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS: ${AUTO_ROUTER_REQUEST_TIMEOUT_SECONDS:-120}
@@ -26,12 +34,14 @@ services:
       AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS: ${AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS:-change-me}
       AUTO_ROUTER_ASSISTX_TASKS_URL: ${AUTO_ROUTER_ASSISTX_TASKS_URL:-http://assistx-api:8000/api/router/backlog-candidates}
       AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS: ${AUTO_ROUTER_ASSISTX_TASKS_TIMEOUT_SECONDS:-10}
+      AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL: ${AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL:-http://assistx-api:8000}
+      AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN: ${AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN}
 
       AUTO_ROUTER_INTERNAL_SERVICE_TOKEN: ${AUTO_ROUTER_INTERNAL_SERVICE_TOKEN:?set AssistX-only router inference token}
       AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED: "true"
       AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE: /run/secrets/assistx_executor_public_key.pem
       AUTO_ROUTER_EXECUTOR_KEY_ID: assistx-executor-v1
-      AUTO_ROUTER_RUNTIME_PROJECTION_URL: ${AUTO_ROUTER_RUNTIME_PROJECTION_URL:-http://host.docker.internal:8000/api/router/runtime-projection}
+      AUTO_ROUTER_RUNTIME_PROJECTION_URL: ${AUTO_ROUTER_RUNTIME_PROJECTION_URL:-http://assistx-api:8000/api/router/runtime-projection}
       AUTO_ROUTER_RUNTIME_PROJECTION_VERIFY_KEY_FILE: /run/secrets/assistx_runtime_projection_public_key.pem
       AUTO_ROUTER_RUNTIME_PROJECTION_KEY_ID: ${AUTO_ROUTER_RUNTIME_PROJECTION_KEY_ID:-assistx-runtime-projection-v1}
       AUTO_ROUTER_STRICT_OFFLINE: "true"
@@ -46,8 +56,25 @@ services:
       - ./config:/app/config:ro
       - ./data:/data
       - ./artifacts:/artifacts
-      - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_runtime_projection_public_key.pem:ro
-      - /media/scott/SSD_4TB/hermes-home/home_scott_.config/assistx-fleet/assistx-runtime-projection-ed25519-public.pem:/run/secrets/assistx_executor_public_key.pem:ro
+      # service_scanner.discover_tailnet_lmstudio_services() shells out to
+      # `tailscale status --json`, so the CLI binary must be reachable inside the
+      # container. The daemon socket is deliberately NOT mounted: nothing reads it,
+      # and exposing it grants control of the host's Tailscale daemon.
+      - ${AUTO_ROUTER_TAILSCALE_CLI:-/usr/bin/tailscale}:/usr/bin/tailscale:ro
+      # fleet_reservations.json is deliberately NOT mounted. Nothing reads it from
+      # here: auto-assist's fleet.py reads its own copy relative to __file__, never
+      # /run/assistx. It is also live, time-boxed NAS-recovery state rather than
+      # configuration, so it does not belong in a committed file. If a consumer is
+      # ever added, mount it explicitly and locally, not here:
+      #   - ${AUTO_ROUTER_FLEET_RESERVATIONS_FILE:?set this only if something reads it}:/run/assistx/fleet_reservations.json:ro
+      # Public verification keys. The container-side paths are what the code reads
+      # (AUTO_ROUTER_RUNTIME_PROJECTION_VERIFY_KEY_FILE and
+      # AUTO_ROUTER_EXECUTOR_VERIFY_KEY_FILE, both defaulting under /run/secrets),
+      # so only the host side is deployment-specific and it is parameterised here.
+      # Both point at the same file on this host, deliberately: one ed25519 public
+      # key authorises both surfaces.
+      - ${AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE:?set the host path to the ed25519 public key}:/run/secrets/assistx_runtime_projection_public_key.pem:ro
+      - ${AUTO_ROUTER_PROJECTION_PUBLIC_KEY_FILE:?set the host path to the ed25519 public key}:/run/secrets/assistx_executor_public_key.pem:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -61,8 +88,10 @@ services:
       start_period: 20s
     restart: unless-stopped
     networks:
-      - default
-      - assistx
+      default: {}
+      assistx:
+        aliases:
+          - router
 
   redis:
     image: redis:7-alpine

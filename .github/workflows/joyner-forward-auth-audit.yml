@@ -1,0 +1,33 @@
+name: joyner-forward-auth-audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/joyner_forward_auth_audit.py
+      - tests/test_joyner_forward_auth_audit.py
+      - .github/workflows/joyner-forward-auth-audit.yml
+  pull_request:
+    paths:
+      - scripts/joyner_forward_auth_audit.py
+      - tests/test_joyner_forward_auth_audit.py
+      - .github/workflows/joyner-forward-auth-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  offline-auth-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal offline test harness
+        run: python -m pip install pytest
+      - name: Check syntax and synthetic listener policy
+        run: |
+          python -m py_compile scripts/joyner_forward_auth_audit.py
+          python -m pytest -o addopts= tests/test_joyner_forward_auth_audit.py -q

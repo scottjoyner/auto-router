@@ -128,13 +128,12 @@ def backlog_summary(decisions: list[BacklogDecision]) -> dict[str, int]:
 def _decide_task(task: BacklogTaskCandidate, policy_engine: Any, quota: Any) -> BacklogDecision:
     if task.sensitive:
         return BacklogDecision(task.task_id, task.title, "skipped", "task marked sensitive", queue_class=task.queue_class)
-    if task.local_only or task.allow_cloud is False:
-        return BacklogDecision(task.task_id, task.title, "skipped", "task requires local-only execution", queue_class=task.queue_class)
     if task.priority not in {Priority.batch, Priority.background}:
         return BacklogDecision(task.task_id, task.title, "skipped", "backlog dry-run only accepts batch/background tasks", queue_class=task.queue_class)
     if str(task.queue_class).lower() not in {"backlog", "background", "batch"}:
         return BacklogDecision(task.task_id, task.title, "skipped", f"queue_class={task.queue_class} is not backlog-eligible", queue_class=task.queue_class)
 
+    requires_local = task.local_only or task.allow_cloud is False
     router_request = RouterRequest(
         request_id=str(uuid.uuid4()),
         route="chat_completions",
@@ -143,8 +142,8 @@ def _decide_task(task: BacklogTaskCandidate, policy_engine: Any, quota: Any) -> 
         max_tokens=task.max_completion_tokens,
         metadata={**task.metadata, "profile": task.metadata.get("profile", "backlog_burn"), "task_id": task.task_id},
         priority=task.priority,
-        local_only=False,
-        allow_cloud=True,
+        local_only=requires_local,
+        allow_cloud=False if requires_local else task.allow_cloud,
         raw_body={
             "model": task.model or "auto/backlog-burn",
             "messages": [{"role": "user", "content": _safe_planning_prompt(task)}],
@@ -154,7 +153,10 @@ def _decide_task(task: BacklogTaskCandidate, policy_engine: Any, quota: Any) -> 
     )
     plan = policy_engine.plan(router_request)
     for stage in plan.stages:
-        candidate, estimate = _first_available_candidate(stage.candidates, quota=quota, body=router_request.raw_body)
+        candidate, estimate = _first_available_candidate(
+            stage.candidates, quota=quota, body=router_request.raw_body,
+            local_only=requires_local,
+        )
         if candidate is None or estimate is None:
             continue
         return BacklogDecision(
@@ -183,8 +185,16 @@ def _first_available_candidate(
     candidates: list[ProviderCandidate],
     quota: Any,
     body: dict[str, Any],
+    local_only: bool = False,
 ) -> tuple[ProviderCandidate | None, QuotaEstimate | None]:
     for candidate in candidates:
+        # A policy-engine mistake cannot send a local-only background prompt
+        # to a public model, even when the planner returns a cloud candidate.
+        if local_only and (
+            str(candidate.provider.quota_class) != "local"
+            or "local_only" not in candidate.model.capabilities
+        ):
+            continue
         estimate = quota.estimate(candidate.model, body)
         can_reserve = getattr(quota, "can_reserve", None)
         if callable(can_reserve):

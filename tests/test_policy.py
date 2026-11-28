@@ -99,6 +99,110 @@ def test_exact_model_alias_is_honored() -> None:
     assert plan.stages[0].candidates[0].model.provider_model == "llama"
 
 
+
+def test_tool_request_requires_explicit_tool_use_capability() -> None:
+    providers = ProviderRegistry(
+        providers=[
+            ProviderConfig(
+                name="chat-only",
+                type="lmstudio",
+                base_url="http://chat-only:1234/v1",
+                quota_class="local",
+                models=[ModelConfig(
+                    alias="local/chat-only",
+                    provider_model="chat-only",
+                    capabilities={"chat", "json", "hermes_worker"},
+                )],
+            ),
+            ProviderConfig(
+                name="tool-qualified",
+                type="lmstudio",
+                base_url="http://tool-qualified:1234/v1",
+                quota_class="local",
+                models=[ModelConfig(
+                    alias="local/tool-qualified",
+                    provider_model="tool-qualified",
+                    capabilities={"chat", "json", "tool_use"},
+                )],
+            ),
+        ]
+    )
+    policies = PolicyRegistry(profiles={
+        "interactive_balanced": PolicyProfile(stages=[
+            PolicyStage(purpose=StagePurpose.final, required_capabilities={"chat"})
+        ])
+    })
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="tool-1",
+        route="chat_completions",
+        tools=[{"type": "function", "function": {"name": "terminal"}}],
+    )
+
+    plan = engine.plan(request)
+
+    assert plan.stages[0].required_capabilities == {"chat", "tool_use"}
+    assert [c.provider.name for c in plan.stages[0].candidates] == ["tool-qualified"]
+
+
+def test_exact_model_tool_request_fails_closed_without_tool_use() -> None:
+    providers = ProviderRegistry(providers=[
+        ProviderConfig(
+            name="local",
+            type="lmstudio",
+            base_url="http://localhost:1234/v1",
+            quota_class="local",
+            models=[ModelConfig(
+                alias="local/chat-only",
+                provider_model="chat-only",
+                capabilities={"chat", "json"},
+            )],
+        )
+    ])
+    policies = PolicyRegistry(profiles={
+        "interactive_balanced": PolicyProfile(stages=[
+            PolicyStage(purpose=StagePurpose.final, required_capabilities={"chat"})
+        ])
+    })
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+    request = RouterRequest(
+        request_id="tool-exact",
+        route="chat_completions",
+        model="local/chat-only",
+        tools=[{"type": "function", "function": {"name": "terminal"}}],
+    )
+
+    plan = engine.plan(request)
+
+    assert plan.profile_name == "interactive_balanced"
+    assert plan.stages[0].candidates == []
+
+
+def test_plain_chat_does_not_require_tool_use() -> None:
+    providers = ProviderRegistry(providers=[
+        ProviderConfig(
+            name="local",
+            type="lmstudio",
+            base_url="http://localhost:1234/v1",
+            quota_class="local",
+            models=[ModelConfig(
+                alias="local/chat-only",
+                provider_model="chat-only",
+                capabilities={"chat"},
+            )],
+        )
+    ])
+    policies = PolicyRegistry(profiles={
+        "interactive_balanced": PolicyProfile(stages=[
+            PolicyStage(purpose=StagePurpose.final, required_capabilities={"chat"})
+        ])
+    })
+    engine = PolicyEngine(providers, policies, "interactive_balanced")
+
+    plan = engine.plan(RouterRequest(request_id="chat-1", route="chat_completions"))
+
+    assert [c.provider.name for c in plan.stages[0].candidates] == ["local"]
+
 def test_signal_preference_boosts_provider_selection() -> None:
     from auto_router.context import ContextSignal, ContextSnapshot
 

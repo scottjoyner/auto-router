@@ -38,8 +38,11 @@ def test_macbook_air_provider_registry_includes_live_tailnet_models() -> None:
     assert provider.enabled is True
     assert provider.base_url.endswith("scotts-macbook-air.tailcb8954.ts.net:1234/v1")
     model_ids = {model.provider_model for model in provider.models}
-    # The 2026-08-17 fleet refresh replaced the Opus-distilled 0.8B build with
-    # the MLX build on this host; the Opus build now lives on OptiPlex/Deathstar.
+    # macbook-air is Apple Silicon, so it serves the MLX build of the 0.8B.
+    # e473e48 switched this entry from the llama.cpp build to qwen3.5-0.8b-mlx
+    # (its runtime_instance_id still reads ...qwen3.5-0.8b-mlx) and this assertion
+    # was never updated to match. The Opus-distilled build moved to the
+    # OptiPlex/Deathstar hosts in the same fleet refresh.
     assert "qwen3.5-0.8b-mlx" in model_ids
     assert "refinedtoolcallv5-3b" in model_ids
 

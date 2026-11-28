@@ -159,3 +159,58 @@ async def test_dispatcher_dead_letters_after_max_attempts(monkeypatch, tmp_path)
 
     assert results[0].status == "dead_letter"
     assert outbox.summary()["dead_letter"] == 1
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_dead_letters_instead_of_retrying_forever(
+    monkeypatch, tmp_path
+) -> None:
+    """An unreachable sink must not leave an immortal row at the head of the queue.
+
+    The attempt cap existed only on the HTTP-response path. A transport failure --
+    connection refused, DNS failure, timeout -- hardcoded `retry=True` and never
+    reached dead_letter, while an event the sink actively rejects was cleaned up
+    after five attempts. That is backwards: the failure most likely to persist was
+    the immortal one.
+
+    It matters because `pending()` selects status IN ('pending','retry') ordered
+    oldest-first under a LIMIT. Every immortal row therefore holds a slot at the
+    head of every batch, and once they fill the limit, newly enqueued events are
+    never dispatched at all -- starvation that presents as a quiet outbox rather
+    than as a failure.
+
+    Asserted by running the exception path to exhaustion rather than by reading
+    the branch, because the bug was precisely that the branch did not do this.
+    """
+    outbox = EventOutbox(f"sqlite:///{tmp_path / 'router.sqlite3'}")
+    outbox.enqueue(
+        OutboxEvent(
+            event_type="router.service_snapshot.recorded",
+            idempotency_key="service:a:1:online",
+            payload={"service_id": "a"},
+        )
+    )
+
+    async def unreachable(self, url, json, **kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", unreachable)
+    dispatcher = AssistXEventDispatcher(
+        outbox, sink_url="http://assistx.test/events", max_attempts=3
+    )
+
+    seen = []
+    for _ in range(5):
+        results = await dispatcher.dispatch_pending()
+        seen.append(results[0].status)
+        # Nothing new to dispatch once it is terminal; stop early.
+        if outbox.pending(limit=10) == []:
+            break
+
+    assert "dead_letter" in seen, f"transport failure never became terminal: {seen}"
+    assert outbox.summary()["dead_letter"] == 1
+    assert outbox.summary()["retry"] == 0, (
+        "a dead-lettered event must leave the retry set, or it keeps consuming a "
+        "slot at the head of every batch"
+    )
+    assert outbox.pending(limit=10) == [], "a dead-lettered event is still pending"

@@ -63,6 +63,7 @@ class ProviderConfig(BaseModel):
     base_url: str
     access_urls: list[str] = Field(default_factory=list)
     api_key_env: str | None = None
+    api_key_file: str | None = None
     priority: int = 100
     quota_class: QuotaClass | str = QuotaClass.local
     headers: dict[str, str] = Field(default_factory=dict)
