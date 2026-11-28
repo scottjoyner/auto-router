@@ -36,6 +36,7 @@ import argparse
 import datetime
 import importlib.util
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -82,7 +83,17 @@ AS_OF = DEFAULT_AS_OF
 
 
 def as_of() -> datetime.date:
-    """The date at which waiver deadlines are judged."""
+    """The date at which waiver deadlines are judged.
+
+    The direct-script path assigns ``AS_OF`` in ``__main__``. Under pytest that
+    block never runs, so read the same clock from AUTO_ROUTER_WAIVER_AS_OF (set
+    by ``tests/conftest.py`` from ``--as-of``). Without the env override the
+    frozen CI date is kept, so CI does not start failing on waivers that have
+    not yet been deliberately re-reviewed.
+    """
+    override = os.environ.get("AUTO_ROUTER_WAIVER_AS_OF", "").strip()
+    if override:
+        return datetime.date.fromisoformat(override)
     return AS_OF
 
 
@@ -310,6 +321,14 @@ class ProviderRegistryDriftTests(unittest.TestCase):
         self.assertEqual(args.as_of, datetime.date(2026, 12, 1))
         self.assertEqual(remaining, [])
         self.assertEqual(_parse_args([])[0].as_of, DEFAULT_AS_OF)
+
+    def test_as_of_env_override_is_reachable_without_main_block(self):
+        """The pytest path can set the clock without __main__ running."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTO_ROUTER_WAIVER_AS_OF", None)
+            self.assertEqual(as_of(), DEFAULT_AS_OF)
+            os.environ["AUTO_ROUTER_WAIVER_AS_OF"] = "2026-12-01"
+            self.assertEqual(as_of(), datetime.date(2026, 12, 1))
 
     def test_accepted_drift_does_not_hide_unknown_drift(self):
         """Every waiver must correspond to real drift, or it rots into fiction.
