@@ -302,6 +302,32 @@ well as direct execution. The gate already runs at the current date by default:
 an overdue `review_by` fails deliberately until the drift is fixed or the
 waiver is re-reviewed with a real owner and justification.
 
+### Verifying drift gates offline (bounded)
+
+`config/provider_registry_accepted_drift.yaml` is the only accepted-drift
+source of truth. The gate reads it alongside `config/provider_registry_snapshot.json`;
+no network or fleet access is needed for the snapshot checks, and the live-host
+probe self-skips when hosts are unreachable. The snapshot only asserts about
+providers that answered when it was recorded, so a node going down cannot make
+the check pass by omission.
+
+Under pytest, `tests/conftest.py` registers `--as-of` and copies it into the
+`AUTO_ROUTER_WAIVER_AS_OF` environment variable that `as_of()` reads; the direct
+script instead assigns `AS_OF` in `__main__`. With neither override the real
+current date is used. Keep pytest temporary files off the root disk by pointing
+`TMPDIR` at a pre-existing private directory on the 4TB SSD:
+
+```bash
+TMPDIR=/media/scott/SSD_4TB/opencode-scratch/it11-routerdoc-tmp \
+  pytest -q tests/test_provider_registry_drift.py
+TMPDIR=/media/scott/SSD_4TB/opencode-scratch/it11-routerdoc-tmp \
+  pytest -q tests/test_provider_registry_drift.py --as-of 2026-11-28
+```
+
+Run only these narrow drift checks under a launch guard; a documentation change
+does not justify a full suite. CI/PR check outcomes for this branch: NO DATA
+(not re-run here).
+
 ## Remaining integration work
 
 1. Ingest approved multi-path runtime observations directly from the AssistX context projection rather than only the reconciliation provider file.
