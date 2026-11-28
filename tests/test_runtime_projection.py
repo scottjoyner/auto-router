@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from auto_router.config import load_provider_registry
 from auto_router.models import ModelConfig, ProviderCandidate, ProviderConfig
 from auto_router.runtime_projection import (
     RuntimeProjectionManager,
@@ -11,7 +13,6 @@ from auto_router.runtime_projection import (
     projection_signature,
     validate_projection_document,
 )
-
 
 SECRET = "projection-test-secret"
 
@@ -160,6 +161,42 @@ def test_projection_rejects_tamper_public_path_unknown_identity_and_expiry(
     expired = document(generated_at_ms=900_000, expires_at_ms=999_999)
     with pytest.raises(ValueError, match="is expired"):
         validate_projection_document(expired, secret=SECRET, now_ms=1_000_000)
+
+
+def test_configured_npu_provider_passes_projection_validation(monkeypatch):
+    """The RyzenAI NPU must be projection-ready, not bootstrap-only."""
+    monkeypatch.setenv("AUTO_ROUTER_STRICT_OFFLINE", "true")
+    config_path = Path(__file__).resolve().parents[1] / "config" / "providers.yaml"
+    registry = load_provider_registry(config_path)
+    npu = next(
+        item for item in registry.providers if item.name == "npu-xwing-qwen-0.5b"
+    )
+
+    parsed = validate_projection_document(
+        document(item=npu), secret=SECRET, now_ms=1_010_000
+    )
+
+    projected = parsed.providers[0]
+    assert projected.runtime_version == "ryzenai-1.4.0"
+    assert projected.access_urls == ["http://host.docker.internal:1236/v1"]
+    assert projected.models[0].model_instance_id == "xwing-npu-qwen2.5-0.5b-int4"
+    assert projected.models[0].quantization == "int4"
+
+
+def test_npu_projection_without_runtime_identity_is_rejected(monkeypatch):
+    monkeypatch.setenv("AUTO_ROUTER_STRICT_OFFLINE", "true")
+    config_path = Path(__file__).resolve().parents[1] / "config" / "providers.yaml"
+    registry = load_provider_registry(config_path)
+    npu = next(
+        item for item in registry.providers if item.name == "npu-xwing-qwen-0.5b"
+    )
+    npu.runtime_version = None
+    npu.models[0].model_instance_id = None
+
+    with pytest.raises(ValueError, match="runtime_version must be resolved"):
+        validate_projection_document(
+            document(item=npu), secret=SECRET, now_ms=1_010_000
+        )
 
 
 @pytest.mark.asyncio

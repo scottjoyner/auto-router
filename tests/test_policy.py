@@ -1,5 +1,20 @@
-from auto_router.config import PolicyRegistry, ProviderRegistry
-from auto_router.models import ModelConfig, PolicyProfile, PolicyStage, Priority, ProviderConfig, RouterRequest, StagePurpose
+from pathlib import Path
+
+from auto_router.config import (
+    PolicyRegistry,
+    ProviderRegistry,
+    load_policy_registry,
+    load_provider_registry,
+)
+from auto_router.models import (
+    ModelConfig,
+    PolicyProfile,
+    PolicyStage,
+    Priority,
+    ProviderConfig,
+    RouterRequest,
+    StagePurpose,
+)
 from auto_router.policy import PolicyEngine
 
 
@@ -405,3 +420,98 @@ def test_portfolio_management_requests_prefer_xwing() -> None:
     beelink_score = engine._score(beelink, model, stage, request)
 
     assert xwing_score < beelink_score
+
+
+def _real_fleet_engine() -> tuple[PolicyEngine, RouterRequest]:
+    config_root = Path(__file__).resolve().parents[1] / "config"
+    providers = load_provider_registry(config_root / "providers.yaml")
+    policies = load_policy_registry(config_root / "policies.yaml")
+    engine = PolicyEngine(providers, policies, default_profile="interactive_balanced")
+    request = RouterRequest(request_id="interactive-1", route="chat_completions")
+    return engine, request
+
+
+def test_npu_is_never_first_for_interactive_balanced() -> None:
+    engine, request = _real_fleet_engine()
+
+    # Rotate the round-robin counter through several plans: even when auxiliary
+    # nodes are due a rotation they must not outrank normal interactive peers.
+    for index in range(12):
+        plan = engine.plan(request)
+        assert plan.profile_name == "interactive_balanced"
+        candidates = plan.stages[0].candidates
+        assert candidates, f"plan {index} produced no candidates"
+        assert candidates[0].provider.name != "npu-xwing-qwen-0.5b"
+        for stage in plan.stages:
+            if stage.candidates:
+                engine.mark_planned_end(engine._owner_str(stage.candidates[0]))
+
+
+def _priority_engine() -> PolicyEngine:
+    def provider(name: str, priority: int) -> ProviderConfig:
+        return ProviderConfig(
+            name=name,
+            type="lmstudio",
+            base_url=f"http://{name}:1234/v1",
+            quota_class="local",
+            priority=priority,
+            models=[
+                ModelConfig(
+                    alias=f"local/{name}",
+                    provider_model="shared-model",
+                    capabilities={"chat"},
+                )
+            ],
+        )
+
+    providers = ProviderRegistry(
+        providers=[provider("preferred", 100), provider("auxiliary", 900)]
+    )
+    policies = PolicyRegistry(
+        profiles={
+            "interactive_balanced": PolicyProfile(
+                stages=[
+                    PolicyStage(
+                        purpose=StagePurpose.final,
+                        provider_classes=["local"],
+                        required_capabilities={"chat"},
+                    )
+                ]
+            )
+        }
+    )
+    return PolicyEngine(providers, policies, "interactive_balanced")
+
+
+def test_lower_priority_number_beats_higher_priority_number() -> None:
+    engine = _priority_engine()
+    request = RouterRequest(request_id="priority-1", route="chat_completions")
+
+    for _ in range(6):
+        plan = engine.plan(request)
+        assert [candidate.provider.name for candidate in plan.stages[0].candidates] == [
+            "preferred",
+            "auxiliary",
+        ]
+        for stage in plan.stages:
+            if stage.candidates:
+                engine.mark_planned_end(engine._owner_str(stage.candidates[0]))
+
+
+def test_equal_priority_ties_still_rotate() -> None:
+    """Round-robin must still balance truly equivalent candidates."""
+    engine = _priority_engine()
+    # Give both providers the same configured priority by editing the registry.
+    for provider_config in engine.providers.providers:
+        provider_config.priority = 100
+    request = RouterRequest(request_id="rotation-1", route="chat_completions")
+    first_picks: set[str] = set()
+
+    for _ in range(6):
+        plan = engine.plan(request)
+        first_picks.add(plan.stages[0].candidates[0].provider.name)
+        for stage in plan.stages:
+            if stage.candidates:
+                engine.mark_planned_end(engine._owner_str(stage.candidates[0]))
+
+    assert first_picks == {"preferred", "auxiliary"}

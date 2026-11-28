@@ -10,6 +10,8 @@ services:
       AUTO_ROUTER_PROVIDER_CONFIG: /app/config/providers.yaml
       AUTO_ROUTER_POLICY_CONFIG: /app/config/policies.yaml
       AUTO_ROUTER_AGENT_CONFIG: /app/config/agent_workers.yaml
+      # RyzenAI NPU on the Docker host (xwing), not inside the router container.
+      XWING_NPU_BASE_URL: ${XWING_NPU_BASE_URL:-http://host.docker.internal:1236/v1}
       AUTO_ROUTER_CONTEXT_CONFIG: ${AUTO_ROUTER_CONTEXT_CONFIG:-http://host.docker.internal:8000/api/router/context-projection}
       AUTO_ROUTER_REDIS_URL: redis://redis:6379/0
       AUTO_ROUTER_DATABASE_URL: sqlite:////data/router.sqlite3

@@ -34,7 +34,7 @@ from auto_router.config import (
 from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
 from auto_router.model_registry import ModelRegistryStore
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
-from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
+from auto_router.models import ExecutionPlan, Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
@@ -685,7 +685,43 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     # Feed the router's probe-history health into the policy engine so routing
     # can demote/exclude flaky + unloaded nodes (liveness-gated routing).
     state.policy_engine.provider_health = _fleet_health_map()
-    plan = state.policy_engine.plan(router_request)
+    policy_engine = state.policy_engine
+    plan = policy_engine.plan(router_request)
+    reserved_stages = [
+        index for index, stage in enumerate(plan.stages) if stage.candidates
+    ]
+    released_stages: set[int] = set()
+
+    def release_stage_reservation(index: int) -> None:
+        if index in released_stages:
+            return
+        stage = plan.stages[index]
+        if stage.candidates:
+            policy_engine.mark_planned_end(
+                f"{stage.candidates[0].provider.name}/{stage.candidates[0].model.alias}"
+            )
+        released_stages.add(index)
+
+    try:
+        return await _execute_plan(
+            router_request,
+            plan,
+            policy_engine,
+            release_stage_reservation,
+        )
+    finally:
+        # A request can finish on its first stage; release every reservation the
+        # planner made for the remaining stages so they don't leak fleet capacity.
+        for index in reserved_stages:
+            release_stage_reservation(index)
+
+
+async def _execute_plan(
+    router_request: RouterRequest,
+    plan: ExecutionPlan,
+    policy_engine: PolicyEngine,
+    release_stage_reservation: Any,
+) -> JSONResponse | StreamingResponse:
     settings = get_settings()
     # Hard bounds so a fleet full of dead/hung nodes can never make a single
     # request hang for (attempt_timeout * candidate_count). We stop trying once
@@ -694,16 +730,14 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     attempts = 0
     timed_out = False
     errors: list[str] = []
-    for stage in plan.stages:
+    for stage_index, stage in enumerate(plan.stages):
         if not stage.candidates and stage.optional:
             continue
         stage_rejections: list[str] = []
         # Release the plan-time reservation for this stage's top candidate now that
         # we're committing to executing it (in-flight tracking takes over from here).
-        if stage.candidates:
-            state.policy_engine.mark_planned_end(
-                f"{stage.candidates[0].provider.name}/{stage.candidates[0].model.alias}"
-            )
+        # The outer _execute finally releases any stages we never reach.
+        release_stage_reservation(stage_index)
         for candidate in stage.candidates:
             if time.monotonic() > deadline or attempts >= settings.max_candidate_attempts:
                 timed_out = True
@@ -735,7 +769,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 candidates=stage.candidates,
                 rejections=stage_rejections,
             )
-            state.policy_engine.mark_inflight_start(owner)
+            policy_engine.mark_inflight_start(owner)
             provider = build_provider(
                 candidate.provider,
                 timeout_seconds=get_settings().attempt_timeout_seconds,
@@ -750,10 +784,10 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                         _dispatch_stream(provider, candidate, router_request, route_plan=gateway_context),
                         timeout=settings.attempt_timeout_seconds,
                     )
-                    state.policy_engine.mark_inflight_end(owner)
+                    policy_engine.mark_inflight_end(owner)
                     latency_ms = int((time.perf_counter() - started) * 1000)
                     ended_at_ms = int(time.time() * 1000)
-                    state.policy_engine.mark_latency(owner, latency_ms)
+                    policy_engine.mark_latency(owner, latency_ms)
                     state.circuits.record_success(owner)
                     gateway_metadata = None
                     if stream_response.provider.startswith("agentgateway"):
@@ -794,9 +828,9 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                     _dispatch(provider, candidate, router_request, route_plan=gateway_context),
                     timeout=settings.attempt_timeout_seconds,
                 )
-                state.policy_engine.mark_inflight_end(owner)
+                policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                state.policy_engine.mark_latency(owner, latency_ms)
+                policy_engine.mark_latency(owner, latency_ms)
                 state.circuits.record_success(owner)
                 gateway_metadata = response.data.get("_gateway_metadata") if isinstance(response.data, dict) else None
                 ended_at_ms = int(time.time() * 1000)
@@ -818,10 +852,14 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
             except ProviderError as exc:
-                state.policy_engine.mark_inflight_end(owner)
+                policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
-                state.circuits.record_failure(owner, str(exc), retry_after=_retry_after_seconds(exc))
+                # A 429 (queue full / rate limited) is back-pressure from a live
+                # runtime, not an outage. Do not count it as a circuit failure,
+                # otherwise a busy auxiliary provider gets taken out of rotation.
+                if exc.status_code != 429:
+                    state.circuits.record_failure(owner, str(exc), retry_after=_retry_after_seconds(exc))
                 ended_at_ms = int(time.time() * 1000)
                 await asyncio.to_thread(
                     _record_usage,
@@ -839,7 +877,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 stage_rejections.append(str(exc))
                 errors.append(str(exc))
             except Exception as exc:
-                state.policy_engine.mark_inflight_end(owner)
+                policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
                 state.circuits.record_failure(owner, str(exc))
