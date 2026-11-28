@@ -36,7 +36,7 @@ from auto_router.model_registry import ModelRegistryStore
 from auto_router.provider_circuit_diagnostics import annotate_health_with_open_model_circuits
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
-from auto_router.policy import PolicyEngine
+from auto_router.policy import NoCapableProviderError, PolicyEngine
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
@@ -407,13 +407,25 @@ async def health() -> dict[str, Any]:
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
     overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
-    redis_ok = "not_configured"
-    if hasattr(state, "quota") and hasattr(state.quota, "client"):
+    redis_detail = None
+    quota_manager = getattr(state, "quota", None)
+    if getattr(quota_manager, "redis_fallback", False):
+        # A configured Redis that failed at startup must not be reported as
+        # "not_configured" — that is the silent fallback recorded in ADR-002.
+        redis_ok = "fallback_in_memory"
+        redis_detail = quota_manager.redis_fallback_reason
+    elif hasattr(quota_manager, "client"):
         try:
-            redis_ok = "ok" if await asyncio.to_thread(state.quota.client.ping) else "down"
-        except Exception:
+            redis_ok = "ok" if await asyncio.to_thread(quota_manager.client.ping) else "down"
+        except Exception as exc:
             redis_ok = "down"
-    
+            redis_detail = repr(exc)
+    else:
+        redis_ok = "not_configured"
+    redis_dep: dict[str, Any] = {"status": redis_ok}
+    if redis_detail:
+        redis_dep["detail"] = redis_detail
+
     return {
         "ok": overall_ok,
         "status": "ok" if overall_ok else "degraded",
@@ -421,7 +433,7 @@ async def health() -> dict[str, Any]:
         "version": __version__,
         "uptime": time.time() - _start_time,
         "deps": {
-            "redis": {"status": redis_ok},
+            "redis": redis_dep,
         },
         "context_revision": state.context.revision,
         "context_source": state.context.source,
@@ -761,7 +773,17 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     # Overlay fleet power tiers (DAILY/CONSERVE/SURVIVE) so battery-state nodes
     # are demoted/parked on top of probe evidence.
     _apply_power_tiers_to_policy()
-    plan = state.policy_engine.plan(router_request)
+    try:
+        plan = state.policy_engine.plan(router_request)
+    except NoCapableProviderError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "no provider satisfies required capabilities",
+                "required_capabilities": sorted(exc.required),
+                "route": exc.route,
+            },
+        ) from exc
     settings = get_settings()
     # Hard bounds so a fleet full of dead/hung nodes can never make a single
     # request hang for (attempt_timeout * candidate_count). We stop trying once

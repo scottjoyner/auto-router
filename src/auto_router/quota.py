@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from threading import Lock
@@ -15,6 +16,82 @@ except Exception:  # pragma: no cover - optional dependency
 
     class WatchError(Exception):
         pass
+
+
+logger = logging.getLogger(__name__)
+
+# Bounded startup retry window for Redis. The ceiling matches the compose
+# healthcheck guard (redis-cli ping: 10s interval x 5 retries), so a Redis that
+# is still replaying its RDB/AOF during the LOADING window gets a chance to
+# finish before the quota backend is committed. Backoff stays short so a
+# genuine outage still falls back to in-memory quotas promptly.
+REDIS_STARTUP_TIMEOUT_SECONDS = 120.0
+REDIS_STARTUP_INITIAL_BACKOFF_SECONDS = 0.5
+REDIS_STARTUP_MAX_BACKOFF_SECONDS = 5.0
+
+
+class RedisStartupError(RuntimeError):
+    """Redis could not be reached within the bounded startup retry window."""
+
+    def __init__(self, message: str, attempts: int, last_error: BaseException | None) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+        self.last_error = last_error
+
+
+def _connect_redis_with_retry(
+    redis_url: str,
+    *,
+    timeout_seconds: float = REDIS_STARTUP_TIMEOUT_SECONDS,
+    initial_backoff_seconds: float = REDIS_STARTUP_INITIAL_BACKOFF_SECONDS,
+    max_backoff_seconds: float = REDIS_STARTUP_MAX_BACKOFF_SECONDS,
+    sleep=time.sleep,
+    clock=time.monotonic,
+):
+    """Create and ping a Redis client, retrying transient startup failures.
+
+    ``sleep`` and ``clock`` are injectable so tests can exercise the full
+    bounded window without real waiting. Every failed attempt is logged and a
+    failed client is closed before the next attempt.
+    """
+    if redis_lib is None:  # pragma: no cover - import-time environment dependent
+        raise RuntimeError("redis package is not installed")
+
+    started = clock()
+    backoff = initial_backoff_seconds
+    attempts = 0
+    while True:
+        attempts += 1
+        client = None
+        try:
+            client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
+            client.ping()
+            return client
+        except Exception as exc:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:  # pragma: no cover - defensive cleanup
+                    pass
+            remaining = timeout_seconds - (clock() - started)
+            if remaining <= 0:
+                raise RedisStartupError(
+                    f"Redis did not become ready within {timeout_seconds:g}s "
+                    f"({attempts} attempt(s); last error: {exc!r})",
+                    attempts,
+                    exc,
+                ) from exc
+            delay = min(backoff, remaining)
+            logger.warning(
+                "Redis startup ping failed (attempt %d: %r); retrying in %.2fs "
+                "(%.1fs of budget remaining)",
+                attempts,
+                exc,
+                delay,
+                remaining,
+            )
+            sleep(delay)
+            backoff = min(backoff * 2, max_backoff_seconds)
 
 
 @dataclass
@@ -49,6 +126,16 @@ class InMemoryQuotaManager:
 
     counters: dict[str, QuotaCounter] = field(default_factory=dict)
     lock: Lock = field(default_factory=Lock)
+    # Populated only when Redis was configured but the Redis-backed manager
+    # could not be built. The /health endpoint uses this to report a degraded
+    # Redis dependency rather than the misleading "not_configured".
+    redis_fallback_reason: str | None = None
+    redis_fallback_attempts: int | None = None
+
+    @property
+    def redis_fallback(self) -> bool:
+        """True when this backend was selected because Redis startup failed."""
+        return self.redis_fallback_reason is not None
 
     def estimate(self, model: ModelConfig, body: dict) -> QuotaEstimate:
         max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 512)
@@ -164,13 +251,32 @@ class RedisQuotaManager:
     so multi-dimension reservations are all-or-nothing.
     """
 
-    def __init__(self, redis_url: str, key_prefix: str = "auto-router:quota"):
-        if redis_lib is None:  # pragma: no cover - import-time environment dependent
-            raise RuntimeError("redis package is not installed")
+    def __init__(
+        self,
+        redis_url: str,
+        key_prefix: str = "auto-router:quota",
+        *,
+        startup_retry_seconds: float = REDIS_STARTUP_TIMEOUT_SECONDS,
+        initial_backoff_seconds: float = REDIS_STARTUP_INITIAL_BACKOFF_SECONDS,
+        max_backoff_seconds: float = REDIS_STARTUP_MAX_BACKOFF_SECONDS,
+        sleep=time.sleep,
+        clock=time.monotonic,
+    ):
         self.redis_url = redis_url
         self.key_prefix = key_prefix
-        self.client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
-        self.client.ping()
+        self.client = _connect_redis_with_retry(
+            redis_url,
+            timeout_seconds=startup_retry_seconds,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
+            sleep=sleep,
+            clock=clock,
+        )
+
+    @property
+    def redis_fallback(self) -> bool:
+        """A live Redis client was built, so no fallback occurred."""
+        return False
 
     def estimate(self, model: ModelConfig, body: dict) -> QuotaEstimate:
         return InMemoryQuotaManager().estimate(model, body)
@@ -380,10 +486,52 @@ class RedisQuotaManager:
         return [self._key(provider.name, model.alias, dimension) for dimension in self._dimension_amounts(model, estimate)]
 
 
-def build_quota_manager(redis_url: str | None = None):
-    if redis_url and redis_lib is not None:
-        try:
-            return RedisQuotaManager(redis_url)
-        except Exception:
-            return InMemoryQuotaManager()
-    return InMemoryQuotaManager()
+def build_quota_manager(
+    redis_url: str | None = None,
+    *,
+    startup_retry_seconds: float = REDIS_STARTUP_TIMEOUT_SECONDS,
+    initial_backoff_seconds: float = REDIS_STARTUP_INITIAL_BACKOFF_SECONDS,
+    max_backoff_seconds: float = REDIS_STARTUP_MAX_BACKOFF_SECONDS,
+    sleep=time.sleep,
+    clock=time.monotonic,
+):
+    """Build the quota backend, retrying transient Redis startup failures.
+
+    A configured Redis that never becomes reachable still falls back to the
+    in-memory manager, but the fallback is logged and recorded on the returned
+    instance so callers (notably ``/health``) cannot mistake it for a system in
+    which Redis was never configured.
+    """
+    if not redis_url:
+        return InMemoryQuotaManager()
+
+    if redis_lib is None:  # pragma: no cover - import-time environment dependent
+        reason = "REDIS_URL configured but the redis package is not installed"
+        logger.error("Redis quota backend unavailable: %s; using in-memory fallback", reason)
+        return InMemoryQuotaManager(redis_fallback_reason=reason, redis_fallback_attempts=0)
+
+    try:
+        return RedisQuotaManager(
+            redis_url,
+            startup_retry_seconds=startup_retry_seconds,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
+            sleep=sleep,
+            clock=clock,
+        )
+    except RedisStartupError as exc:
+        reason = str(exc)
+        logger.error(
+            "Redis quota backend unavailable after %d attempt(s); "
+            "using in-memory fallback. %s",
+            exc.attempts,
+            reason,
+        )
+        return InMemoryQuotaManager(
+            redis_fallback_reason=reason,
+            redis_fallback_attempts=exc.attempts,
+        )
+    except Exception as exc:  # defensive: never swallow an unrecorded failure
+        reason = f"unexpected Redis startup error: {exc!r}"
+        logger.exception("Redis quota backend unavailable: %s; using in-memory fallback", reason)
+        return InMemoryQuotaManager(redis_fallback_reason=reason, redis_fallback_attempts=None)

@@ -1,6 +1,8 @@
+import pytest
+
 from auto_router.config import PolicyRegistry, ProviderRegistry
 from auto_router.models import ModelConfig, PolicyProfile, PolicyStage, Priority, ProviderConfig, RouterRequest, StagePurpose
-from auto_router.policy import PolicyEngine
+from auto_router.policy import NoCapableProviderError, PolicyEngine
 
 
 def test_local_only_request_routes_only_to_local() -> None:
@@ -509,3 +511,106 @@ def test_portfolio_management_requests_prefer_xwing() -> None:
     beelink_score = engine._score(beelink, model, stage, request)
 
     assert xwing_score < beelink_score
+
+
+def _capability_engines():
+    chat_only = ProviderConfig(
+        name="chat-only",
+        type="lmstudio",
+        base_url="http://chat-only:1234/v1",
+        quota_class="local",
+        models=[ModelConfig(
+            alias="local/chat-only",
+            provider_model="chat-only",
+            capabilities={"chat", "json"},
+        )],
+    )
+    embed_capable = ProviderConfig(
+        name="embed-capable",
+        type="lmstudio",
+        base_url="http://embed-capable:1234/v1",
+        quota_class="local",
+        models=[ModelConfig(
+            alias="local/embed",
+            provider_model="embed",
+            capabilities={"chat", "embeddings", "json", "tool_use"},
+        )],
+    )
+    policies = PolicyRegistry(
+        profiles={
+            "interactive_balanced": PolicyProfile(
+                stages=[PolicyStage(purpose=StagePurpose.final, required_capabilities={"chat"})]
+            )
+        }
+    )
+
+    def engine_for(providers):
+        return PolicyEngine(
+            ProviderRegistry(providers=providers),
+            policies,
+            "interactive_balanced",
+        )
+
+    return chat_only, embed_capable, engine_for
+
+
+def test_embeddings_request_excludes_chat_only_nodes() -> None:
+    chat_only, embed_capable, engine_for = _capability_engines()
+    request = RouterRequest(
+        request_id="emb-1",
+        route="embeddings",
+        required_capabilities={"embeddings"},
+    )
+
+    plan = engine_for([chat_only, embed_capable]).plan(request)
+
+    assert plan.stages[0].required_capabilities == {"chat", "embeddings"}
+    assert [c.provider.name for c in plan.stages[0].candidates] == ["embed-capable"]
+
+
+def test_chat_request_is_unchanged_without_embeddings_requirement() -> None:
+    chat_only, embed_capable, engine_for = _capability_engines()
+    request = RouterRequest(request_id="chat-1", route="chat_completions")
+
+    plan = engine_for([chat_only, embed_capable]).plan(request)
+
+    assert plan.stages[0].required_capabilities == {"chat"}
+    assert {c.provider.name for c in plan.stages[0].candidates} == {
+        "chat-only",
+        "embed-capable",
+    }
+
+
+def test_no_capable_node_fails_closed_with_typed_error() -> None:
+    chat_only, _embed_capable, engine_for = _capability_engines()
+    request = RouterRequest(
+        request_id="emb-2",
+        route="embeddings",
+        required_capabilities={"embeddings"},
+    )
+
+    with pytest.raises(NoCapableProviderError) as exc_info:
+        engine_for([chat_only]).plan(request)
+
+    assert "embeddings" in exc_info.value.required
+    assert exc_info.value.route == "embeddings"
+
+
+def test_request_capability_union_with_stage_and_tools_is_correct() -> None:
+    chat_only, embed_capable, engine_for = _capability_engines()
+    request = RouterRequest(
+        request_id="emb-3",
+        route="embeddings",
+        required_capabilities={"embeddings", "json"},
+        tools=[{"type": "function", "function": {"name": "terminal"}}],
+    )
+
+    plan = engine_for([chat_only, embed_capable]).plan(request)
+
+    assert plan.stages[0].required_capabilities == {
+        "chat",
+        "embeddings",
+        "json",
+        "tool_use",
+    }
+    assert [c.provider.name for c in plan.stages[0].candidates] == ["embed-capable"]

@@ -53,7 +53,7 @@ providers:
   - name: lmstudio-joyner
     type: lmstudio
     node_id: joyner
-    enabled: false
+    enabled: true
     base_url: ${LMSTUDIO_JOYNER_BASE_URL:-http://joyner.tailcb8954.ts.net:1234/v1}
     priority: 5
     quota_class: local
@@ -63,7 +63,7 @@ providers:
     type: lmstudio
     node_id: deathstar-XPS-8920
     enabled: true
-    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://100.78.106.121:1234/v1}
+    base_url: ${LMSTUDIO_DEATHSTAR_BASE_URL:-http://100.78.106.121:1236/v1}
     # Deathstar's RX 480 is actively used by auto-ingest diarization.
     # Keep this endpoint available as a constrained fallback.
     priority: 220
@@ -101,7 +101,7 @@ providers:
     type: openai_compatible
     node_id: x1-370
     runtime_instance_id: x1-370-fastflowlm-qwen3.6-moe-35b-a3b
-    enabled: true
+    enabled: false
     base_url: ${FASTFLOWLM_X1_NPU_BASE_URL:-http://100.64.43.123:52625/v1}
     priority: 115
     quota_class: local
@@ -200,7 +200,7 @@ providers:
     type: lmstudio
     node_id: scotts-macbook-air
     runtime_instance_id: scotts-macbook-air-qwen3.5-0.8b-mlx
-    enabled: true
+    enabled: false
     base_url: ${LMSTUDIO_MACBOOK_AIR_BASE_URL:-http://scotts-macbook-air.tailcb8954.ts.net:1234/v1}
     priority: 150
     quota_class: local
@@ -219,7 +219,7 @@ providers:
   - name: lmstudio-destroyer
     type: lmstudio
     node_id: destroyer
-    enabled: true
+    enabled: false
     base_url: ${LMSTUDIO_DESTROYER_BASE_URL:-http://destroyer.tailcb8954.ts.net:1234/v1}
     priority: 130
     quota_class: local
