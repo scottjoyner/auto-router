@@ -35,7 +35,8 @@ class _AgentJobs:
         self.workers = []
 
 
-def test_assistx_route_runs_memory_preflight_before_selection(tmp_path) -> None:
+def test_assistx_route_runs_memory_preflight_before_selection(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTO_ROUTER_ROUTE_DECISION_TOKEN", "synthetic-route-token")
     memory_client = _MemoryClient()
     state = SimpleNamespace(
         context=SimpleNamespace(),
@@ -49,6 +50,7 @@ def test_assistx_route_runs_memory_preflight_before_selection(tmp_path) -> None:
 
     response = TestClient(app).post(
         "/api/routes/request",
+        headers={"Authorization": "Bearer synthetic-route-token"},
         json={
             "correlation_id": "corr-memory-1",
             "task_id": "task-memory-1",
@@ -64,4 +66,3 @@ def test_assistx_route_runs_memory_preflight_before_selection(tmp_path) -> None:
     assert len(memory_client.queries) == 1
     assert memory_client.queries[0].repository == "scottjoyner/auto-router"
     assert memory_client.queries[0].task_id == "task-memory-1"
-

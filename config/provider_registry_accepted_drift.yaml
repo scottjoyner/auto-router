@@ -1,0 +1,37 @@
+# Registry entries known to be wrong, with the reason each is not yet fixed.
+#
+# The provider registry is a hand-maintained cache of what each node serves, and
+# it drifts: models get renamed, re-versioned, moved between hosts, or unloaded.
+# scripts/provider_registry_drift.py reports that drift and
+# tests/test_provider_registry_drift.py gates on it.
+#
+# A permanently red gate is worse than none, because it teaches everyone to
+# ignore it. So drift that is *known* and *not yet fixed* is declared here rather
+# than left to fail CI forever. Each entry must say why it is still wrong and who
+# is resolving it.
+#
+# An entry absent from this file is not accepted: it fails the gate.
+#
+# Remove an entry once the registry is corrected. Do not extend review_by without
+# actually looking - a rolled-over date that nobody reads is the same as no date.
+#
+# Format:
+#   provider:   exact provider name from providers.yaml
+#   model:      exact provider_model from providers.yaml
+#   reason:     why the registry is wrong, and what would resolve it
+#   owner:      who is resolving it
+#   review_by:  date to revisit if still unfixed
+
+entries:
+  # The 36B K2 checkpoint is loaded on xwing, not on destroyer. destroyer-k2 is
+  # serving k2-1b, which is a different model at a different size. Repointing this
+  # entry at k2-1b would advertise 1B of capacity in place of 36B, which is worse
+  # than a visible failure. Resolution is either loading the 36B model on
+  # destroyer, or deleting this provider entry and pointing its alias at xwing.
+  - provider: lmstudio-destroyer-k2
+    model: k2-horizon-moVA-36B-A4B
+    reason: >-
+      Model moved to xwing; destroyer-k2 now serves k2-1b. Needs a decision on
+      which host owns the alias, not a rename.
+    owner: unassigned
+    review_by: 2026-11-04

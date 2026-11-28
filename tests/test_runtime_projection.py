@@ -21,6 +21,8 @@ def provider(
     slots: int = 1,
     runtime_id: str = "lmstudio-xwing-1234",
     base_url: str = "http://192.168.1.9:1234/v1",
+    tool_use: bool = False,
+    tool_evidence: dict | None = None,
 ) -> ProviderConfig:
     return ProviderConfig(
         name="assistx-xwing",
@@ -45,7 +47,8 @@ def provider(
                 artifact_fingerprint="sha256:abcdef",
                 quantization="Q4_K_M",
                 context_window=32768,
-                capabilities={"chat", "streaming", "code", "local_only"},
+                capabilities={"chat", "streaming", "code", "local_only"} | ({"tool_use"} if tool_use else set()),
+                task_family_scores={"tool_use": tool_evidence} if tool_evidence is not None else {},
             )
         ],
     )
@@ -268,3 +271,61 @@ async def test_generation_conflict_skip_and_expiry_fail_closed(monkeypatch):
     with pytest.raises(RuntimeError, match="is expired"):
         manager.assert_current_fresh(now_ms=1_060_000)
     assert manager.last_error.endswith("is expired")
+
+
+def _passing_tool_evidence() -> dict:
+    from auto_router.tool_call_reliability import REQUIRED_TOOL_CALL_PROBES
+    return {
+        "quality_floor_passed": True,
+        "tool_call_probe": {
+            "schema_version": "1",
+            "passed": True,
+            "passed_probes": list(REQUIRED_TOOL_CALL_PROBES),
+            "failed_probes": [],
+            "missing_probes": [],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_signed_projection_strips_tool_use_without_complete_probe_evidence(monkeypatch):
+    install_manager_fixtures(monkeypatch)
+    monkeypatch.setattr("auto_router.runtime_projection.time.time", lambda: 1010.0)
+    state = SimpleNamespace(agents=SimpleNamespace(), policies=SimpleNamespace())
+    manager = RuntimeProjectionManager(state)
+
+    await manager.apply(document(1, item=provider(tool_use=True)))
+
+    model = state.providers.enabled()[0].models[0]
+    assert "tool_use" not in model.capabilities
+    assert {"chat", "streaming", "code", "local_only"}.issubset(model.capabilities)
+
+
+@pytest.mark.asyncio
+async def test_signed_projection_preserves_tool_use_only_after_all_probes_pass(monkeypatch):
+    install_manager_fixtures(monkeypatch)
+    monkeypatch.setattr("auto_router.runtime_projection.time.time", lambda: 1010.0)
+    state = SimpleNamespace(agents=SimpleNamespace(), policies=SimpleNamespace())
+    manager = RuntimeProjectionManager(state)
+
+    await manager.apply(document(1, item=provider(
+        tool_use=True,
+        tool_evidence=_passing_tool_evidence(),
+    )))
+
+    assert "tool_use" in state.providers.enabled()[0].models[0].capabilities
+
+
+@pytest.mark.asyncio
+async def test_tool_probe_can_only_revoke_never_grant_tool_use(monkeypatch):
+    install_manager_fixtures(monkeypatch)
+    monkeypatch.setattr("auto_router.runtime_projection.time.time", lambda: 1010.0)
+    state = SimpleNamespace(agents=SimpleNamespace(), policies=SimpleNamespace())
+    manager = RuntimeProjectionManager(state)
+
+    await manager.apply(document(1, item=provider(
+        tool_use=False,
+        tool_evidence=_passing_tool_evidence(),
+    )))
+
+    assert "tool_use" not in state.providers.enabled()[0].models[0].capabilities

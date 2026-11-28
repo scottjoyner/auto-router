@@ -1,0 +1,42 @@
+name: Router mounted admin startup security (offline)
+
+on:
+  # Run for every proposed change: other modules can register, shadow, or
+  # remount admin routes. Path filters would miss a new unsafe route outside
+  # main.py/secure_live.py, defeating this startup invariant as a CI gate.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-startup-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout pinned exact source without saved credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install source + test runner
+        run: python -m pip install --disable-pip-version-check -e . pytest==8.3.5
+      - name: Parse synthetic startup guard source
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in ("src/auto_router/secure_live.py", "tests/test_secure_live_admin_import_guard.py"):
+              ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
+          PY
+      - name: Execute in-process, offline security startup invariant
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -B -m pytest -q -p no:cacheprovider tests/test_secure_live_admin_import_guard.py

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Admin/ops endpoint protection (LLD §3.5 W-64).
 
 A single shared token (``AUTO_ROUTER_ADMIN_TOKEN``) gates the sensitive
@@ -10,10 +8,19 @@ When no token is configured the endpoints are locked down: every request is
 rejected with 401 so operators cannot accidentally expose them.
 """
 
+from __future__ import annotations
+
+import os
+import secrets
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBasic,
+    HTTPBasicCredentials,
+    HTTPBearer,
+)
 
 from auto_router.settings import get_settings
 
@@ -29,6 +36,28 @@ def _unauthorized(detail: str = "Admin authentication required") -> HTTPExceptio
     )
 
 
+def _admin_credential_is_separate(admin_token: str) -> bool:
+    """Never admit an internal or routing-service credential as admin.
+
+    Unlike deployment preflight this runs at the actual admin auth boundary,
+    including when the operator skips the candidate-config audit. Unset
+    unrelated credentials are ignored; a missing admin token is denied by
+    require_admin. Values are never logged or reflected to the caller.
+    """
+    if not admin_token:
+        return False
+    for name in (
+        "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN",
+        "AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN",
+        "AUTO_ROUTER_ASSISTX_BASIC_AUTH_PASS",
+        "AUTO_ROUTER_ROUTE_DECISION_TOKEN",
+    ):
+        other = os.getenv(name, "")
+        if other and secrets.compare_digest(admin_token, other):
+            return False
+    return True
+
+
 async def require_admin(
     request: Request,
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
@@ -39,16 +68,29 @@ async def require_admin(
     token = getattr(settings, "admin_token", "") or ""
     if not token:
         raise _unauthorized("Admin token not configured (set AUTO_ROUTER_ADMIN_TOKEN)")
+    if not _admin_credential_is_separate(token):
+        raise _unauthorized("Administrative credential configuration rejected")
+
+    # Reject ambiguous authentication even when one supplied credential
+    # happens to be valid. A proxy may preserve duplicate headers differently
+    # from FastAPI dependencies; never select an arbitrary first/last token.
+    admin_headers = request.headers.getlist("x-admin-token")
+    auth_headers = request.headers.getlist("authorization")
+    if (len(admin_headers) > 1 or len(auth_headers) > 1
+            or (admin_headers and auth_headers)):
+        raise _unauthorized("Ambiguous administrative authentication")
+    if auth_headers and bearer is None and basic is None:
+        raise _unauthorized("Unsupported administrative authentication")
 
     provided: list[str] = []
     if x_admin_token:
         provided.append(x_admin_token.strip())
     if bearer is not None and bearer.credentials:
         provided.append(bearer.credentials.strip())
-    if basic is not None and basic.password:
+    if basic is not None and basic.password and basic.username == "admin":
         provided.append(basic.password.strip())
 
-    if any(secret == token for secret in provided):
+    if any(secrets.compare_digest(candidate, token) for candidate in provided):
         return
 
     raise _unauthorized()
@@ -56,3 +98,20 @@ async def require_admin(
 
 # Type alias used by route decorators.
 AdminAuth = Any
+
+
+async def require_route_decision_token(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    """Authorize route decisions without granting inference/admin privileges.
+
+    Route requests emit persisted decisions into the AssistX outbox and cannot
+    be treated as an anonymous public discovery endpoint. Missing configuration
+    always denies. Do not reuse the broader router admin/executor secrets.
+    """
+    expected = os.getenv("AUTO_ROUTER_ROUTE_DECISION_TOKEN", "").strip()
+    prefix = "Bearer "
+    raw = authorization or ""
+    supplied = raw[len(prefix) :].strip() if raw.startswith(prefix) else ""
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise _unauthorized("Route decision token required")

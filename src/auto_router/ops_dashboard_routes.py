@@ -8,11 +8,12 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
 from auto_router.preflight import build_preflight_report
+from auto_router.security import require_admin
 from auto_router.gateway import build_agentgateway_status
 from auto_router.service_routes import build_outbox_dispatch_status, build_outbox_pressure_status
 from auto_router.settings import get_settings
@@ -26,6 +27,9 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
     @app.get("/api/dashboard/ops-summary", response_class=HTMLResponse)
     async def dashboard_ops_summary(request: Request) -> Any:
         data = build_ops_summary(state, gateway_status=await build_agentgateway_status())
+        # Never pass sensitive configured URL values into anonymous HTML context.
+        # Preserve unredacted diagnostics only in the separately guarded admin JSON.
+        data = {**data, "assistx_tasks_url": None, "assistx_event_sink_url": None}
         return templates.TemplateResponse(
             request=request,
             name="fragments/ops_summary.html",
@@ -33,11 +37,11 @@ def register_ops_dashboard_routes(app: FastAPI, state: Any) -> None:
         )
 
     @app.get("/admin/ops/summary")
-    async def admin_ops_summary() -> dict[str, Any]:
+    async def admin_ops_summary(_: None = Depends(require_admin)) -> dict[str, Any]:
         return build_ops_summary(state)
 
     @app.get("/admin/ops/preflight")
-    async def admin_ops_preflight() -> dict[str, Any]:
+    async def admin_ops_preflight(_: None = Depends(require_admin)) -> dict[str, Any]:
         return build_preflight_report(state, get_settings())
 
     @app.get("/metrics/ops", response_class=PlainTextResponse)

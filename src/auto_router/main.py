@@ -33,6 +33,7 @@ from auto_router.config import (
 )
 from auto_router.ledger import RuntimeSample, UsageEvent, UsageLedger
 from auto_router.model_registry import ModelRegistryStore
+from auto_router.provider_circuit_diagnostics import annotate_health_with_open_model_circuits
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
@@ -109,6 +110,10 @@ async def load_state() -> None:
     state.circuits = CircuitBreakerManager()
     state.agent_jobs = AgentJobManager(
         state.agents.agent_workers,
+        # Job artifacts must share the durable /data Router volume rather than
+        # the container's disposable /app/data writable layer. In isolated CI,
+        # the temporary SQLite directory is a private per-container tmpfs.
+        base_dir=settings.agent_jobs_path,
         outcome_recorder=state.memory_client.record_agent_job_outcome,
     )
     state.outbox_dispatch_lock = asyncio.Lock()
@@ -258,8 +263,17 @@ async def _backlog_burn_loop() -> None:
 
     await asyncio.sleep(15)
     interval = int(getattr(_settings(), "backlog_burn_interval_seconds", 60) or 60)
+    logger.info("backlog-burn loop started (interval=%ss)", interval)
     while True:
         try:
+            # Power brake: never burn backlog while any node is off DAILY power
+            # (CONSERVE/SURVIVE) — batch jobs are the first thing an outage
+            # sacrifices (FLEET-STANDARD-LOADOUTS.md rule 6).
+            off_daily = {h: s["profile"] for h, s in _power_state_by_node().items() if s["profile"] != "daily"}
+            if off_daily:
+                logger.info("backlog-burn skipped: nodes off DAILY power: %s", off_daily)
+                await asyncio.sleep(interval)
+                continue
             url = f"http://127.0.0.1:{_settings().port}/admin/backlog/burn-down"
             async with httpx.AsyncClient() as client:
                 r = await client.post(
@@ -363,8 +377,14 @@ install_logging_middleware(app)
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 static_dir = Path(__file__).resolve().parent / "static"
-static_dir.mkdir(exist_ok=True)
-(static_dir / "vendor").mkdir(exist_ok=True)
+# The runtime serves immutable, vendored JavaScript baked into the wheel.
+# Never create directories inside site-packages: the production container
+# should be able to start with a read-only root and a non-root UID.
+# A partial/incorrect image must fail at import rather than silently mount
+# an empty static directory or download a CDN fallback.
+for required_asset in ("vendor/htmx.min.js", "vendor/tailwind.min.js"):
+    if not (static_dir / required_asset).is_file():
+        raise RuntimeError("packaged offline Router static asset missing")
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
@@ -376,6 +396,13 @@ async def health() -> dict[str, Any]:
     context_projection = _context_projection_summary()
     model_registry_summary = state.model_registry.summary() if hasattr(state, "model_registry") else {}
     outbox_pressure = build_outbox_pressure_status(state)
+    reserved_providers = []
+    if hasattr(state, "policy_engine") and hasattr(state.policy_engine, "_provider_reserved"):
+        reserved_providers = sorted({
+            provider.name for provider in state.providers.enabled()
+            if state.policy_engine._provider_reserved(provider)
+        })
+    blocked_providers = sorted(set(state.context.blocked_provider_names()) | set(reserved_providers))
     # A live telemetry trickle sits at 'warning' (draining, below the critical
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
@@ -405,7 +432,8 @@ async def health() -> dict[str, Any]:
         "providers_enabled": len(state.providers.enabled()),
         "local_providers": state.context.local_provider_names(),
         "free_api_providers": state.context.free_api_provider_names(),
-        "blocked_providers": state.context.blocked_provider_names(),
+        "blocked_providers": blocked_providers,
+        "reserved_providers": reserved_providers,
         "model_registry_stale_providers": model_registry_summary.get("stale_providers", []) if hasattr(state, "model_registry") else [],
         "model_registry_error_providers": model_registry_summary.get("error_providers", []) if hasattr(state, "model_registry") else [],
         "running_local_nodes": state.context.running_local_node_names(),
@@ -491,8 +519,8 @@ async def dashboard_summary(request: Request) -> Any:
             "circuits": state.circuits.snapshot(),
             "gateway": await build_agentgateway_status(),
             "ui_page_sections": get_ui_page_sections(),
-            "assistx_tasks_url": settings.assistx_tasks_url,
-            "assistx_event_sink_url": settings.assistx_event_sink_url,
+            "assistx_tasks_url": None,
+            "assistx_event_sink_url": None,
             "assistx_tasks_configured": bool(settings.assistx_tasks_url),
             "assistx_event_sink_configured": bool(settings.assistx_event_sink_url),
             "outbox_summary": outbox_summary,
@@ -512,17 +540,17 @@ async def admin_quota(_: None = Depends(require_admin)) -> dict[str, Any]:
 
 
 @app.get("/admin/providers/health")
-async def admin_provider_health() -> dict[str, Any]:
+async def admin_provider_health(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": await _provider_health_reports()}
 
 
 @app.get("/admin/context")
-async def admin_context() -> dict[str, Any]:
+async def admin_context(_: None = Depends(require_admin)) -> dict[str, Any]:
     return state.context.model_dump()
 
 
 @app.get("/admin/context/graph")
-async def admin_context_graph() -> dict[str, Any]:
+async def admin_context_graph(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {
         "revision": state.context.revision,
         "source": state.context.source,
@@ -532,19 +560,19 @@ async def admin_context_graph() -> dict[str, Any]:
 
 
 @app.get("/admin/providers")
-async def admin_providers() -> dict[str, Any]:
+async def admin_providers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"providers": [provider.model_dump() for provider in state.providers.providers]}
 
 
 @app.get("/admin/placement")
-async def admin_placement() -> dict[str, Any]:
+async def admin_placement(_: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import compute_plan
 
     return compute_plan(state)
 
 
 @app.post("/admin/load")
-async def admin_load(apply: bool | None = None) -> dict[str, Any]:
+async def admin_load(apply: bool | None = None, _: None = Depends(require_admin)) -> dict[str, Any]:
     from auto_router.model_placement import AUTOLOAD_ENABLED, reconcile_once
 
     do_apply = apply if apply is not None else AUTOLOAD_ENABLED
@@ -552,36 +580,36 @@ async def admin_load(apply: bool | None = None) -> dict[str, Any]:
 
 
 @app.get("/admin/agent-workers")
-async def admin_agent_workers() -> dict[str, Any]:
+async def admin_agent_workers(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"agent_workers": [worker.model_dump() for worker in state.agents.agent_workers]}
 
 
 @app.get("/admin/usage")
-async def admin_usage(limit: int = 50) -> dict[str, Any]:
+async def admin_usage(limit: int = 50, _: None = Depends(require_admin)) -> dict[str, Any]:
     return {"summary": state.ledger.summary(), "recent": state.ledger.recent_events(limit=limit)}
 
 
 @app.get("/admin/circuits")
-async def admin_circuits() -> dict[str, Any]:
+async def admin_circuits(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"circuits": state.circuits.snapshot()}
 
 
 @app.post("/admin/circuits/reset")
-async def admin_circuits_reset() -> dict[str, Any]:
+async def admin_circuits_reset(_: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear all circuit breakers (recover from tripped providers immediately)."""
     cleared = state.circuits.reset()
     return {"cleared": cleared}
 
 
 @app.post("/admin/circuits/reset/{owner:path}")
-async def admin_circuits_reset_owner(owner: str) -> dict[str, Any]:
+async def admin_circuits_reset_owner(owner: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Clear a single circuit breaker by owner (provider/model)."""
     cleared = state.circuits.reset(owner)
     return {"owner": owner, "cleared": cleared}
 
 
 @app.get("/admin/agent-jobs")
-async def admin_agent_jobs() -> dict[str, Any]:
+async def admin_agent_jobs(_: None = Depends(require_admin)) -> dict[str, Any]:
     return {"jobs": [record_as_dict(record) for record in state.agent_jobs.list_records()]}
 
 
@@ -681,10 +709,58 @@ async def get_agent_job_artifacts(job_id: str) -> dict[str, Any]:
     return {"job_id": job_id, "artifacts": state.agent_jobs.artifacts_for(job_id)}
 
 
+def _apply_power_tiers_to_policy() -> None:
+    """Stamp power-tier reports onto the policy engine's provider_health map
+    under the names routing actually uses (state.providers composite names).
+    Runs per-request alongside the fleet-health-cache assignment; cheap dict
+    work, and only mutates entries for nodes whose tier differs from DAILY."""
+    power_map = _power_profile_by_node()
+    if not power_map:
+        return
+    try:
+        current = state.policy_engine.provider_health
+    except Exception:
+        return
+    if not isinstance(current, dict):
+        current = {}
+    node_map = _providers_by_node()
+    stamped = False
+    for host_lower, profile in power_map.items():
+        for provider_name in node_map.get(host_lower, []):
+            entry = current.get(provider_name)
+            if not isinstance(entry, dict):
+                entry = {
+                    "provider": provider_name,
+                    "ok": True,
+                    "stale": False,
+                    "age_seconds": 0,
+                    "model_count": None,
+                    "health_score": 100,
+                }
+                current[provider_name] = entry
+            prev_profile = entry.get("power_profile")
+            model_class = _power_state_by_node().get(host_lower, {}).get("model_class", "full")
+            _power_tier_apply(entry, profile, model_class)
+            if profile == "daily":
+                # keep probe-derived scoring authoritative; just mark tier
+                entry.pop("error", None) if entry.get("error", "").startswith("power-") else None
+            if prev_profile != profile:
+                if profile == "daily":
+                    logger.info("routing restored to DAILY: %s", provider_name)
+                else:
+                    logger.info("routing gated by power tier: %s -> %s", provider_name, profile)
+            stamped = True
+    if stamped:
+        state.policy_engine.provider_health = current
+
+
 async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingResponse:
     # Feed the router's probe-history health into the policy engine so routing
     # can demote/exclude flaky + unloaded nodes (liveness-gated routing).
     state.policy_engine.provider_health = _fleet_health_map()
+    # Overlay fleet power tiers (DAILY/CONSERVE/SURVIVE) so battery-state nodes
+    # are demoted/parked on top of probe evidence.
+    _apply_power_tiers_to_policy()
     plan = state.policy_engine.plan(router_request)
     settings = get_settings()
     # Hard bounds so a fleet full of dead/hung nodes can never make a single
@@ -1200,10 +1276,12 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
             report = health_result.model_dump()
         else:
             report = {"provider": provider.name, "ok": False, "detail": str(health_result), "metadata": {}}
-        provider_open = [owner for owner in open_owners if owner.startswith(f"{provider.name}/")]
-        if provider_open:
-            report["ok"] = False
-            report["detail"] = f"Circuit open: {', '.join(provider_open[:3])}"
+        report = annotate_health_with_open_model_circuits(
+            report, provider.name, open_owners
+        )
+        node_state = _power_state_by_node().get(str(getattr(provider, "node_id", "") or "").lower())
+        if node_state:
+            _power_tier_apply(report, node_state["profile"], node_state["model_class"])
         reports.append(report)
         if hasattr(state, "signal_registry"):
             signals = provider_health_signals(provider.name, report, node_id=provider.node_id)
@@ -1221,15 +1299,115 @@ async def _provider_health_reports() -> list[dict[str, Any]]:
 _FLEET_HEALTH_CACHE: dict[str, Any] = {"at": 0.0, "map": {}}
 
 
+def _power_state_by_node() -> dict[str, dict[str, str]]:
+    """Fresh node-report power state (FLEET-STANDARD-LOADOUTS.md) by hostname.
+
+    Returns {hostname_lower: {"profile": daily|conserve|survive,
+                               "model_class": full|essential|...}}."""
+    from auto_router.fleet_routes import _node_reports
+
+    now = int(time.time())
+    out: dict[str, dict[str, str]] = {}
+    for hostname, report in list(_node_reports.items()):
+        if now - int(report.get("received_at", 0)) > 120:
+            continue
+        profile = str(report.get("power_profile") or "").lower()
+        if profile in {"daily", "conserve", "survive"}:
+            out[hostname.lower()] = {
+                "profile": profile,
+                "model_class": str(report.get("power_model_class") or "full").lower(),
+            }
+    return out
+
+
+def _power_profile_by_node() -> dict[str, str]:
+    """Backward-compatible view: {hostname_lower: profile}."""
+    return {host: st["profile"] for host, st in _power_state_by_node().items()}
+
+
+def _providers_by_node() -> dict[str, list[str]]:
+    """Map lowercased provider node_id -> provider names.
+
+    Merges two registries on purpose: ``state.providers`` carries the
+    gateway/assistx-composite names seen by the live admin view, while the
+    providers.yaml registry carries the ``lmstudio-*`` names used as keys in
+    the probe-DB-backed routing health cache."""
+    node_map: dict[str, list[str]] = {}
+    try:
+        enabled = state.providers.enabled()
+        for provider in enabled:
+            node_id = str(getattr(provider, "node_id", "") or "").lower()
+            if node_id:
+                node_map.setdefault(node_id, []).append(str(provider.name))
+    except Exception:
+        pass
+    try:
+        import os
+
+        import auto_router.config as config_module
+
+        config_path = os.environ.get("AUTO_ROUTER_PROVIDER_CONFIG", "/app/config/providers.yaml")
+        registry = config_module.load_provider_registry(config_path)
+        for provider in registry.enabled():
+            node_id = str(getattr(provider, "node_id", "") or "").lower()
+            if node_id:
+                node_map.setdefault(node_id, []).append(str(provider.name))
+    except Exception:
+        pass
+    return node_map
+
+
+_POWER_TIER_LOG_STATE: dict[str, str] = {}
+
+
+def _power_tier_apply(report: dict[str, Any], profile: str, model_class: str = "full") -> None:
+    """Stamp one provider-health report with its node's power tier."""
+    report["power_profile"] = profile
+    report["power_model_class"] = model_class
+    if profile == "conserve":
+        if report.get("health_score") is not None:
+            report["health_score"] = min(int(report.get("health_score") or 0), 40)
+        if not report.get("error"):
+            report["error"] = "power-conserve (battery tier; demoted)"
+    elif profile == "survive":
+        report["ok"] = False
+        report["model_count"] = 0
+        report["health_score"] = 0
+        report["error"] = "power-survive (battery reserve; inference parked)"
+
+
+def _apply_power_tiers(health_map: dict[str, Any]) -> None:
+    """Overlay fleet power tiers onto the cached provider health used for
+    liveness-gated routing. CONSERVE demotes (still routable for essential
+    tasks); SURVIVE excludes via ok=False + model_count=0."""
+    power_state = _power_state_by_node()
+    if not power_state:
+        return
+    node_map = _providers_by_node()
+    applied: dict[str, str] = {}
+    for host_lower, state_info in power_state.items():
+        for provider_name in node_map.get(host_lower, []):
+            report = health_map.get(provider_name)
+            if isinstance(report, dict):
+                _power_tier_apply(report, state_info["profile"], state_info["model_class"])
+                applied[provider_name] = state_info["profile"]
+    if applied and applied != _POWER_TIER_LOG_STATE:
+        logger.info("fleet power tiers applied to routing health: %s", applied)
+        _POWER_TIER_LOG_STATE.clear()
+        _POWER_TIER_LOG_STATE.update(applied)
+
+
 async def refresh_fleet_health_task() -> None:
     """Periodically populate _FLEET_HEALTH_CACHE off the event loop."""
     while True:
         try:
             if hasattr(state, "model_registry"):
                 reports = await asyncio.to_thread(state.model_registry.provider_health_reports)
-                _FLEET_HEALTH_CACHE["map"] = {
+                health_map = {
                     str(report.get("provider") or ""): report for report in reports
                 }
+                await asyncio.to_thread(_apply_power_tiers, health_map)
+                _FLEET_HEALTH_CACHE["map"] = health_map
                 _FLEET_HEALTH_CACHE["at"] = time.time()
         except Exception:
             pass
