@@ -27,7 +27,9 @@ def test_reconciliation_compose_requires_separate_executor_and_projection_keys()
     assert "assistx_runtime_projection_public_key.pem" in compose
     assert "ASSISTX_EXECUTOR_PUBLIC_KEY_FILE" in compose
     assert "ASSISTX_RUNTIME_PROJECTION_PUBLIC_KEY_FILE" in compose
-    assert "AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN" in compose
+    assert "AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN" in compose
+    assert "${ASSISTX_EXECUTOR_CLAIM_STATUS_TOKEN:" in compose
+    assert "AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN" not in compose
     assert "AUTO_ROUTER_INTERNAL_SERVICE_TOKEN" in compose
     assert "AUTO_ROUTER_RUNTIME_PROJECTION_HMAC_SECRET" not in compose
     assert "AUTO_ROUTER_RUNTIME_PROJECTION_HMAC_SECRET" not in environment
