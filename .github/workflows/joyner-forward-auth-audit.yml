@@ -4,11 +4,15 @@ on:
   push:
     branches: [main]
     paths:
+      - scripts/joyner_tailnet_crosshost_auth_witness.py
+      - tests/test_joyner_tailnet_crosshost_auth_witness.py
       - scripts/joyner_forward_auth_audit.py
       - tests/test_joyner_forward_auth_audit.py
       - .github/workflows/joyner-forward-auth-audit.yml
   pull_request:
     paths:
+      - scripts/joyner_tailnet_crosshost_auth_witness.py
+      - tests/test_joyner_tailnet_crosshost_auth_witness.py
       - scripts/joyner_forward_auth_audit.py
       - tests/test_joyner_forward_auth_audit.py
       - .github/workflows/joyner-forward-auth-audit.yml
@@ -22,6 +26,14 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "verified checkout SHA $EXPECTED_HEAD"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -29,5 +41,5 @@ jobs:
         run: python -m pip install pytest
       - name: Check syntax and synthetic listener policy
         run: |
-          python -m py_compile scripts/joyner_forward_auth_audit.py
-          python -m pytest -o addopts= tests/test_joyner_forward_auth_audit.py -q
+          python -m py_compile scripts/joyner_forward_auth_audit.py scripts/joyner_tailnet_crosshost_auth_witness.py
+          python -m pytest -o addopts= tests/test_joyner_forward_auth_audit.py tests/test_joyner_tailnet_crosshost_auth_witness.py -q
