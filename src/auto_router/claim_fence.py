@@ -35,8 +35,10 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
     current = getattr(manager, "current", None)
     if current is None or not current.is_fresh():
         raise ExecutorClaimFenceError("runtime projection is absent or expired")
-    expected_generation = int(identity.get("projection_generation") or 0)
-    if expected_generation != int(current.generation):
+    expected_generation = identity.get("projection_generation")
+    if type(expected_generation) is not int or expected_generation <= 0:
+        raise ExecutorClaimFenceError("executor claim projection generation is invalid")
+    if expected_generation != current.generation:
         raise ExecutorClaimFenceError("executor claim projection generation is stale")
 
     task_id = str(identity.get("task_id") or "").strip()
@@ -46,7 +48,7 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
         raise ExecutorClaimFenceError("executor claim identity is incomplete")
 
     base_url = os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL", "").strip().rstrip("/")
-    service_token = os.getenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN", "").strip()
+    service_token = os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN", "").strip()
     if not base_url or not service_token:
         raise ExecutorClaimFenceError("AssistX executor claim-status service is not configured")
     timeout = max(0.2, float(os.getenv("AUTO_ROUTER_EXECUTOR_CLAIM_TIMEOUT_SECONDS", "2")))
@@ -71,11 +73,17 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
         raise ExecutorClaimFenceError(
             str(payload.get("reason") if isinstance(payload, dict) else "claim is not active")
         )
+    generation = payload.get("projection_generation")
+    expiry = payload.get("lease_expires_at_ts")
+    if type(generation) is not int or generation <= 0 or type(expiry) is not int or expiry <= 0:
+        raise ExecutorClaimFenceError("AssistX active claim response has invalid generation or expiry")
+    if any(type(payload.get(key)) is not str or not payload[key] for key in ("task_id", "claim_id", "agent_id")):
+        raise ExecutorClaimFenceError("AssistX active claim response has invalid identity")
     actual = {
         "task_id": str(payload.get("task_id") or ""),
         "claim_id": str(payload.get("claim_id") or ""),
         "agent_id": str(payload.get("agent_id") or ""),
-        "projection_generation": int(payload.get("projection_generation") or 0),
+        "projection_generation": generation,
     }
     expected = {
         "task_id": task_id,
@@ -89,5 +97,5 @@ async def assert_executor_claim_current(request: Any, state: Any) -> None:
         assert_claim_owner(identity, payload)
     except OwnerBindingError as exc:
         raise ExecutorClaimFenceError(str(exc)) from exc
-    if int(payload.get("lease_expires_at_ts") or 0) <= int(time.time() * 1000):
+    if expiry <= int(time.time() * 1000):
         raise ExecutorClaimFenceError("AssistX task lease expired before provider dispatch")

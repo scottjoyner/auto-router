@@ -120,7 +120,7 @@ async def test_predispatch_claim_fence_rejects_owner_change(monkeypatch):
         async def get(self,*args,**kwargs):return _Response(_signed("person-b"))
     monkeypatch.setattr(claim_fence.httpx,"AsyncClient",_Client)
     monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_URL","http://assistx.test")
-    monkeypatch.setenv("AUTO_ROUTER_ASSISTX_EXECUTOR_SERVICE_TOKEN","fake-unit-token")
+    monkeypatch.setenv("AUTO_ROUTER_EXECUTOR_CLAIM_STATUS_TOKEN","fake-unit-token")
     req=SimpleNamespace(metadata={"assistx_executor":{
         "task_id":"task-1","claim_id":"claim-1","agent_id":"agent-1",
         "projection_generation":9, **_signed("person-a"),

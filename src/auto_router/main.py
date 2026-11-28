@@ -37,6 +37,7 @@ from auto_router.provider_circuit_diagnostics import annotate_health_with_open_m
 from auto_router.signal_registry import ContextSignalStore, provider_health_signals, signal_snapshot
 from auto_router.models import Priority, ProviderCandidate, ProviderHealth, ProviderResponse, RouterRequest
 from auto_router.policy import PolicyEngine
+from auto_router.admission import RuntimeAdmissionQueueFull
 from auto_router.providers import AgentGatewayProviderAdapter, ProviderError, ProviderStreamResponse, build_provider
 from auto_router.gateway import build_agentgateway_status
 from auto_router.live_model_routes import merge_discovered_lmstudio_providers, refresh_provider_models
@@ -407,6 +408,17 @@ async def health() -> dict[str, Any]:
     # threshold) during normal operation; only 'critical' backlog or dead-letters
     # should mark the whole system degraded. Open circuits still always degrade.
     overall_ok = not open_circuits and outbox_pressure["level"] != "critical"
+    # The strict-offline entrypoint cannot dispatch without a fresh signed
+    # runtime generation. Context freshness is a separate contract.
+    manager = getattr(state, "runtime_projection_manager", None)
+    runtime_projection = {"required": manager is not None, "fresh": None}
+    if manager is not None:
+        try:
+            current = manager.current
+            runtime_projection["fresh"] = bool(current is not None and current.is_fresh())
+        except Exception:
+            runtime_projection["fresh"] = False
+        overall_ok = overall_ok and runtime_projection["fresh"] is True
     redis_ok = "not_configured"
     if hasattr(state, "quota") and hasattr(state.quota, "client"):
         try:
@@ -426,6 +438,8 @@ async def health() -> dict[str, Any]:
         "context_revision": state.context.revision,
         "context_source": state.context.source,
         "context_projection_status": context_projection["status"],
+        "runtime_projection_required": runtime_projection["required"],
+        "runtime_projection_fresh": runtime_projection["fresh"],
         "context_projection_degraded": context_projection["degraded"],
         "context_projection_error": context_projection["error"],
         "quota_backend": state.quota_backend,
@@ -438,6 +452,7 @@ async def health() -> dict[str, Any]:
         "model_registry_error_providers": model_registry_summary.get("error_providers", []) if hasattr(state, "model_registry") else [],
         "running_local_nodes": state.context.running_local_node_names(),
         "agent_workers_configured": len(state.agents.agent_workers),
+        "runtime_admission_queue_rejections": getattr(state, "runtime_admission_queue_rejections", 0),
         "open_circuits": len(open_circuits),
         "time": int(time.time()),
         "gateway": gateway_status,
@@ -770,6 +785,7 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
     attempts = 0
     timed_out = False
     errors: list[str] = []
+    admission_queue_rejections = 0
     for stage in plan.stages:
         if not stage.candidates and stage.optional:
             continue
@@ -893,6 +909,13 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
                 payload = _normalize_response_payload(response, stage.purpose.value, plan.profile_name)
                 payload["auto_router"]["latency_ms"] = latency_ms
                 return JSONResponse(payload, status_code=response.status_code)
+            except RuntimeAdmissionQueueFull:
+                state.policy_engine.mark_inflight_end(owner)
+                await asyncio.to_thread(state.quota.release, candidate.provider, candidate.model, estimate)
+                state.runtime_admission_queue_rejections = getattr(state, "runtime_admission_queue_rejections", 0) + 1
+                admission_queue_rejections += 1
+                stage_rejections.append("runtime admission queue full")
+                errors.append("runtime admission queue full")
             except ProviderError as exc:
                 state.policy_engine.mark_inflight_end(owner)
                 latency_ms = int((time.perf_counter() - started) * 1000)
@@ -942,6 +965,8 @@ async def _execute(router_request: RouterRequest) -> JSONResponse | StreamingRes
             status_code=504,
             detail={"error": "request deadline exceeded; too many dead/hung nodes", "details": errors},
         )
+    if admission_queue_rejections and admission_queue_rejections == len(errors):
+        raise HTTPException(status_code=429, detail={"error": "runtime admission capacity unavailable"}, headers={"Retry-After": "2"})
     raise HTTPException(status_code=503, detail={"error": "all providers failed", "details": errors})
 
 

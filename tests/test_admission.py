@@ -1,3 +1,4 @@
+from auto_router.admission import RuntimeAdmissionQueueFull
 import asyncio
 
 import pytest
@@ -130,7 +131,7 @@ async def test_bounded_queue_rejects_overflow() -> None:
     queued_task = asyncio.create_task(controller.acquire(candidate))
     await asyncio.sleep(0)
 
-    with pytest.raises(ProviderError, match="queue full") as exc:
+    with pytest.raises(RuntimeAdmissionQueueFull, match="queue full") as exc:
         await controller.acquire(candidate)
 
     assert exc.value.status_code == 429
