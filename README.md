@@ -1,8 +1,25 @@
 # auto-router
 
+<!-- repo-entrypoint-guide:start -->
+## Repository guide
+
+**Role in the fleet:** This repository is the strict-offline protocol gateway; AssistX is the authority for node identity, loaded models, approvals, admission, and recovery. Read [Role](#role), [Strict offline mode](#strict-offline-mode), and [What the router does not own](#what-the-router-does-not-own) before adding a provider.
+
+**Safe validation:** Keep production dispatch and autoload disabled until the physical runtime, shared-slot accounting, route provenance, and stale/fenced-request behavior are independently verified.
+
+### Find your way
+
+- [Role](#role)
+- [Strict offline mode](#strict-offline-mode)
+- [What the router owns](#what-the-router-owns)
+- [Fleet loadout reconciliation safety](#fleet-loadout-reconciliation-safety)
+- [Verification](#verification)
+<!-- repo-entrypoint-guide:end -->
+
+
 Strict-offline OpenAI-compatible inference gateway for the AssistX fleet.
 
-On branch `full-auto-reconciliation-20260730`, `auto-router` is deliberately narrower than its earlier design. It no longer treats hosted quota, backlog scheduling, worker placement, model placement, or broad service discovery as production responsibilities.
+The reconciled `auto-router` design is deliberately narrower than its earlier design. The historical `full-auto-reconciliation-20260730` branch name is included here for provenance; this README is on the repository's default branch. It no longer treats hosted quota, backlog scheduling, worker placement, model placement, or broad service discovery as production responsibilities.
 
 ## Role
 
@@ -265,6 +282,27 @@ curl http://127.0.0.1:8088/v1/models | jq
 ```
 
 A deployment is not admitted merely because `/v1/models` succeeds. Each physical model instance also needs a completion canary, fresh health/capacity observation, explicit container reachability evidence, and benchmark evidence before AssistX routes real work.
+
+### Accepted-drift waivers and the audit clock
+
+`config/provider_registry_accepted_drift.yaml` entries must carry a reason, an
+owner and a future `review_by` date. Rolling a date forward without a real
+review is the same as having no date. The waiver gate judges deadlines against
+a reproducible frozen date by default, so CI results stay comparable; an
+operator or audit can judge the same gate at a chosen date with either:
+
+```bash
+python tests/test_provider_registry_drift.py --as-of 2026-11-28
+pytest -q tests/test_provider_registry_drift.py --as-of 2026-11-28
+```
+
+The direct-script path assigns `AS_OF` from `--as-of` in its `__main__` block;
+the pytest path cannot run that block, so conftest maps `--as-of` into
+`AUTO_ROUTER_WAIVER_AS_OF`, which `as_of()` reads first. Both paths therefore
+honour the flag, through different variables (environment overrides `AS_OF`
+when both are present). Run the gate at the current date before waivers go
+stale — an overdue `review_by` fails deliberately until the drift is fixed or
+the waiver is re-reviewed with a real owner and justification.
 
 ## Remaining integration work
 

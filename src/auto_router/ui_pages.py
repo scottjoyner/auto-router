@@ -56,4 +56,15 @@ _UI_PAGE_SECTIONS: list[dict[str, Any]] = [
 
 
 def get_ui_page_sections() -> list[dict[str, Any]]:
-    return deepcopy(_UI_PAGE_SECTIONS)
+    """Expose admin API paths without falsely offering browser authentication.
+
+    The operator browser does not carry the X-Admin-Token header. A plain
+    anchor to a protected /admin/ route would misleadingly imply access; it
+    must remain a labeled, non-clickable API reference until a separately
+    reviewed session-authenticated UI exists.
+    """
+    sections = deepcopy(_UI_PAGE_SECTIONS)
+    for section in sections:
+        for link in section["links"]:
+            link["requires_admin_header"] = link["href"].startswith("/admin/")
+    return sections

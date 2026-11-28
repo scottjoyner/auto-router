@@ -15,30 +15,10 @@
         </div>
         <div class="flex max-w-xl flex-col gap-3">
             <div class="flex flex-wrap gap-3">
-                <button class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20"
-                        hx-post="/admin/providers/probe"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    Probe providers /models
-                </button>
-                <button class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-300/20"
-                        hx-post="/admin/services/scan"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    Scan local services
-                </button>
-                <button class="rounded-2xl border border-purple-300/30 bg-purple-300/10 px-4 py-2 text-sm font-semibold text-purple-100 hover:bg-purple-300/20"
-                        hx-post="/admin/agent-clis/discover"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    Discover CLIs
-                </button>
-                <button class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-300/20"
-                        hx-post="/admin/outbox/dispatch?dry_run=true&limit=10"
-                        hx-target="#action-status"
-                        hx-swap="innerHTML">
-                    Outbox dry-run
-                </button>
+                <span class="rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-300/20" data-admin-api-path="/admin/providers/probe" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">Probe providers /models <span class="text-[10px] text-router-muted">· API auth required</span></span>
+                <span class="rounded-2xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-300/20" data-admin-api-path="/admin/services/scan" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">Scan local services <span class="text-[10px] text-router-muted">· API auth required</span></span>
+                <span class="rounded-2xl border border-purple-300/30 bg-purple-300/10 px-4 py-2 text-sm font-semibold text-purple-100 hover:bg-purple-300/20" data-admin-api-path="/admin/agent-clis/discover" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">Discover CLIs <span class="text-[10px] text-router-muted">· API auth required</span></span>
+                <span class="rounded-2xl border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-300/20" data-admin-api-path="/admin/outbox/dispatch?dry_run=true&limit=10" role="note" title="Admin API operation; requires a trusted client with X-Admin-Token. Browser actions disabled.">Outbox dry-run <span class="text-[10px] text-router-muted">· API auth required</span></span>
                 <button class="rounded-2xl border border-router-line bg-router-panel2 px-4 py-2 text-sm font-semibold text-router-text hover:border-cyan-300/40"
                         hx-get="/api/dashboard/summary"
                         hx-target="#dashboard-content"

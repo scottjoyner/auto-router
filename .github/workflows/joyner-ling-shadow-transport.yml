@@ -1,0 +1,33 @@
+name: joyner-ling-shadow-transport
+
+on:
+  pull_request:
+    paths:
+      - src/auto_router/joyner_ling_shadow_transport.py
+      - tests/test_joyner_ling_shadow_transport.py
+      - .github/workflows/joyner-ling-shadow-transport.yml
+  push:
+    branches: [main]
+    paths:
+      - src/auto_router/joyner_ling_shadow_transport.py
+      - tests/test_joyner_ling_shadow_transport.py
+      - .github/workflows/joyner-ling-shadow-transport.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pure-mock-auth-and-stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimum isolated tests
+        run: python -m pip install 'pytest>=8.3' 'cryptography>=43,<46'
+      - name: Mock ASGI, streaming and synthetic Ed25519 receipt tests
+        run: |
+          python -m py_compile src/auto_router/joyner_ling_shadow_transport.py
+          python -m pytest -o addopts= tests/test_joyner_ling_shadow_transport.py -q

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import logging
 import math
 import os
 import threading
@@ -13,6 +14,9 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi.responses import JSONResponse
+from .owner_binding import OwnerBindingError, bound_principal, owner_binding_required
+
+logger = logging.getLogger(__name__)
 
 _PROTECTED_PATHS = {
     "/v1/chat/completions",
@@ -150,7 +154,7 @@ async def _read_body(receive: Any) -> tuple[bytes, Any]:
     async def replay() -> dict[str, Any]:
         nonlocal sent
         if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await receive()
         sent = True
         return {"type": "http.request", "body": bytes(body), "more_body": False}
 
@@ -178,14 +182,14 @@ def _max_output(payload: Mapping[str, Any]) -> int:
         raise ExecutorAuthError("requested output token limit is invalid") from exc
 
 
-def _encoded_receive(payload: Mapping[str, Any]) -> Any:
+def _encoded_receive(payload: Mapping[str, Any], downstream_receive: Any) -> Any:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     sent = False
 
     async def receive() -> dict[str, Any]:
         nonlocal sent
         if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await downstream_receive()
         sent = True
         return {"type": "http.request", "body": encoded, "more_body": False}
 
@@ -227,13 +231,16 @@ class ExecutorInferenceAuthMiddleware:
         ):
             await self.app(scope, receive, send)
             return
+        # The legacy auth-disable toggle cannot authorize inference requests.
+        # A missing, false, or misspelled setting must not skip signature,
+        # model-scope, projection-generation or attempt-budget checks.
         if os.getenv("AUTO_ROUTER_EXECUTOR_AUTH_REQUIRED", "true").strip().lower() not in {
-            "1",
-            "true",
-            "yes",
-            "on",
+            "1", "true", "yes", "on"
         }:
-            await self.app(scope, receive, send)
+            await JSONResponse(
+                status_code=503,
+                content={"detail": "executor inference authentication cannot be disabled"},
+            )(scope, receive, send)
             return
 
         body, replay = await _read_body(receive)
@@ -242,25 +249,28 @@ class ExecutorInferenceAuthMiddleware:
             if not isinstance(payload, dict):
                 raise ExecutorAuthError("inference request must be a JSON object")
             bearer = _bearer(list(scope.get("headers") or []))
+            # The broadly scoped internal-service bearer was never a signed,
+            # claim-owned inference grant. Even when strict owner binding is
+            # disabled, it may not bypass model scope, attempt budget or lease.
             service_token = os.getenv("AUTO_ROUTER_INTERNAL_SERVICE_TOKEN", "").strip()
             if service_token and hmac.compare_digest(bearer, service_token):
-                metadata = payload.get("metadata")
-                if not isinstance(metadata, dict):
-                    metadata = {}
-                payload["metadata"] = {
-                    **metadata,
-                    "assistx_service": {
-                        "identity": "assistx-internal",
-                        "authenticated": True,
-                    },
-                }
-                await self.app(scope, _encoded_receive(payload), send)
-                return
+                raise ExecutorAuthError("internal service token cannot authorize inference")
+
+            metadata = payload.get("metadata")
+            if isinstance(metadata, dict) and "assistx_service" in metadata:
+                raise ExecutorAuthError("caller-provided service identity is not authority")
 
             claims = decode_executor_token(bearer)
+            owner = bound_principal(scope, claims)
             model = str(payload.get("model") or "").strip()
             allowed_models = {str(item) for item in claims.get("allowed_model_aliases") or []}
             if not model or model not in allowed_models:
+                logger.warning(
+                    "executor scope reject: requested=%r allowed=%r gen=%r",
+                    model,
+                    sorted(allowed_models),
+                    claims.get("projection_generation"),
+                )
                 raise ExecutorAuthError("requested model is outside the executor token scope")
             input_tokens = _estimate_tokens(payload)
             output_tokens = _max_output(payload)
@@ -276,6 +286,22 @@ class ExecutorInferenceAuthMiddleware:
             token_generation = int(claims.get("projection_generation") or 0)
             if token_generation != int(current.generation):
                 raise ExecutorAuthError("executor token runtime projection generation is stale")
+            # Strict multi-owner routing requires *one* externally governed,
+            # monotonic attempt/spend authority shared by EVERY router replica.
+            # This module has only an in-process _ATTEMPTS ledger: a restarted
+            # process or another host could accept the same signed JTI again.
+            # A configured local SQLite path, caller env flag or verified owner
+            # alone does not establish cross-host, rollback-resistant fencing.
+            # Until a real broker is integrated and verified, strict owner
+            # inference is disabled BEFORE reserving even a local attempt.
+            if owner_binding_required():
+                await JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "shared_owner_attempt_authority_unverified",
+                    },
+                )(scope, replay, send)
+                return
             attempt = _ATTEMPTS.acquire(
                 str(claims["jti"]),
                 int(claims["exp"]),
@@ -293,10 +319,11 @@ class ExecutorInferenceAuthMiddleware:
                     "token_jti": claims["jti"],
                     "attempt": attempt,
                     "projection_generation": token_generation,
+                    **owner,
                 },
             }
-            await self.app(scope, _encoded_receive(payload), send)
-        except (ExecutorAuthError, json.JSONDecodeError) as exc:
+            await self.app(scope, _encoded_receive(payload, receive), send)
+        except (ExecutorAuthError, OwnerBindingError, json.JSONDecodeError) as exc:
             await JSONResponse(status_code=401, content={"detail": str(exc)})(scope, replay, send)
 
 

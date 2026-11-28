@@ -1,0 +1,86 @@
+name: Router read-only OCI static asset acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - Dockerfile
+      - src/auto_router/main.py
+      - src/auto_router/static/**
+      - tests/test_immutable_static_package.py
+      - .github/workflows/router-readonly-static.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-immutable-oci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout exact source with no retained credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install wheel and synthetic runner
+        run: python -m pip install --disable-pip-version-check --upgrade wheel setuptools pytest==8.3.5
+      - name: Source-only static integrity regression
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -B -m pytest -q -p no:cacheprovider tests/test_immutable_static_package.py
+      - name: Build wheel and verify vendored bytes are included unmodified
+        run: |
+          mkdir -p /tmp/router-static-wheel
+          python -m pip wheel --no-deps --wheel-dir /tmp/router-static-wheel .
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile
+          wheels = list(Path("/tmp/router-static-wheel").glob("auto_router-*.whl"))
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as z:
+              for relative in ("vendor/htmx.min.js", "vendor/tailwind.min.js"):
+                  embedded = z.read("auto_router/static/" + relative)
+                  source = (Path("src/auto_router/static") / relative).read_bytes()
+                  assert len(embedded) > 1024
+                  assert hashlib.sha256(embedded).digest() == hashlib.sha256(source).digest()
+          print("WHEEL_VENDOR_ASSETS_SHA256_MATCH_PASS")
+          PY
+      - name: Build disposable OCI candidate on CI runner (not fleet)
+        run: docker build --pull=false --label org.opencontainers.image.revision=ci-pr -t router-static-readonly-ci:check .
+      - name: Actual OCI root read-only nonroot no-network ASGI startup
+        run: |
+          docker run --rm -i \
+            --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 64 \
+            --memory 768m --cpus 1 --user 65534:65534 \
+            --tmpfs /tmp:rw,nosuid,noexec,size=32m \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e AUTO_ROUTER_STRICT_OFFLINE=true \
+            -e AUTO_ROUTER_DATABASE_URL=sqlite:///:memory: \
+            -e AUTO_ROUTER_DATABASE_PLACEMENT_REQUIRED=false \
+            -e AUTO_ROUTER_DATABASE_PLACEMENT_TEST_CONTEXT=true \
+            --entrypoint python router-static-readonly-ci:check -B - <<'PY'
+          from pathlib import Path
+          from fastapi.testclient import TestClient
+          from auto_router.secure_live import app, assert_mounted_admin_guards
+          import auto_router
+          package_dir = Path(auto_router.__file__).resolve().parent
+          assert not (package_dir / "static").is_symlink()
+          for rel in ("vendor/htmx.min.js", "vendor/tailwind.min.js"):
+              assert (package_dir / "static" / rel).is_file(), rel
+          assert_mounted_admin_guards(app)
+          client = TestClient(app, raise_server_exceptions=False)
+          for path in ("/admin/providers", "/admin/context", "/admin/agent-jobs"):
+              status = client.get(path, follow_redirects=False).status_code
+              assert status in (401, 403), (path, status)
+          for name in ("htmx.min.js", "tailwind.min.js"):
+              status = client.get("/static/vendor/" + name, follow_redirects=False).status_code
+              assert status == 200, (name, status)
+          print("READONLY_NONROOT_OFFLINE_OCI_PASS")
+          PY

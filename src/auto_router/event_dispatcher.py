@@ -151,14 +151,31 @@ class AssistXEventDispatcher:
                 json=envelope,
                 auth=self.basic_auth,
             )
-        except Exception as exc:
-            self.outbox.mark_failed(event_id, str(exc), retry=True)
+        except Exception:
+            # Transport exception details may contain sensitive sink URLs,
+            # request contents, private headers or other untrusted text.
+            # Persist only a constant reason, retaining retry/dead-letter state.
+            # The same attempt cap the response path below applies.
+            #
+            # It used to be hardcoded `retry=True`, so a transport failure -- the
+            # sink unreachable, a DNS failure, a timeout -- retried forever and
+            # never reached dead_letter, while an event the sink actively rejects
+            # was cleaned up after five. That is backwards: the failure most
+            # likely to persist was the immortal one.
+            #
+            # `pending()` selects status IN ('pending','retry') oldest-first under
+            # a LIMIT, so every immortal row holds a slot at the head of every
+            # batch. Once they fill the limit, newly enqueued events are never
+            # dispatched at all -- starvation that looks like a quiet outbox.
+            retry = int(event.get("attempts") or 0) + 1 < self.max_attempts
+            error = "AssistX event delivery transport failure"
+            self.outbox.mark_failed(event_id, error, retry=retry)
             return DispatchResult(
                 event_id=event_id,
-                status="retry",
+                status="retry" if retry else "dead_letter",
                 delivered=False,
-                retry=True,
-                error=str(exc)[:500],
+                retry=retry,
+                error=error,
             )
 
         if 200 <= response.status_code < 300 or response.status_code == 409:
@@ -174,7 +191,9 @@ class AssistXEventDispatcher:
         retry = response.status_code in {408, 409, 425, 429, 500, 502, 503, 504}
         if int(event.get("attempts") or 0) + 1 >= self.max_attempts:
             retry = False
-        error = f"AssistX returned HTTP {response.status_code}: {response.text[:500]}"
+        # Do not persist or expose upstream-controlled response text in the
+        # durable outbox last_error or returned DispatchResult.
+        error = f"AssistX returned HTTP {response.status_code}"
         self.outbox.mark_failed(event_id, error, retry=retry)
         return DispatchResult(
             event_id=event_id,

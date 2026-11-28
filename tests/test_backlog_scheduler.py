@@ -89,8 +89,76 @@ def test_dry_run_backlog_selection_skips_sensitive_and_local_only(tmp_path) -> N
 
     assert [decision.status for decision in decisions] == ["skipped", "skipped"]
     assert "sensitive" in decisions[0].reason
-    assert "local-only" in decisions[1].reason
+    assert "no eligible provider" in decisions[1].reason
     assert all(event["event_type"] == "router.backlog_job.skipped" for event in outbox.pending())
+
+
+def _local_policy_engine() -> PolicyEngine:
+    provider = ProviderConfig(
+        name="approved-local-node",
+        type="llama_cpp",
+        base_url="http://127.0.0.1:1234/v1",
+        quota_class="local",
+        models=[ModelConfig(
+            alias="local/test-model",
+            provider_model="test-model",
+            capabilities={"chat", "local_only"},
+        )],
+    )
+    return PolicyEngine(
+        ProviderRegistry(providers=[provider]),
+        PolicyRegistry(profiles={
+            "local_only": PolicyProfile(
+                stages=[PolicyStage(
+                    purpose=StagePurpose.final,
+                    provider_classes=["local"],
+                    required_capabilities={"chat"},
+                )],
+            ),
+        }),
+        "local_only",
+        ContextSnapshot(),
+    )
+
+
+def test_local_only_backlog_selects_local_provider_without_cloud():
+    request = BacklogDryRunRequest(tasks=[
+        BacklogTaskCandidate(title="Local indexing", local_only=True),
+        BacklogTaskCandidate(title="Local compression", allow_cloud=False),
+    ])
+    decisions = dry_run_backlog_selection(
+        request, policy_engine=_local_policy_engine(), quota=InMemoryQuotaManager(),
+    )
+    assert [d.status for d in decisions] == ["selected", "selected"]
+    assert all(d.provider == "approved-local-node" for d in decisions)
+    assert all(d.profile == "local_only" for d in decisions)
+
+
+def test_local_only_backlog_never_selects_cloud_even_if_planner_returns_it():
+    from auto_router.models import ExecutionPlan, ExecutionStage, ProviderCandidate
+
+    cloud_provider = _policy_engine().providers.enabled()[0]
+    class FaultyPlanner:
+        def plan(self, request):
+            assert request.local_only is True
+            assert request.allow_cloud is False
+            return ExecutionPlan(
+                profile_name="faulty",
+                stages=[ExecutionStage(
+                    purpose=StagePurpose.final,
+                    candidates=[ProviderCandidate(
+                        provider=cloud_provider, model=cloud_provider.models[0],
+                    )],
+                )],
+            )
+    decisions = dry_run_backlog_selection(
+        BacklogDryRunRequest(tasks=[BacklogTaskCandidate(
+            title="Private index", allow_cloud=False, local_only=True,
+        )]),
+        policy_engine=FaultyPlanner(), quota=InMemoryQuotaManager(),
+    )
+    assert decisions[0].status == "skipped"
+    assert decisions[0].provider is None
 
 
 def test_dry_run_backlog_selection_skips_interactive_priority() -> None:

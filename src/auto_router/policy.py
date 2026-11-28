@@ -9,6 +9,8 @@ from pathlib import Path
 from auto_router.config import PolicyRegistry, ProviderRegistry
 from auto_router.settings import get_settings
 
+_RESERVATIONS_PATH = Path("/run/assistx/fleet_reservations.json")
+
 _LATENCY_CACHE = Path(get_settings().latency_cache_path)
 
 # Latency awareness for `auto`: nodes whose measured round-trip latency sits
@@ -142,12 +144,17 @@ class PolicyEngine:
         if not requested_model or requested_model.startswith("auto/"):
             return None
         for provider in self.providers.enabled():
+            if self._provider_reserved(provider):
+                continue
             if not self._provider_is_eligible(provider, request):
                 continue
             for model in provider.models:
                 if requested_model not in {model.alias, model.provider_model}:
                     continue
-                if not self._model_matches(model, request.required_capabilities):
+                required = self._required_capabilities_for_request(
+                    request.required_capabilities, request
+                )
+                if not self._model_matches(model, required):
                     continue
                 candidate = ProviderCandidate(
                     provider=provider,
@@ -161,7 +168,7 @@ class PolicyEngine:
                         ExecutionStage(
                             purpose=StagePurpose.final,
                             candidates=[candidate],
-                            required_capabilities=request.required_capabilities,
+                            required_capabilities=required,
                             allow_local_fallback=False,
                         )
                     ],
@@ -171,12 +178,17 @@ class PolicyEngine:
     def _build_stage(self, policy_stage: PolicyStage, request: RouterRequest) -> ExecutionStage:
         candidates: list[ProviderCandidate] = []
         for provider in self.providers.enabled():
-            if not self._provider_is_eligible(provider, request):
+            if self._provider_reserved(provider):
+                continue
+            if not self._provider_is_eligible(provider, request, stage_purpose=policy_stage.purpose):
                 continue
             if policy_stage.provider_classes and str(provider.quota_class) not in policy_stage.provider_classes:
                 continue
+            required = self._required_capabilities_for_request(
+                policy_stage.required_capabilities, request
+            )
             for model in provider.models:
-                if not self._model_matches(model, policy_stage.required_capabilities):
+                if not self._model_matches(model, required):
                     continue
                 candidates.append(
                     ProviderCandidate(
@@ -191,10 +203,32 @@ class PolicyEngine:
         return ExecutionStage(
             purpose=policy_stage.purpose,
             candidates=candidates,
-            required_capabilities=policy_stage.required_capabilities,
+            required_capabilities=self._required_capabilities_for_request(
+                policy_stage.required_capabilities, request
+            ),
             allow_local_fallback=policy_stage.allow_local_fallback,
             optional=policy_stage.optional,
         )
+
+    def _provider_reserved(self, provider: ProviderConfig) -> bool:
+        """Return true when a physical node is under an operator benchmark hold."""
+        try:
+            reservations = json.loads(_RESERVATIONS_PATH.read_text())
+        except Exception:
+            return False
+        now = time.time()
+        identities = {
+            str(getattr(provider, "name", "")).lower(),
+            str(getattr(provider, "node_id", "")).lower(),
+            str(getattr(provider, "base_url", "")).split("//")[-1].split("/")[0].split(":")[0].lower(),
+        }
+        for key, info in reservations.items():
+            if float(info.get("until", 0)) < now:
+                continue
+            reserved_identity = str(key).split(":", 1)[0].lower()
+            if reserved_identity in identities:
+                return True
+        return False
 
     def _owner_str(self, candidate: ProviderCandidate) -> str:
         return f"{candidate.provider.name}/{candidate.model.alias}"
@@ -422,13 +456,15 @@ class PolicyEngine:
             return "portfolio-management"
         return ""
 
-    def _provider_is_eligible(self, provider: ProviderConfig, request: RouterRequest) -> bool:
+    def _provider_is_eligible(self, provider: ProviderConfig, request: RouterRequest, stage_purpose: "StagePurpose | None" = None) -> bool:
         canonical_provider = self.context.canonical_provider_name(provider.name)
         context_provider = self.context.provider_for(canonical_provider)
         lane = self._provider_lane(provider, context_provider)
         if context_provider and context_provider.is_blocked:
             return False
         if self._provider_liveness_dead(canonical_provider):
+            return False
+        if self._provider_power_blocked(canonical_provider, stage_purpose):
             return False
         if self._request_requires_local_execution(request):
             return lane == ExecutionLane.local
@@ -459,6 +495,41 @@ class PolicyEngine:
         if health_score is not None and health_score < ROUTER_LIVENESS_MIN_HEALTH:
             return True
         return False
+
+    def _provider_power_blocked(self, canonical_provider: str, stage_purpose) -> bool:
+        """Stage-aware power-tier gating (FLEET-STANDARD-LOADOUTS.md).
+
+        SURVIVE blocks every stage outright. CONSERVE serving an essential-class
+        model keeps draft/quick-iteration stages alive but is excluded from
+        quality stages (refine/judge/final) that expect the full daily model."""
+        report = self.provider_health.get(canonical_provider)
+        if not isinstance(report, dict):
+            return False
+        profile = str(report.get("power_profile") or "")
+        if profile == "survive":
+            return True
+        if profile == "conserve" and str(report.get("power_model_class") or "full") == "essential":
+            if stage_purpose is None:
+                return False
+            if stage_purpose in {StagePurpose.refine, StagePurpose.judge, StagePurpose.final}:
+                return True
+        return False
+
+    @staticmethod
+    def _required_capabilities_for_request(
+        base: set[str], request: RouterRequest
+    ) -> set[str]:
+        """Return capabilities that must be explicit for this request.
+
+        Tool-bearing requests fail closed: a model must advertise ``tool_use``.
+        A generic chat/code/hermes-worker label is not evidence that its native
+        tool-call serialization is reliable enough to execute side effects.
+        Plain chat remains unchanged.
+        """
+        required = set(base)
+        if request.tools:
+            required.add("tool_use")
+        return required
 
     def _model_matches(self, model: ModelConfig, required: set[str]) -> bool:
         return not required or required.issubset(model.capabilities)

@@ -4,7 +4,7 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from auto_router.context import ContextService
 from auto_router.config import _project_live_models
@@ -13,6 +13,7 @@ from auto_router.model_registry import ModelRegistryStore
 from auto_router.models import ModelConfig, ProviderConfig
 from auto_router.providers import build_provider
 from auto_router.service_scanner import discover_tailnet_lmstudio_services, is_lmstudio_service
+from auto_router.security import require_admin
 from auto_router.settings import get_settings
 from auto_router.signal_registry import live_model_signals, signal_snapshot
 
@@ -24,7 +25,7 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
         state.model_registry = ModelRegistryStore(get_settings().database_url)
         hydrate_live_models_from_registry(state)
 
-    @app.get("/admin/live-models")
+    @app.get("/admin/live-models", dependencies=[Depends(require_admin)])
     async def admin_live_models(limit: int = 100) -> dict[str, Any]:
         return {
             "providers": state.live_models.snapshot(),
@@ -35,7 +36,7 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
             "recent_provider_probes": state.model_registry.recent_probes(limit=limit),
         }
 
-    @app.post("/admin/live-models/refresh")
+    @app.post("/admin/live-models/refresh", dependencies=[Depends(require_admin)])
     async def refresh_live_models(provider: str | None = None) -> dict[str, Any]:
         await merge_discovered_lmstudio_providers(state, provider)
         providers = selected_refresh_providers(state, provider)
@@ -52,7 +53,7 @@ def register_live_model_routes(app: FastAPI, state: Any) -> None:
             "tap_summary": _tap_summary(records),
         }
 
-    @app.post("/admin/providers/probe")
+    @app.post("/admin/providers/probe", dependencies=[Depends(require_admin)])
     async def probe_provider_models(provider: str | None = None) -> dict[str, Any]:
         await merge_discovered_lmstudio_providers(state, provider)
         providers = selected_probe_providers(state, provider)
