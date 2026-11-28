@@ -288,8 +288,9 @@ A deployment is not admitted merely because `/v1/models` succeeds. Each physical
 `config/provider_registry_accepted_drift.yaml` entries must carry a reason, an
 owner and a future `review_by` date. Rolling a date forward without a real
 review is the same as having no date. The waiver gate judges deadlines against
-a reproducible frozen date by default, so CI results stay comparable; an
-operator or audit can judge the same gate at a chosen date with either:
+the real current date by default, so an overdue `review_by` fails CI instead
+of being excused by a frozen clock; an operator or audit can judge the same
+gate at a chosen date with either:
 
 ```bash
 python tests/test_provider_registry_drift.py --as-of 2026-11-28
@@ -297,9 +298,9 @@ pytest -q tests/test_provider_registry_drift.py --as-of 2026-11-28
 ```
 
 Both paths share `AUTO_ROUTER_WAIVER_AS_OF`, so `--as-of` works under pytest as
-well as direct execution. Run the gate at the current date before waivers go
-stale — an overdue `review_by` fails deliberately until the drift is fixed or
-the waiver is re-reviewed with a real owner and justification.
+well as direct execution. The gate already runs at the current date by default:
+an overdue `review_by` fails deliberately until the drift is fixed or the
+waiver is re-reviewed with a real owner and justification.
 
 ## Remaining integration work
 

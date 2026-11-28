@@ -47,7 +47,7 @@ def pytest_addoption(parser):
         metavar="YYYY-MM-DD",
         help=(
             "date used to judge accepted-drift waiver review_by deadlines "
-            "(default: the test module's frozen CI clock)"
+            "(default: today's date; AUTO_ROUTER_WAIVER_AS_OF is also honored)"
         ),
     )
 
@@ -59,8 +59,9 @@ def pytest_configure(config):
     )
     # The waiver test module judges deadlines through as_of(), which reads
     # AUTO_ROUTER_WAIVER_AS_OF. Registering --as-of here makes the audit clock
-    # reachable from pytest/CI; the module's frozen default is unchanged when
-    # the flag is omitted, so CI stays reproducible until waivers are re-reviewed.
+    # reachable from pytest/CI. With no flag the module uses the real current
+    # date, so an overdue review_by fails instead of being silently excused by
+    # the old frozen 2026-10-04 default.
     value = config.getoption("--as-of")
     if value:
         os.environ["AUTO_ROUTER_WAIVER_AS_OF"] = value
